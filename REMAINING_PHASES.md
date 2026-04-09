@@ -391,6 +391,37 @@ Sort the alert feed descending by this count, tiebreak by most recent.
 Markets with 3+ distinct detector types get a visual badge. Implement the
 count in a new /api/alerts/by-signal-strength endpoint.
 
+Phone-worthiness gate (added mid-plan):
+In the NotificationConsumer, before POSTing to ntfy.sh, check the alert
+against a new PhoneWorthinessFilter. An alert ships to the phone if ANY
+of these are true:
+  (a) type is `consensus` (whales agree — always wake me up)
+  (b) the marketId-createdAt-index GSI shows >=2 distinct detector types
+      firing on this marketId within the last 15 minutes (independent
+      signals converging)
+  (c) severity is `critical` AND the most recent
+      /api/signals/performance?type={alertType}&horizon=t1h precision for
+      this detector type is >=0.60 (a proven detector is screaming)
+
+Alerts failing all three still get written to DynamoDB and appear on the
+dashboard — they just don't ring the phone. Add a `phoneWorthy` boolean
+to the Alert model so the dashboard can show a phone icon next to
+phone-notified alerts.
+
+Unit tests for PhoneWorthinessFilter:
+  1. Consensus alert -> always passes (rule a)
+  2. Lone price_movement alert with no other detectors firing -> blocked
+  3. price_movement + statistical_anomaly on same market within 15min ->
+     both pass (rule b)
+  4. Critical price_movement alert when t1h precision is 0.65 -> passes (rule c)
+  5. Critical price_movement alert when t1h precision is 0.50 -> blocked
+  6. Critical price_movement alert when no precision data exists yet ->
+     blocked (fail closed — better to miss an alert than spam)
+
+Target volume: 10-30 phone notifications per day on typical days. If
+you're getting more, tune rule (b) threshold up to 3 detectors; if
+you're getting less, tune rule (c) precision threshold down to 0.55.
+
 Hard rule: if at any point you feel the urge to add a bundler, React, or
 npm, STOP and ask me. One HTML file. One.
 
