@@ -20,8 +20,10 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Threshold-based price movement detector.
@@ -44,6 +46,7 @@ public class PriceMovementDetector {
     private final DynamoDbTable<Market> marketsTable;
     private final DynamoDbTable<PriceSnapshot> snapshotsTable;
     private final AlertService alertService;
+    private final OrderbookService orderbookService;
     private final AppClock clock;
 
     private final double thresholdPct;
@@ -56,6 +59,7 @@ public class PriceMovementDetector {
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<PriceSnapshot> snapshotsTable,
             AlertService alertService,
+            OrderbookService orderbookService,
             AppClock clock,
             @Value("${polysign.detectors.price.threshold-pct:8.0}") double thresholdPct,
             @Value("${polysign.detectors.price.window-minutes:15}") int windowMinutes,
@@ -65,6 +69,7 @@ public class PriceMovementDetector {
         this.marketsTable = marketsTable;
         this.snapshotsTable = snapshotsTable;
         this.alertService = alertService;
+        this.orderbookService = orderbookService;
         this.clock = clock;
         this.thresholdPct = thresholdPct;
         this.windowMinutes = windowMinutes;
@@ -167,6 +172,24 @@ public class PriceMovementDetector {
 
         String direction = move.toPrice.compareTo(move.fromPrice) >= 0 ? "up" : "down";
 
+        // Orderbook capture — one CLOB call per alert, not per poll.
+        // 500ms budget; failure → null fields (book is bonus, not a blocker).
+        Optional<OrderbookService.BookSnapshot> book = captureOrderbook(market.getYesTokenId());
+
+        Map<String, String> metadata = new HashMap<>();
+        metadata.put("movePct", String.format("%.2f", movePct));
+        metadata.put("fromPrice", move.fromPrice.toPlainString());
+        metadata.put("toPrice", move.toPrice.toPlainString());
+        metadata.put("direction", direction);
+        metadata.put("spanMinutes", String.valueOf(move.spanMinutes));
+        metadata.put("volume24h", String.format("%.0f", volume24h));
+        metadata.put("isWatched", String.valueOf(watched));
+        metadata.put("bypassedDedupe", String.valueOf(bypassDedupe));
+        book.ifPresent(b -> {
+            metadata.put("spreadBps", String.format("%.2f", b.spreadBps()));
+            metadata.put("depthAtMid", String.format("%.2f", b.depthAtMid()));
+        });
+
         Alert alert = new Alert();
         alert.setAlertId(alertId);
         alert.setCreatedAt(bucketedAt.toString());
@@ -178,16 +201,7 @@ public class PriceMovementDetector {
                 market.getQuestion() != null ? market.getQuestion() : market.getMarketId(),
                 movePct, direction, move.spanMinutes, move.fromPrice, move.toPrice));
         alert.setLink("https://polymarket.com/event/" + market.getMarketId());
-        alert.setMetadata(Map.of(
-                "movePct", String.format("%.2f", movePct),
-                "fromPrice", move.fromPrice.toPlainString(),
-                "toPrice", move.toPrice.toPlainString(),
-                "direction", direction,
-                "spanMinutes", String.valueOf(move.spanMinutes),
-                "volume24h", String.format("%.0f", volume24h),
-                "isWatched", String.valueOf(watched),
-                "bypassedDedupe", String.valueOf(bypassDedupe)
-        ));
+        alert.setMetadata(metadata);
 
         return alertService.tryCreate(alert);
     }
@@ -224,6 +238,19 @@ public class PriceMovementDetector {
         }
 
         return best;
+    }
+
+    /**
+     * Capture orderbook depth. Package-private so tests can override to
+     * inject synthetic book data or simulate failures.
+     */
+    Optional<OrderbookService.BookSnapshot> captureOrderbook(String yesTokenId) {
+        try {
+            return orderbookService.capture(yesTokenId);
+        } catch (Exception e) {
+            log.debug("orderbook_capture_error tokenId={} error={}", yesTokenId, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     List<PriceSnapshot> querySnapshots(String marketId, Instant now) {

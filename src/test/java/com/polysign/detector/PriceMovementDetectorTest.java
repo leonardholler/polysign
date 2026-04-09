@@ -15,10 +15,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -53,6 +55,7 @@ class PriceMovementDetectorTest {
                 null, // marketsTable — not used in unit tests
                 null, // snapshotsTable — not used in unit tests
                 alertService,
+                mock(OrderbookService.class),
                 clock,
                 THRESHOLD_PCT,
                 WINDOW_MINUTES,
@@ -278,20 +281,91 @@ class PriceMovementDetectorTest {
         verifyAlertCreated(m, snapshots, "warning", true);
     }
 
+    // ── Orderbook depth tests ──────────────────────────────────────────────
+
+    /** Spike series that always fires an alert (10% up, volume $100k). */
+    private static final List<PriceSnapshot> SPIKE_SNAPSHOTS = List.of(
+            snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.50"),
+            snap("m1", NOW,                              "0.55")
+    );
+
+    @Test
+    void alertWithOrderbookDataIncludesSpreadAndDepth() {
+        Market m = market("m1", "100000", false);
+        m.setYesTokenId("tok-yes-1");
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        OrderbookService bookService = mock(OrderbookService.class);
+        when(bookService.capture("tok-yes-1"))
+                .thenReturn(Optional.of(new OrderbookService.BookSnapshot(198.02, 908.0)));
+
+        TestableDetector det = new TestableDetector(spy, SPIKE_SNAPSHOTS, bookService);
+        det.checkMarket(m, NOW);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        assertThat(alert.getMetadata().get("spreadBps")).isEqualTo("198.02");
+        assertThat(alert.getMetadata().get("depthAtMid")).isEqualTo("908.00");
+    }
+
+    @Test
+    void alertFiredWhenClobCallFails() {
+        Market m = market("m1", "100000", false);
+        m.setYesTokenId("tok-yes-1");
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        OrderbookService bookService = mock(OrderbookService.class);
+        when(bookService.capture(anyString())).thenThrow(new RuntimeException("CLOB 500"));
+
+        TestableDetector det = new TestableDetector(spy, SPIKE_SNAPSHOTS, bookService);
+        det.checkMarket(m, NOW);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        // Alert fires — book fields absent
+        assertThat(alert.getType()).isEqualTo("price_movement");
+        assertThat(alert.getMetadata()).doesNotContainKey("spreadBps");
+        assertThat(alert.getMetadata()).doesNotContainKey("depthAtMid");
+    }
+
+    @Test
+    void alertFiredWhenClobCallTimesOut() {
+        Market m = market("m1", "100000", false);
+        m.setYesTokenId("tok-yes-1");
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        OrderbookService bookService = mock(OrderbookService.class);
+        when(bookService.capture(anyString())).thenReturn(Optional.empty());
+
+        TestableDetector det = new TestableDetector(spy, SPIKE_SNAPSHOTS, bookService);
+        det.checkMarket(m, NOW);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        // Alert fires — book fields absent
+        assertThat(alert.getType()).isEqualTo("price_movement");
+        assertThat(alert.getMetadata()).doesNotContainKey("spreadBps");
+        assertThat(alert.getMetadata()).doesNotContainKey("depthAtMid");
+    }
+
     // ── Helpers for checkMarket with injectable snapshots ─────────────────────
 
-    /**
-     * Creates a testable detector subclass that returns canned snapshots
-     * instead of querying DynamoDB, then verifies the alert.
-     */
     private void verifyAlertCreated(Market market, List<PriceSnapshot> snapshots,
                                      String expectedSeverity, boolean expectBypassDedupe) {
         AlertService spyService = mock(AlertService.class);
         when(spyService.tryCreate(any())).thenReturn(true);
 
         PriceMovementDetector testDetector = new TestableDetector(
-                spyService, snapshots, THRESHOLD_PCT, WINDOW_MINUTES,
-                MIN_VOLUME, DEDUPE_WINDOW_MINUTES, MIN_DELTA_P);
+                spyService, snapshots, null);
 
         testDetector.checkMarket(market, NOW);
 
@@ -310,8 +384,7 @@ class PriceMovementDetectorTest {
         AlertService spyService = mock(AlertService.class);
 
         PriceMovementDetector testDetector = new TestableDetector(
-                spyService, snapshots, THRESHOLD_PCT, WINDOW_MINUTES,
-                MIN_VOLUME, DEDUPE_WINDOW_MINUTES, MIN_DELTA_P);
+                spyService, snapshots, null);
 
         boolean result = testDetector.checkMarket(market, NOW);
 
@@ -320,24 +393,36 @@ class PriceMovementDetectorTest {
     }
 
     /**
-     * Test-only subclass that overrides querySnapshots to return canned data.
+     * Test-only subclass that overrides querySnapshots and captureOrderbook.
      */
     private static class TestableDetector extends PriceMovementDetector {
         private final List<PriceSnapshot> cannedSnapshots;
+        private final OrderbookService bookService;
 
         TestableDetector(AlertService alertService, List<PriceSnapshot> snapshots,
-                         double thresholdPct, int windowMinutes,
-                         double minVolumeUsdc, int dedupeWindowMinutes,
-                         double minDeltaP) {
-            super(null, null, alertService,
-                  fixedClock(), thresholdPct, windowMinutes,
-                  minVolumeUsdc, dedupeWindowMinutes, minDeltaP);
+                         OrderbookService bookService) {
+            super(null, null, alertService, mock(OrderbookService.class),
+                  fixedClock(), THRESHOLD_PCT, WINDOW_MINUTES,
+                  MIN_VOLUME, DEDUPE_WINDOW_MINUTES, MIN_DELTA_P);
             this.cannedSnapshots = snapshots;
+            this.bookService = bookService;
         }
 
         @Override
         List<PriceSnapshot> querySnapshots(String marketId, Instant now) {
             return cannedSnapshots;
+        }
+
+        @Override
+        Optional<OrderbookService.BookSnapshot> captureOrderbook(String yesTokenId) {
+            if (bookService == null) {
+                return Optional.empty();
+            }
+            try {
+                return bookService.capture(yesTokenId);
+            } catch (Exception e) {
+                return Optional.empty();
+            }
         }
 
         private static AppClock fixedClock() {
