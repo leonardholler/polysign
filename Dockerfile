@@ -1,10 +1,11 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM eclipse-temurin:25-jdk-jammy AS build
+# Use the official Maven + JDK 25 image so mvn is available without a separate install.
+FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /build
+# Pre-fetch dependencies (layer-cached unless pom.xml changes)
 COPY pom.xml .
-# Pre-download dependencies (layer-cached unless pom.xml changes)
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B dependency:go-offline -q 2>/dev/null || true
+    mvn -B -q dependency:go-offline
 
 COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 \
