@@ -132,3 +132,76 @@ Date: 2026-04-08
 - `HttpConfig.java` stub is in place — populate with WebClient beans + Resilience4j decorators.
 - `SchedulingConfig.java` stub is in place — configure thread pool.
 - LocalStack is running; Docker images are cached — `docker compose up -d` is fast for subsequent runs.
+
+## Phase 2 — Market + Price Polling
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `Market.java` — added `yesTokenId` (String), `clobTokenIds` (String raw JSON), `volume24h` (String)
+  to the existing model; all getters/setters explicit for DynamoDB Enhanced Client compatibility
+- `CategoryClassifier.java` — closed-set keyword matcher (politics | sports | crypto | economics |
+  entertainment | other); crypto evaluated before politics to prevent false matches on price-related
+  keywords; callers log INFO when a market lands in "other"
+- `HttpConfig.java` — populated with `gammaApiClient` and `clobApiClient` WebClient beans;
+  16 MB max in-memory buffer on gammaApiClient; User-Agent header identifying the bot
+- `SchedulingConfig.java` — `SchedulingConfigurer` with 6-thread `ThreadPoolTaskScheduler`,
+  30-second graceful shutdown; thread names `polysign-sched-N`
+- `application.yml` — added `polysign.pollers.market/price.interval-ms` (60 000 ms each, initial
+  delays 5 000 / 30 000); full `resilience4j` config block for `polymarket-gamma` and
+  `polymarket-clob` circuit breakers, retries (exponential back-off), and CLOB rate limiter (10/s)
+- `MarketPoller.java` — `@Scheduled(fixedDelayString=…)` poller; paginates Gamma API 200/page
+  via limit+offset; parses JSON-string-encoded fields (outcomes, clobTokenIds); pre-extracts
+  `yesTokenId = clobTokenIds[0]`; classifies category via `CategoryClassifier`; extracts keywords
+  from question; preserves `isWatched` via read-before-write DynamoDB get; upserts Market entity;
+  Resilience4j CircuitBreaker + Retry wrapping; per-item catch; `polysign.markets.tracked` Gauge
+- `PricePoller.java` — `@Scheduled(fixedDelayString=…)` poller; DynamoDB table scan; per-market
+  CLOB `/midpoint?token_id=…` fetch; `noPrice = 1 - yesPrice`, `midpoint = yesPrice`; no-change
+  dedupe via `BigDecimal.setScale(4, HALF_UP).compareTo()` against latest snapshot; writes
+  `PriceSnapshot` with `expiresAt = now + 7 days`; Resilience4j RateLimiter + Retry + CircuitBreaker
+  per call; per-market catch; `polysign.prices.polled` Counter
+
+### Files touched
+- src/main/java/com/polysign/model/Market.java
+- src/main/java/com/polysign/config/HttpConfig.java
+- src/main/java/com/polysign/config/SchedulingConfig.java
+- src/main/java/com/polysign/common/CategoryClassifier.java  (new)
+- src/main/java/com/polysign/poller/MarketPoller.java  (new)
+- src/main/java/com/polysign/poller/PricePoller.java  (new)
+- src/main/resources/application.yml
+
+### Verification
+- `mvn -q compile` → exit 0 (Java 25.0.2, Maven 3.9.14)
+- `docker compose up --build -d` → both containers healthy
+- After ~90 s: `docker exec polysign-localstack-1 awslocal dynamodb scan --table-name markets --limit 3`
+  → 3 real market items with `marketId`, `question`, `category`, `yesTokenId`, `volume24h`, `updatedAt`
+- `docker exec polysign-localstack-1 awslocal dynamodb scan --table-name price_snapshots --limit 5`
+  → 5 items with `marketId`, `timestamp`, `yesPrice`, `noPrice`, `midpoint`;
+    `yesPrice + noPrice == 1.0` confirmed on all checked rows (e.g. 0.57 / 0.43)
+- Log grep shows `market_upserted` entries with correlationId, `price_snapshot_written` entries
+- Polymarket Gamma API returned 30 000+ active markets across 150+ pages — pagination working
+
+### Deviations from spec
+1. **Compilation fix**: `PageIterable.pages()` method does not exist in AWS SDK v2 DynamoDB Enhanced
+   Client. Fixed by using the `.items()` method which returns a flattened `SdkIterable<T>` over all
+   pages — functionally identical but using the correct SDK API.
+2. **`price_no_change` log level**: The no-change dedupe success path logs at DEBUG (not INFO) to
+   avoid flooding logs during normal operation. The first poll cycle will always write snapshots
+   (no prior data to dedupe against); dedupe triggers from the second cycle onward.
+
+### Known concern — Phase 6
+**CLOB `/trades` endpoint returns 401 Unauthorized** (requires Polymarket API key / L1 wallet
+authentication). Phase 6 wallet tracking must use Polygon RPC fallback instead of CLOB `/trades`.
+Do not attempt to solve this in Phase 6 until the Polygon RPC approach is confirmed viable.
+
+### Notes for next phase
+- Phase 3: Anomaly detector — consume price_snapshots from DynamoDB, emit alerts to SQS
+  `alerts-to-notify` queue.
+- `isWatched` flag in markets is currently always `false` (default). Phase 3 or 4 should define
+  a mechanism to mark markets as watched (e.g. a seeded list of high-volume market IDs).
+- MarketPoller first cycle takes several minutes because Polymarket has 30 000+ active markets.
+  Consider adding a `--market-limit` override for fast local dev iterations.
+- PricePoller rate-limits to 10 CLOB calls/s via Resilience4j; first full scan takes ~minutes.
+  The `polysign.prices.polled` Prometheus counter is the authoritative measure of throughput.
+- Both pollers gracefully handle CLOB / Gamma API failures via per-item catch — one 4xx/5xx
+  never crashes the loop.
