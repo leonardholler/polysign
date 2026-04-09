@@ -368,3 +368,88 @@ by markets that pass the cap but would fail a floor).
 - `cutoff_volume24hr` in each cycle log shows how the "water line" moves over time
   — useful for tuning `max-markets` later without reading code.
 - `polysign.markets.tracked` Prometheus gauge reflects the final `kept_after_cap`.
+
+## Phase 3 — AlertService + Price Movement Detector
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `AlertIdFactory.java` — deterministic alert ID generator: `SHA-256(type|marketId|bucketedTimestamp|canonicalPayloadHash)`.
+  `bucketedInstant()` returns the bucket-boundary Instant for use as a deterministic `createdAt` sort key.
+  Duration.ZERO disables bucketing (1-second granularity for dedupe-bypass alerts).
+- `AlertService.java` — idempotent alert writer. `PutItem` with `attribute_not_exists(alertId)` condition.
+  `ConditionalCheckFailedException` logged at DEBUG and swallowed (normal dedupe path).
+  On new alert: `polysign.alerts.fired` counter (tagged type+severity), enqueue to `alerts-to-notify` SQS.
+  SQS queue URL lazily resolved to avoid startup ordering conflict with BootstrapRunner.
+- `PriceMovementDetector.java` — threshold-based detector, `@Scheduled` every 60s (65s initial delay).
+  For each market: query last 60 min of snapshots, find max absolute move within any 15-min window.
+  Fires `price_movement` alert if move ≥ 8% AND 24h volume ≥ $50k.
+  Severity: `critical` if `isWatched`, `warning` otherwise.
+  Dedupe: 30-min bucketed window; bypassed (Duration.ZERO) if move ≥ 2× threshold (16%).
+  Alert metadata: movePct, fromPrice, toPrice, direction, spanMinutes, volume24h, isWatched, bypassedDedupe.
+- `AlertIdFactoryTest.java` — 12 tests: determinism, field sensitivity (type, marketId, bucket, payload),
+  same-window dedup, bypass via Duration.ZERO, output format (64-char hex), 10k collision test, bucket internals.
+- `PriceMovementDetectorTest.java` — 9 tests: flat series (no alert), slow drift (no alert),
+  10% spike (alert), 20% spike (bypass dedupe), low volume spike (no alert), watched/unwatched severity,
+  single snapshot (no alert), price drop detection.
+- `application.yml` — added `dedupe-window-minutes: 30`, `interval-ms: 60000`, `initial-delay-ms: 65000`
+  under `polysign.detectors.price`.
+
+### Files touched
+- src/main/java/com/polysign/alert/AlertIdFactory.java (new)
+- src/main/java/com/polysign/alert/AlertService.java (new)
+- src/main/java/com/polysign/detector/PriceMovementDetector.java (new)
+- src/test/java/com/polysign/alert/AlertIdFactoryTest.java (new)
+- src/test/java/com/polysign/detector/PriceMovementDetectorTest.java (new)
+- src/main/resources/application.yml (detector config additions)
+
+### Verification
+- `mvn test` → 21 tests, 0 failures (12 AlertIdFactory + 9 PriceMovementDetector)
+- `docker compose up -d --build` → both containers healthy
+- Live idempotency proof (see worked example below)
+
+### Worked idempotency example
+
+**Seeded data:**
+- Market: `test-idem-001`, volume24h=$100,000, isWatched=false
+- Snapshots: 0.50 @ T-10min, 0.50 @ T-5min, 0.55 @ T-now (10% spike in 5 min)
+
+**Computed alert:**
+- alertId: `845f165cde7828da5dd7e7cc649d3f225f783467d500bd0279809e8f1ef9b048`
+- createdAt: `2026-04-09T07:00:00Z` (30-minute bucket boundary — deterministic)
+- type: `price_movement`, severity: `warning`, movePct: `10.00`, direction: `up`
+- bypassedDedupe: `false` (10% < 2×8% = 16%)
+
+**Proof sequence:**
+
+| Step | alerts table count (test-idem-001) | SQS depth | Log event |
+|------|-----------------------------------|-----------|----|
+| Baseline (before detector) | 0 | 0 | — |
+| After 1st detector run | 1 | 1 | `alert_created alertId=845f165c...` (INFO) |
+| After 2nd detector run | 1 | same | `alert_already_exists alertId=845f165c...` (DEBUG) |
+| After 3rd detector run | 1 | same | `alert_already_exists alertId=845f165c...` (DEBUG) |
+
+The `attribute_not_exists(alertId)` condition on the composite key (alertId, createdAt) works
+because `createdAt` is set to the deterministic bucketed instant (`AlertIdFactory.bucketedInstant()`),
+not `clock.nowIso()`. Same alertId + same createdAt → same (PK, SK) slot → condition rejects duplicates.
+
+### Deviations from spec
+1. **Deterministic `createdAt` sort key**: The spec's `attribute_not_exists(alertId)` condition
+   only works on a composite-key table if the sort key (createdAt) is also deterministic for the
+   same alert. Without this, each detector cycle writes a new (alertId, createdAt) pair and the
+   condition never fires. Fixed by setting `createdAt = bucketedInstant(now, dedupeWindow).toString()`
+   in the detector before calling AlertService. This is a correctness fix, not a deviation from intent.
+2. **Lazy SQS queue URL resolution**: AlertService resolves the queue URL on first use, not in the
+   constructor. BootstrapRunner (which creates queues) runs after bean initialization, so eager
+   resolution in the constructor fails with `QueueDoesNotExistException`.
+3. **`querySnapshots` is package-private**: Made non-private so the test subclass (`TestableDetector`)
+   can override it with canned snapshot data. The spec doesn't specify visibility.
+
+### Notes for next phase
+- Phase 4: Notification Consumer (SQS alerts-to-notify → ntfy.sh). Verify end-to-end alert
+  delivery on a real phone before building more detectors.
+- The deterministic `createdAt` pattern must be followed by all future detectors — document
+  this in AlertService Javadoc (done) and DESIGN.md (Phase 11).
+- SQS queue depth of 10 after the test includes alerts from real markets that also had price
+  movements during the test window — only the test-idem-001 alert was verified for idempotency.
+- `polysign.alerts.fired` Prometheus counter is now live at `/actuator/prometheus`.
