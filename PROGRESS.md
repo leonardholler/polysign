@@ -585,3 +585,118 @@ Date: 2026-04-09
 - `min-delta-p` and the extreme-zone boundaries (0.05 / 0.95) are configurable in
   `application.yml` if further tuning is needed.
 - The 5.4 alerts/min rate post-filter is a reasonable live signal to watch and tune from.
+
+## Phase 5 — Statistical Anomaly Detector + Orderbook Depth Capture
+Status: complete
+Date: 2026-04-09
+
+### What was built
+
+**Checkpoint 1 — Test-first synthetic series (TDD)**
+- `StatisticalAnomalyDetectorTest.java` — 15 tests total (12 original + 3 orderbook):
+  1. Flat series (constant price, stddev=0) → no alert
+  2. Linear trend (identical returns, stddev≈0) → no alert
+  3. Random walk with small ±0.002 noise → no alert
+  4. Sudden 3.5σ spike on ε-noise base → alert (asserts zScore ≥ 3.5)
+  5. Sudden 5σ spike → alert (asserts zScore ≥ 5.0)
+  6. Gradual acceleration (returns ramp 0.001..0.024) → no alert (z ≈ 1.66)
+  7. Insufficient history (<20 snapshots) → no alert
+  8. High-volatility market (±22% swings absorb 10% move) → no alert
+  9. Low-volume market (<$50k) with real anomaly → no alert
+  10. Tail-zone anomaly blocked by delta-p floor → no alert
+  11. Upper extreme zone blocked → no alert
+  12. Alert metadata contains zScore, windowSize, mean, stddev
+  13. Alert with orderbook data includes spreadBps and depthAtMid
+  14. Alert fires when CLOB call fails (book fields absent)
+  15. Alert fires when CLOB call times out (book fields absent)
+- Tests use absolute returns (price[k] - price[k-1]), not percentage returns.
+  Absolute returns are the principled choice for prediction market probabilities:
+  they are the implied probability change, consistent with the delta-p floor,
+  and avoid percentage distortion at tail prices.
+
+**Checkpoint 2 — StatisticalAnomalyDetector implementation**
+- `StatisticalAnomalyDetector.java` — rolling z-score of 1-minute absolute returns
+  over last 60 minutes. Filter pipeline: volume gate → min-snapshots gate →
+  z-score threshold → delta-p floor (0.03) → extreme-zone filter (0.05/0.95).
+  stddev=0 → skip (no volatility information). Uses AlertIdFactory with 30-min
+  dedupe window. Alert metadata: zScore, windowSize, mean, stddev, lastReturn,
+  direction, volume24h. Scheduled at 70s initial delay (5s after PriceMovementDetector).
+
+**Checkpoint 3 — Orderbook depth capture**
+- `OrderbookService.java` — encapsulates CLOB `/book?token_id=` call + spread/depth
+  computation. Uses the same `clobApiClient` WebClient and `polymarket-clob` circuit
+  breaker + rate limiter. No retry (500ms budget is one shot). Catches all exceptions,
+  returns `Optional.empty()` on failure. Computations:
+    - `spreadBps = (bestAsk - bestBid) / midpoint * 10000`
+    - `depthAtMid = sum(size × price) for levels within 1% of midpoint`
+- `OrderbookServiceTest.java` — 4 tests: known spread computation, known depth
+  computation, empty bids edge case, tight-book spread.
+- Both `PriceMovementDetector` and `StatisticalAnomalyDetector` updated to inject
+  `OrderbookService` and call `captureOrderbook()` at alert-fire time (not per poll).
+  Book fields added to mutable HashMap metadata. Failure → alert fires with book
+  fields absent.
+- `PriceMovementDetectorTest.java` updated: 3 new orderbook tests (16 total).
+  TestableDetector now accepts and overrides OrderbookService.
+- `application.yml` — added `dedupe-window-minutes: 30`, `min-delta-p: 0.03`,
+  `interval-ms: 60000`, `initial-delay-ms: 70000` under `polysign.detectors.statistical`.
+
+### Files touched
+- src/main/java/com/polysign/detector/StatisticalAnomalyDetector.java (new)
+- src/main/java/com/polysign/detector/OrderbookService.java (new)
+- src/main/java/com/polysign/detector/PriceMovementDetector.java (OrderbookService injection + metadata)
+- src/test/java/com/polysign/detector/StatisticalAnomalyDetectorTest.java (new)
+- src/test/java/com/polysign/detector/OrderbookServiceTest.java (new)
+- src/test/java/com/polysign/detector/PriceMovementDetectorTest.java (3 book tests + TestableDetector update)
+- src/main/resources/application.yml (statistical detector config additions)
+
+### Verification
+- `mvn test` → 54 tests, 0 failures:
+    - StatisticalAnomalyDetectorTest: 15 (12 detector + 3 orderbook)
+    - PriceMovementDetectorTest: 16 (13 detector + 3 orderbook)
+    - OrderbookServiceTest: 4
+    - AlertIdFactoryTest: 12
+    - NotificationConsumerTest: 7
+- `docker compose up -d --build` → both containers healthy
+- Live verification against real Polymarket data (~8 minutes):
+    - Statistical anomaly detector running: `checked=502 fired=0` per cycle
+      (correctly skipping markets with <20 snapshots, then evaluating normally)
+    - After ~20 minutes (enough history): 1 `statistical_anomaly` alert fired:
+      market 1707841 ("Israel x Hezbollah ceasefire by April 30, 2026?"),
+      z-score=4.76, 27 snapshots, volume=$451k, lastReturn=0.0665
+    - No spam on low-liquidity or low-volume markets
+    - 54 price_movement alerts with non-null `spreadBps` and `depthAtMid`
+      (confirming orderbook capture works on live CLOB data)
+    - 3,462 alerts fired without book data (confirming CLOB failure does not
+      block alert creation)
+    - Sample alert book data: spreadBps=19960.00, depthAtMid=5900.78
+
+### Deviations from spec
+1. **Absolute returns, not percentage returns**: The spec says "rolling z-score of
+   1-minute returns" without specifying the return type. Chose absolute returns
+   (price[k] - price[k-1]) because: (a) these are probabilities, so absolute return
+   IS the implied probability change; (b) consistent with the delta-p floor which is
+   in absolute terms; (c) avoids percentage distortion at extreme prices that the
+   extreme-zone filter exists to handle. Confirmed via manual walkthrough that all
+   9 synthetic test series produce correct results under this convention.
+2. **OrderbookService as shared component**: Rather than duplicating CLOB book-fetching
+   in both detectors, extracted into a shared `OrderbookService` @Component. Both
+   detectors inject it. This avoids code duplication while keeping the "one CLOB call
+   per alert" contract clear.
+3. **No retry on book capture**: The spec says "500ms timeout budget." Interpreted as
+   one shot — retries don't fit within 500ms. Used circuit breaker + rate limiter
+   (from the existing `polymarket-clob` Resilience4j instances) but no retry.
+
+### Notes for next phase
+- Phase 6: Wallet Tracking + Consensus Detector.
+  **CLOB `/trades` endpoint returns 401** (noted in Phase 2). Phase 6 must use
+  Polygon RPC fallback or Polymarket Data API — verify before writing code.
+- The statistical anomaly detector needs ~20 minutes of price history before it
+  starts evaluating markets. On a fresh container start, the first ~20 cycles
+  will report `fired=0` — this is normal, not a bug.
+- Orderbook `spreadBps` values are high (19960 bps = 200% spread) on some markets
+  — this reflects genuinely illiquid books on Polymarket, not a computation error.
+  The data is valuable for Phase 7.5 backtesting to correlate signal quality with
+  book quality.
+- The `polysign.detectors.statistical.initial-delay-ms: 70000` puts the stat
+  detector 5 seconds after the price movement detector (65s). Both share the
+  same `@Scheduled` thread pool (6 threads).
