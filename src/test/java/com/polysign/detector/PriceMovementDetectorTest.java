@@ -431,4 +431,44 @@ class PriceMovementDetectorTest {
             return c;
         }
     }
+
+    // ── Fix 2 regression: detectedAt is raw clock, createdAt is dedupe bucket ─
+    //
+    // Same contract as StatisticalAnomalyDetector: createdAt is the bucketed
+    // idempotency key; detectedAt is the actual clock reading that a debugger
+    // should use to look up the right price data.
+
+    @Test
+    void detectedAtIsRawClockAndCreatedAtIsBucket() {
+        // 12:15 is 15 minutes into the [12:00, 12:30) dedupe bucket.
+        // 10% move — below 2×threshold (16%), so no dedupe bypass; effectiveWindow=30min.
+        Instant midBucket = Instant.parse("2026-04-09T12:15:00Z");
+
+        Market m = market("m1", "100000", false);
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.50"),
+                snap("m1", NOW,                              "0.55")  // 10% spike
+        );
+
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        PriceMovementDetector det = new TestableDetector(spy, snapshots, null);
+        det.checkMarket(m, midBucket);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        // createdAt = dedupe bucket start (30-min window floor of 12:15)
+        assertThat(alert.getCreatedAt()).isEqualTo("2026-04-09T12:00:00Z");
+
+        // detectedAt = actual detection instant (raw clock, not bucketed)
+        assertThat(alert.getMetadata().get("detectedAt"))
+                .isEqualTo("2026-04-09T12:15:00Z");
+
+        // They must differ — confirms detectedAt is not a copy of createdAt
+        assertThat(alert.getMetadata().get("detectedAt"))
+                .isNotEqualTo(alert.getCreatedAt());
+    }
 }

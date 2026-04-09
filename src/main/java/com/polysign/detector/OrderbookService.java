@@ -86,8 +86,8 @@ public class OrderbookService {
             return Optional.empty();
         }
 
-        double bestBid = bids.getFirst().price;
-        double bestAsk = asks.getFirst().price;
+        double bestBid = selectBestBid(bids);
+        double bestAsk = selectBestAsk(asks);
         double midpoint = (bestBid + bestAsk) / 2.0;
 
         if (midpoint <= 0) {
@@ -134,6 +134,14 @@ public class OrderbookService {
             }
         }
         return depth;
+    }
+
+    static double selectBestBid(List<Level> bids) {
+        return bids.stream().mapToDouble(Level::price).max().getAsDouble();
+    }
+
+    static double selectBestAsk(List<Level> asks) {
+        return asks.stream().mapToDouble(Level::price).min().getAsDouble();
     }
 
     /** A single price level in the orderbook. */

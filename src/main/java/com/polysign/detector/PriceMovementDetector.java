@@ -189,6 +189,7 @@ public class PriceMovementDetector {
             metadata.put("spreadBps", String.format("%.2f", b.spreadBps()));
             metadata.put("depthAtMid", String.format("%.2f", b.depthAtMid()));
         });
+        metadata.put("detectedAt", now.toString());
 
         Alert alert = new Alert();
         alert.setAlertId(alertId);

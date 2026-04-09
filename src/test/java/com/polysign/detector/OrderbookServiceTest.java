@@ -80,4 +80,67 @@ class OrderbookServiceTest {
         double spread = OrderbookService.computeSpreadBps(0.500, 0.501, 0.5005);
         assertThat(spread).isCloseTo(19.98, within(0.01));
     }
+
+    // ── Fix 1 regression: CLOB API sort order ───────────────────────────────
+    //
+    // Polymarket CLOB /book returns:
+    //   bids sorted ASCENDING  — worst bid first (0.001), best bid LAST (0.392)
+    //   asks sorted DESCENDING — worst ask first (0.999), best ask LAST (0.401)
+    //
+    // The old code used bids.getFirst() and asks.getFirst(), which selected the
+    // worst quotes and produced spreadBps = 19960.  selectBestBid/selectBestAsk
+    // use max/min over all levels and are robust to API sort order.
+
+    @Test
+    void selectBestBidIsMaxOfAllBids() {
+        // API response: bids sorted ascending, worst first, best last
+        List<OrderbookService.Level> bids = List.of(
+                new OrderbookService.Level(0.001, 100_000),  // worst bid — first in API response
+                new OrderbookService.Level(0.002, 50_000),
+                new OrderbookService.Level(0.392, 5)         // best bid  — last in API response
+        );
+        assertThat(OrderbookService.selectBestBid(bids)).isCloseTo(0.392, within(0.0001));
+    }
+
+    @Test
+    void selectBestAskIsMinOfAllAsks() {
+        // API response: asks sorted descending, worst first, best last
+        List<OrderbookService.Level> asks = List.of(
+                new OrderbookService.Level(0.999, 6_000),    // worst ask — first in API response
+                new OrderbookService.Level(0.998, 30),
+                new OrderbookService.Level(0.401, 9)         // best ask  — last in API response
+        );
+        assertThat(OrderbookService.selectBestAsk(asks)).isCloseTo(0.401, within(0.0001));
+    }
+
+    @Test
+    void apiOrderedBookProducesSensibleSpreadNotWorstQuoteSpread() {
+        // Minimal fixture matching Polymarket CLOB response shape:
+        //   bids ASCENDING  (0.001 first, best=0.392 last)
+        //   asks DESCENDING (0.999 first, best=0.401 last)
+        //
+        // Broken behaviour (getFirst):
+        //   bestBid=0.001, bestAsk=0.999 => spread = (0.999-0.001)/0.5*10000 = 19960 bps
+        //
+        // Correct behaviour (max/min):
+        //   bestBid=0.392, bestAsk=0.401 => mid=0.3965 => spread ~226.99 bps
+        List<OrderbookService.Level> bids = List.of(
+                new OrderbookService.Level(0.001, 100_000),
+                new OrderbookService.Level(0.002, 50_000),
+                new OrderbookService.Level(0.392, 5)
+        );
+        List<OrderbookService.Level> asks = List.of(
+                new OrderbookService.Level(0.999, 6_000),
+                new OrderbookService.Level(0.998, 30),
+                new OrderbookService.Level(0.401, 9)
+        );
+
+        double bestBid = OrderbookService.selectBestBid(bids);  // 0.392
+        double bestAsk = OrderbookService.selectBestAsk(asks);  // 0.401
+        double midpoint = (bestBid + bestAsk) / 2.0;            // 0.3965
+        double spread = OrderbookService.computeSpreadBps(bestBid, bestAsk, midpoint);
+
+        assertThat(spread).isCloseTo(226.99, within(0.5));       // realistic
+        assertThat(spread).isLessThan(1000.0);                   // NOT the 19960 worst-quote value
+    }
 }

@@ -505,4 +505,43 @@ class StatisticalAnomalyDetectorTest {
             return c;
         }
     }
+
+    // ── Fix 2 regression: detectedAt is raw clock, createdAt is dedupe bucket ─
+    //
+    // When a detector fires mid-bucket (e.g. 12:15 into the 12:00-12:30 window),
+    // alert.createdAt must equal the bucketed time (12:00:00Z) so idempotency
+    // works, while metadata.detectedAt must equal the actual detection instant
+    // (12:15:00Z) so post-hoc investigation can find the right price data.
+
+    @Test
+    void detectedAtIsRawClockAndCreatedAtIsBucket() {
+        // 12:15 is 15 minutes into the [12:00, 12:30) dedupe bucket
+        Instant midBucket = Instant.parse("2026-04-09T12:15:00Z");
+
+        double[] prices = new double[30];
+        for (int i = 0; i < 29; i++) prices[i] = 0.50 + (i % 2 == 0 ? 0.0001 : -0.0001);
+        prices[29] = 0.54; // spike that passes all filters
+
+        Market m = market("m1", "100000");
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        TestableDetector det = detector(spy, series("m1", prices));
+        det.checkMarket(m, midBucket);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        // createdAt = dedupe bucket start (30-min window floor of 12:15)
+        assertThat(alert.getCreatedAt()).isEqualTo("2026-04-09T12:00:00Z");
+
+        // detectedAt = actual detection instant (raw clock, not bucketed)
+        assertThat(alert.getMetadata().get("detectedAt"))
+                .isEqualTo("2026-04-09T12:15:00Z");
+
+        // They must differ — confirms detectedAt is not a copy of createdAt
+        assertThat(alert.getMetadata().get("detectedAt"))
+                .isNotEqualTo(alert.getCreatedAt());
+    }
 }
