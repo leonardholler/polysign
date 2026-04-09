@@ -8,9 +8,10 @@
 # authentication.
 #
 # Usage:
-#   docker compose up --build     # first time
-#   docker compose up -d          # subsequent runs
+#   docker compose up --build     # first time or after code changes
+#   docker compose up -d          # subsequent runs (uses cached image)
 #   docker compose down           # stop
+#   docker compose down -v        # stop and wipe all data
 
 services:
   localstack:
@@ -22,7 +23,10 @@ services:
       - DEFAULT_REGION=us-east-1
       - DEBUG=0
     volumes:
-      - localstack_data:/tmp/localstack/data
+      # /var/lib/localstack is LocalStack 3.x's canonical persistent data directory.
+      # Do NOT mount at /tmp/localstack — LocalStack tries to rm -rf that path on
+      # startup and the mounted volume blocks the cleanup, causing exit code 1.
+      - localstack_data:/var/lib/localstack
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
       interval: 5s
