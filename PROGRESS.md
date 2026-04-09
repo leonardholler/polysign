@@ -205,3 +205,52 @@ Do not attempt to solve this in Phase 6 until the Polygon RPC approach is confir
   The `polysign.prices.polled` Prometheus counter is the authoritative measure of throughput.
 - Both pollers gracefully handle CLOB / Gamma API failures via per-item catch — one 4xx/5xx
   never crashes the loop.
+
+## Phase 2.5 — Market volume floor + dedupe verification
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `application.yml` — added `polysign.pollers.market.min-volume-usdc: 10000`
+- `MarketPoller.java` — volume floor filter: markets whose lifetime volume string parses
+  to < `minVolumeUsdc` (default 10 000 USDC) are skipped before any DynamoDB I/O;
+  unparseable volume strings pass through; poll cycle now logs
+  `market_poll_complete kept=X of=Y` at INFO each cycle; `@Value`-injected via
+  constructor parameter (Spring resolves before the Gauge registration runs)
+- `PricePoller.java` — `price_no_change` dedupe log confirmed working; reverted back
+  to DEBUG after verification (temporarily bumped to INFO for this session only)
+
+### Files touched
+- src/main/resources/application.yml
+- src/main/java/com/polysign/poller/MarketPoller.java
+- src/main/java/com/polysign/poller/PricePoller.java  (log level revert only)
+
+### Verification — volume floor
+- Volume floor filter firing: `market_below_floor` DEBUG log appears 12 000+ times
+  during first cycle, confirming ~80 % of Polymarket's 30 000+ markets are below
+  10 000 USDC lifetime volume and are correctly skipped.
+- First price poll cycle result: `price_poll_complete written=1332 skipped_no_change=0`
+  — 1 332 markets above the floor, all written (no prior data to dedupe against).
+
+### Verification — dedupe
+Procedure: pick market 629337 (yesPrice = 0.57), record snapshot count, wait for
+second price poll cycle to complete, record snapshot count again.
+
+| Point in time                          | Snapshot count |
+|----------------------------------------|----------------|
+| Before 2nd price cycle (mid-cycle)     | 1              |
+| After 2nd price cycle completes        | 1              |
+
+Cycle 2 log: `price_no_change marketId=629337 price=0.5700` fired at INFO level.
+Snapshot count unchanged → dedupe confirmed working at 4 decimal places.
+
+### Deviations from spec
+- none
+
+### Notes for next phase
+- Volume floor of 10 000 USDC reduces tracked market set from ~30 000 to ~1 300.
+  Phase 3 detectors will scan this much smaller set; anomaly detection will be
+  meaningfully fast.
+- The `kept=X of=Y` log in each market poll cycle makes floor tuning straightforward.
+- `price_no_change` is permanently at DEBUG — visible in local dev (application-local.yml
+  sets `com.polysign: DEBUG`) but silent in production INFO log level.

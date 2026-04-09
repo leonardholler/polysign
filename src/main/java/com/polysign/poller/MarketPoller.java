@@ -15,12 +15,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -54,6 +56,7 @@ public class MarketPoller {
     private final CircuitBreaker        circuitBreaker;
     private final Retry                 retry;
     private final AtomicLong            trackedCount = new AtomicLong(0);
+    private final double                minVolumeUsdc;
 
     public MarketPoller(
             @Qualifier("gammaApiClient") WebClient gammaClient,
@@ -62,8 +65,10 @@ public class MarketPoller {
             ObjectMapper mapper,
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            @Value("${polysign.pollers.market.min-volume-usdc:10000}") double minVolumeUsdc) {
 
+        this.minVolumeUsdc  = minVolumeUsdc;
         this.gammaClient    = gammaClient;
         this.marketsTable   = marketsTable;
         this.clock          = clock;
@@ -84,8 +89,9 @@ public class MarketPoller {
         try (var ignored = CorrelationId.set()) {
             log.info("market_poll_start");
 
-            int processed = 0;
-            int offset    = 0;
+            int total  = 0;
+            int kept   = 0;
+            int offset = 0;
 
             while (true) {
                 final int currentOffset = offset;
@@ -102,9 +108,9 @@ public class MarketPoller {
                 if (page.isEmpty()) break;
 
                 for (Map<String, Object> item : page) {
+                    total++;
                     try {
-                        upsertMarket(item);
-                        processed++;
+                        if (upsertMarket(item)) kept++;
                     } catch (Exception e) {
                         log.warn("market_item_error marketId={} error={}",
                                  item.getOrDefault("id", "unknown"), e.getMessage(), e);
@@ -116,8 +122,8 @@ public class MarketPoller {
                 offset += PAGE_LIMIT;
             }
 
-            trackedCount.set(processed);
-            log.info("market_poll_complete processed={}", processed);
+            trackedCount.set(kept);
+            log.info("market_poll_complete kept={} of={}", kept, total);
 
         } catch (Exception e) {
             log.error("market_poll_failed error={}", e.getMessage(), e);
@@ -157,12 +163,29 @@ public class MarketPoller {
     /**
      * Builds a {@link Market} from a raw Gamma API item map and upserts it into DynamoDB.
      * Preserves the {@code isWatched} flag via read-before-write.
+     *
+     * @return {@code true} if the market was upserted; {@code false} if filtered out
+     *         (no ID, or lifetime volume below {@code minVolumeUsdc} floor).
      */
-    private void upsertMarket(Map<String, Object> item) {
+    private boolean upsertMarket(Map<String, Object> item) {
         String marketId = stringOrNull(item, "id");
         if (marketId == null || marketId.isBlank()) {
             log.debug("market_item_no_id skipped");
-            return;
+            return false;
+        }
+
+        // ── Volume floor ──────────────────────────────────────────────────
+        String volumeStr = stringOrNull(item, "volume");
+        if (volumeStr != null) {
+            try {
+                double volume = Double.parseDouble(volumeStr);
+                if (volume < minVolumeUsdc) {
+                    log.debug("market_below_floor marketId={} volume={}", marketId, volume);
+                    return false;
+                }
+            } catch (NumberFormatException ignored) {
+                // unparseable volume — let the market through
+            }
         }
 
         // ── Parse JSON-string-encoded list fields ─────────────────────────────
@@ -208,6 +231,7 @@ public class MarketPoller {
 
         marketsTable.putItem(market);
         log.debug("market_upserted marketId={} category={} yesTokenId={}", marketId, category, yesTokenId);
+        return true;
     }
 
     /**

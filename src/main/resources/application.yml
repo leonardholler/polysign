@@ -67,6 +67,7 @@ polysign:
     market:
       interval-ms: 60000
       initial-delay-ms: 5000
+      min-volume-usdc: 10000
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
