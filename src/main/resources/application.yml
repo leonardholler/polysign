@@ -30,6 +30,9 @@ polysign:
       threshold-pct: 8.0
       window-minutes: 15
       min-volume-usdc: 50000
+      dedupe-window-minutes: 30
+      interval-ms: 60000
+      initial-delay-ms: 65000
     statistical:
       z-score-threshold: 3.0
       min-snapshots: 20
@@ -74,6 +77,10 @@ polysign:
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
+  consumer:
+    notification:
+      poll-interval-ms: 1000
+
 
 # ── Resilience4j ─────────────────────────────────────────────────────────────
 resilience4j:
@@ -96,6 +103,14 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
 
+      ntfy:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       polymarket-gamma:
@@ -111,6 +126,12 @@ resilience4j:
         exponential-backoff-multiplier: 2.0
         exponential-max-wait-duration: 8s
 
+      ntfy:
+        max-attempts: 3
+        wait-duration: 2s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 15s
   ratelimiter:
     instances:
       polymarket-clob:

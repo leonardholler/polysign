@@ -46,4 +46,18 @@ public class HttpConfig {
                 .defaultHeader(HttpHeaders.USER_AGENT, "polysign/0.1 (monitoring-bot; not-a-trading-bot)")
                 .build();
     }
+
+    /**
+     * ntfy.sh push notification API — posts plain-text alert payloads.
+     * Endpoint used: {@code POST /{topic}} with Title, Priority, Tags headers.
+     * Wrapped in Resilience4j retry + circuit breaker by NotificationConsumer.
+     */
+    @Bean("ntfyClient")
+    public WebClient ntfyClient() {
+        return WebClient.builder()
+                .baseUrl("https://ntfy.sh")
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
+                .defaultHeader(HttpHeaders.USER_AGENT, "polysign/0.1 (monitoring-bot; not-a-trading-bot)")
+                .build();
+    }
 }
