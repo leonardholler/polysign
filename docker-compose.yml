@@ -1,0 +1,51 @@
+# PolySign local development stack
+#
+# Why is the LocalStack version pinned to 3.8?
+# As of LocalStack 2026.03.0 (released March 23, 2026), localstack/localstack:latest
+# requires a LOCALSTACK_AUTH_TOKEN environment variable and will fail to start without
+# one. To avoid forcing a LocalStack account sign-up for a portfolio project, we pin
+# to localstack/localstack:3.8 — the last pre-consolidation tag that runs without
+# authentication.
+#
+# Usage:
+#   docker compose up --build     # first time
+#   docker compose up -d          # subsequent runs
+#   docker compose down           # stop
+
+services:
+  localstack:
+    image: localstack/localstack:3.8   # DO NOT change to :latest — see comment above
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,sqs,s3
+      - DEFAULT_REGION=us-east-1
+      - DEBUG=0
+    volumes:
+      - localstack_data:/tmp/localstack/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  polysign:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      # LocalStack dummy credentials — see .env.example
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    env_file:
+      - path: .env
+        required: false   # .env is optional; defaults above are used if absent
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+volumes:
+  localstack_data:
