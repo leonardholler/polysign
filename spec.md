@@ -1,31 +1,38 @@
-# PolySign — Build Spec
+# PolySign — Build Spec (v2)
 
-Build **PolySign**, a real-time event-processing and anomaly-detection system for Polymarket prediction markets. It combines price-movement detection, on-chain "smart money" wallet tracking, and news correlation, and pushes alerts to my phone when high-signal events occur.
+Build **PolySign**, a real-time event-processing and anomaly-detection system for Polymarket prediction markets. It combines price-movement detection, on-chain "smart money" wallet tracking, news correlation, and **measured signal quality (backtesting)**, and pushes alerts to my phone when high-signal events occur.
 
 **This is a monitoring and alerting system. It does NOT place trades. It has zero write access to any wallet. All trading decisions are made manually by the user.**
 
-The project is being built as a portfolio piece for an Amazon SDE application, so architectural clarity, AWS idiomatic usage, operational excellence (retries, DLQs, idempotency, metrics), and production-quality Java matter as much as the features themselves.
+The project is being built as a portfolio piece for an Amazon SDE application, so architectural clarity, AWS idiomatic usage, operational excellence (retries, DLQs, idempotency, metrics), **measured outcomes (signal precision)**, and production-quality Java matter as much as the features themselves.
+
+**v2 changes from v1 (see section at the end for the full changelog):**
+- New "Signal Quality & Backtesting" subsystem — every alert is scored against forward price movement and on market resolution, precision per detector is exposed at `/api/signals/performance` and on the dashboard.
+- Real AWS deployment is mandatory, not optional. The project ships with a live URL, CloudWatch alarms, and documented chaos experiments.
+- Orderbook depth is captured at alert time and fed into the backtest.
 
 ## Tech Stack (non-negotiable)
 
 - **Java 25** (the current LTS as of September 2025)
-- **Spring Boot 3.5.5 or newer in the 3.5.x line** (Spring Web, Spring Scheduling, Spring Validation, Spring Actuator). **Do NOT use Spring Boot 4.0 for this project** — Spring Boot 4 is available but as of early 2026 Resilience4j does not yet officially support Spring Framework 7 / Spring Boot 4 (tracking issue: resilience4j/resilience4j#2351). Spring Boot 3.5.5+ is officially Java 25 ready (confirmed in spring-projects/spring-boot#47245) and keeps the full ecosystem compatible. This is the pragmatic sweet spot.
+- **Spring Boot 3.5.5 or newer in the 3.5.x line** (Spring Web, Spring Scheduling, Spring Validation, Spring Actuator). **Do NOT use Spring Boot 4.0 for this project** — as of early 2026 Resilience4j does not yet officially support Spring Framework 7 / Spring Boot 4. Spring Boot 3.5.5+ is officially Java 25 ready and keeps the full ecosystem compatible.
 - **Maven** (single module; use the Spring Boot parent POM)
-- **AWS SDK for Java v2** (`software.amazon.awssdk:dynamodb-enhanced`, `sqs`, `s3`)
+- **AWS SDK for Java v2** (`software.amazon.awssdk:dynamodb-enhanced`, `sqs`, `s3`, `cloudwatch`)
 - **DynamoDB Enhanced Client** with annotated bean classes — not the low-level client
-- **LocalStack** for local development, with a clean path to real AWS (see Deployment section). **CRITICAL VERSION PINNING**: as of LocalStack 2026.03.0 (released March 23, 2026), `localstack/localstack:latest` requires a `LOCALSTACK_AUTH_TOKEN` environment variable and will fail to start without one. To avoid forcing the user to sign up for a LocalStack account for a portfolio project, **pin the Docker image to `localstack/localstack:3.8` in both `docker-compose.yml` and in the Testcontainers `LocalStackContainer` constructor**. This is the last pre-consolidation tag that runs without authentication. Document this clearly in the README under "Why is the LocalStack version pinned?".
+- **LocalStack** for local development, with a real AWS deployment for production. **CRITICAL VERSION PINNING**: pin the Docker image to `localstack/localstack:3.8` in both `docker-compose.yml` and in the Testcontainers `LocalStackContainer` constructor. Later LocalStack tags require an auth token.
 - **Testcontainers** (`org.testcontainers:localstack`, `junit-jupiter`) for integration tests
 - **JUnit 5 + Mockito + AssertJ** for unit tests
-- **Micrometer + Prometheus registry** via Spring Actuator for metrics
+- **Micrometer + Prometheus registry** via Spring Actuator for local metrics
+- **Micrometer CloudWatch2 registry** under the `aws` profile for production metrics
 - **Rome** (`com.rometools:rome`) for RSS parsing
 - **Jackson** (comes with Spring Boot) for JSON
-- **Lombok** — latest stable release only (Lombok 1.18.42 has known compilation bugs with `@Value` and `@Builder` on JDK 25; grab a newer version from Maven Central at build time). **Prefer Java records** for immutable DTOs, response bodies, and value objects wherever possible — records are more idiomatic in modern Java and avoid Lombok JDK-25 edge cases entirely. Use Lombok only for mutable entity classes where `@Getter`/`@Setter`/`@Slf4j` actually earn their keep.
+- **Lombok** — latest stable release. Prefer Java records for immutable DTOs where possible.
 - **SLF4J + Logback** with JSON-structured logging (`net.logstash.logback:logstash-logback-encoder`)
 - **Resilience4j** for retries, circuit breakers, and rate limiting on outbound HTTP
 - **ntfy.sh** for push notifications (no signup, free, HTTP POST to publish)
-- **Vanilla HTML + JS + Chart.js + Tailwind CDN** for the frontend — no build step, served as a Spring static resource
-- **Docker + Docker Compose** to orchestrate LocalStack + the app
+- **Vanilla HTML + JS + Chart.js + Tailwind CDN** for the frontend — no build step
+- **Docker + Docker Compose** for local orchestration
 - **GitHub Actions** for CI (build + test on push)
+- **Bash + AWS CLI** for production deployment scripts (no Terraform, no CDK — scripts are the story)
 
 Do NOT pull in Kotlin, Gradle, Quarkus, Micronaut, or any non-standard alternatives. Stick to the boring, Amazon-idiomatic Java stack.
 
@@ -33,28 +40,30 @@ Do NOT pull in Kotlin, Gradle, Quarkus, Micronaut, or any non-standard alternati
 
 1. Polls Polymarket for all active markets every 60 seconds, storing price snapshots in a rolling history.
 2. Polls configurable RSS news feeds and matches articles to relevant markets by keyword.
-3. Watches a configurable list of "smart money" wallet addresses (known profitable Polymarket traders) and records their trades as they happen on-chain.
-4. Runs four alert engines that all feed into a unified alert stream:
-   - **Price movement detector** — threshold-based: flags markets that move ≥X% in ≤Y minutes on above-threshold volume.
-   - **Statistical anomaly detector** — computes a rolling z-score per market over the last 60 minutes of price snapshots and flags markets whose latest move exceeds 3σ. This is the "ML-flavored" detector and is intentionally kept simple and explainable.
-   - **Wallet activity detector** — flags trades by watched wallets; fires a much stronger "consensus" alert when ≥3 watched wallets position the same direction on the same market within a 30-minute window.
-   - **News correlation detector** — flags when breaking news strongly matches an active high-volume market.
-5. Alerts are delivered via ntfy.sh push notifications AND displayed in a dashboard.
-6. Every alert is logged to DynamoDB with a 30-day TTL for later analysis and threshold tuning.
-7. Dashboard shows the live alert feed, watched markets with price charts, and recent whale trades.
+3. Watches a configurable list of "smart money" wallet addresses and records their trades as they happen.
+4. Runs four alert engines that feed into a unified alert stream:
+   - **Price movement detector** — flags markets that move ≥X% in ≤Y minutes on above-threshold volume.
+   - **Statistical anomaly detector** — rolling z-score per market over the last 60 minutes; flags moves exceeding 3σ.
+   - **Wallet activity detector** — flags large trades by watched wallets; fires a stronger "consensus" alert when ≥3 wallets position the same direction on the same market within 30 minutes.
+   - **News correlation detector** — flags when breaking news strongly matches a high-volume market.
+5. Captures orderbook depth (`spreadBps`, `depthAtMid`) at every alert fire, so book quality can be attributed to signal quality downstream.
+6. Alerts are delivered via ntfy.sh push AND shown in a dashboard.
+7. Every alert is logged to DynamoDB with a 30-day TTL for analysis and threshold tuning.
+8. **Continuously evaluates the signal quality of every alert.** Each alert is re-scored at fixed horizons (T+15min, T+1h, T+24h) and on market resolution. Per-detector precision / magnitude / count are exposed at `/api/signals/performance` and on the dashboard. This closes the feedback loop — PolySign can tell you whether its own signals are working.
+9. Dashboard shows the signal quality panel, live alert feed, watched markets with price charts, and recent whale trades.
 
 ## Data Sources (all free, all public)
 
 - **Polymarket Gamma API** for market metadata: `https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=200`
-- **Polymarket CLOB API** for prices/orderbook: `https://clob.polymarket.com/` — verify exact endpoints (`/book`, `/price`, `/midpoint`, `/trades`) with a live test request at the start of phase 2. Do not blindly trust endpoint names.
-- **Polymarket Data API** for wallet activity: `https://data-api.polymarket.com/` — verify `/trades?user={address}` and `/positions?user={address}` at the start of phase 5. Fall back to Polygon RPC if needed.
+- **Polymarket CLOB API** for prices and orderbook: `https://clob.polymarket.com/` (`/midpoint`, `/price`, `/book`). Verify exact endpoints with a live test at the start of Phase 2.
+- **Polymarket Data API** for wallet activity: `https://data-api.polymarket.com/`. Verify `/trades?user=` and `/positions?user=` at the start of Phase 6. Fall back to Polygon RPC if needed.
 - **Polygon RPC** (free public): `https://polygon-rpc.com`
 - **RSS feeds**: Reuters, AP, BBC, ESPN, Reddit worldnews, Reddit politics — hardcode URLs in `application.yml`.
-- **ntfy.sh**: `https://ntfy.sh/{topic}` — POST plain text body. No auth. Use a random hard-to-guess topic name like `polysign-leonard-x7k2`.
+- **ntfy.sh**: `https://ntfy.sh/{topic}` — POST plain text. No auth. Use a hard-to-guess topic like `polysign-leonard-x7k2`.
 
 ## Seed Wallet Watchlist
 
-Create `src/main/resources/watched_wallets.json` with 10 **placeholder** entries. Do not invent real addresses. Add a code comment and a README section telling the user to replace them by browsing `https://polymarket.com/leaderboard`. Format:
+Create `src/main/resources/watched_wallets.json` with 10 **placeholder** entries. Add a code comment and README section telling the user to replace them from `https://polymarket.com/leaderboard`. Format:
 
 ```json
 [
@@ -66,18 +75,18 @@ The file is loaded at startup into the `watched_wallets` DynamoDB table if not a
 
 ## DynamoDB Schema
 
-Use the DynamoDB Enhanced Client. Every table should have a corresponding annotated bean class and a typed `DynamoDbTable<T>` wrapper bean defined in a `DynamoConfig` class.
+Use the DynamoDB Enhanced Client. Every table has a corresponding annotated bean class and a typed `DynamoDbTable<T>` wrapper bean defined in a `DynamoConfig` class.
 
 **markets**
 - PK: `marketId` (S)
-- Attributes: `question`, `category`, `endDate`, `volume`, `outcomes` (list), `keywords` (set), `isWatched` (bool), `updatedAt`
+- Attributes: `question`, `category`, `endDate`, `volume`, `volume24h`, `yesTokenId`, `outcomes`, `keywords`, `isWatched`, `updatedAt`
 - GSI: `category-updatedAt-index` on (`category`, `updatedAt`)
 
 **price_snapshots**
 - PK: `marketId` (S)
-- SK: `timestamp` (S, ISO-8601, lexicographically sortable)
+- SK: `timestamp` (S, ISO-8601)
 - Attributes: `yesPrice`, `noPrice`, `volume24h`, `midpoint`
-- TTL attribute: `expiresAt` (epoch seconds, 7 days out)
+- TTL attribute: `expiresAt` (epoch seconds, **30 days** out — extended from 7 days in v1 to allow 24-hour look-ahead backtesting from hot storage)
 - Query pattern: "get all snapshots for market X in the last 60 minutes"
 
 **articles**
@@ -100,13 +109,20 @@ Use the DynamoDB Enhanced Client. Every table should have a corresponding annota
 - GSI: `marketId-timestamp-index` on (`marketId`, `timestamp`)
 
 **alerts**
-- PK: `alertId` (S, deterministic idempotency key — see Idempotency section)
+- PK: `alertId` (S, deterministic idempotency key)
 - SK: `createdAt`
-- Attributes: `type`, `severity`, `marketId`, `title`, `description`, `metadata` (map), `wasNotified` (bool), `link`
+- Attributes: `type`, `severity`, `marketId`, `title`, `description`, `metadata` (includes `spreadBps`, `depthAtMid` when captured), `wasNotified`, `link`
 - GSI: `marketId-createdAt-index`
 - TTL attribute: `expiresAt` (30 days out)
 
-Include a `DESIGN.md` section explaining why DynamoDB over RDS: access patterns are all single-key or GSI lookups; TTL replaces cron cleanup; capacity can scale per-table; the schema maps naturally to an event-sourced append log for price snapshots and trades. Mention the tradeoffs honestly (no joins, eventual consistency on GSIs, item-size limits).
+**alert_outcomes** (new in v2)
+- PK: `alertId` (S) — same ID as the row in `alerts`
+- SK: `horizon` (S) — one of `t15m`, `t1h`, `t24h`, `resolution`
+- Attributes: `type`, `marketId`, `firedAt`, `evaluatedAt`, `priceAtAlert`, `priceAtHorizon`, `directionPredicted`, `directionRealized`, `wasCorrect` (BOOL, nullable for flat), `magnitudePp`, `spreadBpsAtAlert` (nullable), `depthAtMidAtAlert` (nullable)
+- GSI: `type-firedAt-index` on (`type`, `firedAt`) for per-detector aggregation
+- TTL: none. Outcomes are cheap and the whole point is long-term measurement.
+
+Include a `DESIGN.md` section explaining why DynamoDB over RDS: access patterns are all single-key or GSI lookups; TTL replaces cron cleanup; capacity scales per-table; the schema maps naturally to an event-sourced append log. Mention the tradeoffs honestly (no joins, eventual consistency on GSIs, item-size limits).
 
 ## SQS Queues (each with a dead-letter queue)
 
@@ -116,34 +132,36 @@ Every main queue has a corresponding DLQ with `maxReceiveCount = 5`. The app exp
 - `wallet-trades-to-process` → `wallet-trades-to-process-dlq`
 - `alerts-to-notify` → `alerts-to-notify-dlq`
 
-All producers set a `MessageDeduplicationId` (or content-based hash in attributes) for idempotency even though these are standard queues. Consumers are written to be idempotent: processing the same message twice must never produce two alerts or two DB writes.
+All producers set a `MessageDeduplicationId` for idempotency. Consumers are idempotent: processing the same message twice must never produce two alerts or two DB writes.
 
 ## S3 Buckets
 
-- `polysign-archives` — raw article HTML for later reanalysis. Key format: `articles/{yyyy}/{MM}/{dd}/{articleId}.html`.
+- `polysign-archives` — raw article HTML at `articles/{yyyy}/{MM}/{dd}/{articleId}.html`, plus daily snapshot rollups at `snapshots/{yyyy}/{MM}/{dd}/{marketId}.jsonl.gz` for backtesting beyond the 30-day hot-storage TTL.
 
-## Idempotency (critical — this is a key Amazon talking point)
+## Idempotency (critical — key Amazon talking point)
 
-- **Alert IDs are deterministic**, not random UUIDs. `alertId = SHA-256(type + marketId + bucketedTimestamp + canonicalPayloadHash)` where `bucketedTimestamp` is rounded down to the dedupe window for that alert type. This guarantees that re-running a detector on the same window cannot produce duplicate alerts, even across worker restarts or queue redeliveries.
-- Writes to the `alerts` table use `PutItem` with a `attribute_not_exists(alertId)` condition. A `ConditionalCheckFailedException` is logged at DEBUG and swallowed — it means the alert was already emitted.
-- `price_snapshots` writes are skipped when the latest stored snapshot has the same price (dedupe on no-change).
-- Document the idempotency model in `DESIGN.md` with a short worked example.
+- **Alert IDs are deterministic**: `alertId = SHA-256(type + marketId + bucketedTimestamp + canonicalPayloadHash)` where `bucketedTimestamp` is rounded down to the dedupe window for that alert type.
+- Writes to `alerts` use `PutItem` with `attribute_not_exists(alertId)`. `ConditionalCheckFailedException` is logged at DEBUG and swallowed.
+- Writes to `alert_outcomes` use `attribute_not_exists(horizon)` on the composite key — running the evaluator twice on the same alert cannot produce two outcome rows at the same horizon.
+- `price_snapshots` writes are skipped when the latest stored snapshot has the same price.
+- Document the idempotency model in `DESIGN.md` with a worked example.
 
-## Resilience (also a key talking point)
+## Resilience (key talking point)
 
-- All outbound HTTP calls (Polymarket, Polygon RPC, RSS, ntfy.sh) go through Resilience4j with:
+- All outbound HTTP calls (Polymarket Gamma, Polymarket CLOB, Polygon RPC, RSS, ntfy.sh) go through Resilience4j:
   - Retry: 3 attempts, exponential backoff, jitter.
-  - Circuit breaker: opens after 50% failure rate over a 20-call sliding window, half-opens after 30s.
-  - Rate limiter where appropriate (Polymarket calls capped at a sane per-second rate).
-- A failed poll for one market or one wallet must NEVER crash the scheduler. Catch at the per-item level, log structured error with correlation ID, increment a `polysign.poll.failures` counter, continue.
-- Graceful shutdown: the Spring context's shutdown hook drains in-flight SQS messages before exiting.
+  - Circuit breaker: opens at 50% failure over a 20-call sliding window, half-opens after 30s.
+  - Rate limiter on CLOB (10 calls/sec).
+- A failed poll for one market or one wallet must NEVER crash the scheduler. Catch at the per-item level, log with `correlationId`, increment `polysign.poll.failures`, continue.
+- Graceful shutdown drains in-flight SQS messages before exiting.
 
-## Metrics (expose at `/actuator/prometheus`)
+## Metrics (expose at `/actuator/prometheus` locally and CloudWatch in production)
 
-Custom Micrometer metrics to define explicitly:
+Custom Micrometer metrics:
 
+**Operational:**
 - `polysign.markets.tracked` (gauge)
-- `polysign.prices.polled` (counter, tag: `status=success|failure`)
+- `polysign.prices.polled` (counter, tag: `status`)
 - `polysign.alerts.fired` (counter, tags: `type`, `severity`)
 - `polysign.alerts.notified` (counter, tag: `status`)
 - `polysign.sqs.queue.depth` (gauge, tag: `queue`)
@@ -151,86 +169,170 @@ Custom Micrometer metrics to define explicitly:
 - `polysign.http.outbound.latency` (timer, tag: `target`)
 - `polysign.wallet.trades.ingested` (counter)
 
-The README points a reader at `/actuator/prometheus` and `/actuator/health` and explains how these would wire into CloudWatch in a real deployment.
+**Signal quality (v2):**
+- `polysign.signals.precision` (gauge, tags: `type`, `horizon`)
+- `polysign.signals.magnitude.mean` (gauge, tags: `type`, `horizon`)
+- `polysign.signals.sample.count` (gauge, tags: `type`, `horizon`)
+- `polysign.outcomes.evaluated` (counter, tags: `type`, `horizon`)
+- `polysign.archive.snapshots.written` (counter)
 
 ## Alert Engines
 
 ### 1. Price Movement Detector (threshold-based)
-Scheduled every 60 seconds after price polling.
+Scheduled every 60 seconds.
 - For each active market, query last 60 minutes of snapshots.
 - Fire alert if price moved ≥ 8% in ≤ 15 minutes AND 24h volume ≥ $50,000.
+- Minimum absolute delta: `|toPrice - fromPrice| >= 0.03`.
+- Extreme-zone filter: skip if both prices < 0.05 or both > 0.95.
 - Higher severity if `isWatched = true`.
-- Configurable in `application.yml`: `polysign.detectors.price.thresholdPct`, `windowMinutes`, `minVolumeUsdc`.
 - Dedupe window: 30 minutes, bypassed if move exceeds 2× threshold.
+- **Orderbook capture**: at alert fire, call `clob.polymarket.com/book?token_id=...` once; compute `spreadBps` and `depthAtMid`; attach to alert metadata. If the CLOB call fails (500ms budget), fire the alert with null book fields.
 
 ### 2. Statistical Anomaly Detector (z-score)
 Scheduled every 60 seconds, runs after the threshold detector.
-- For each active market with ≥ 20 snapshots in the last 60 minutes, compute the rolling mean and standard deviation of 1-minute returns.
+- For each active market with ≥ 20 snapshots in the last 60 minutes, compute rolling mean and stddev of 1-minute returns.
 - If the most recent return's z-score exceeds 3.0 AND 24h volume ≥ $50,000, fire a `warning` alert of type `statistical_anomaly`.
-- Include the z-score, window size, and mean/stddev in the alert metadata.
-- `DESIGN.md` should briefly note why this is complementary to the threshold detector (threshold catches large moves; z-score catches unusual moves relative to that market's own volatility).
-- Unit test this heavily with synthetic price series: flat, trending, noisy, spiking.
+- Apply the same `min-delta-p` (0.03) and extreme-zone (0.05/0.95) filters as the price detector.
+- Include z-score, window size, mean, stddev in alert metadata.
+- **Orderbook capture**: same as Price Movement Detector — attach `spreadBps` and `depthAtMid` on fire.
+- Unit test heavily with synthetic series: flat, trending, noisy, spiking, gradual acceleration, insufficient history, high-vol market, low-volume market.
 
 ### 3. Wallet Activity Detector
 Scheduled every 60 seconds.
 - For each watched wallet, fetch new trades since `lastSyncedAt`.
 - Write to `wallet_trades` (idempotent on `txHash`).
-- Fire `info` alert on any individual trade > $5,000.
-- **Consensus signal**: after writing, query the `marketId-timestamp-index` GSI — if ≥ 3 distinct watched wallets traded the same market in the same direction within the last 30 minutes, fire a `critical` alert of type `consensus`.
+- Fire `info` alert on individual trades > $5,000.
+- **Consensus signal**: query `marketId-timestamp-index` GSI — if ≥ 3 distinct watched wallets traded the same market same direction within 30 minutes, fire `critical` alert of type `consensus`.
 
 ### 4. News Correlation Detector
-Runs as an SQS consumer on `news-to-process`.
+SQS consumer on `news-to-process`.
 - Extract keywords, score against active markets.
-- If score ≥ 0.5 AND market volume ≥ $100,000, fire `warning` alert.
-- Include article title, source, link, matched keywords in alert metadata.
+- Fire `warning` alert if score ≥ 0.5 AND market volume ≥ $100,000.
+- Include article title, source, link, matched keywords in metadata.
+
+## Signal Quality & Backtesting (v2)
+
+This subsystem is the single most important addition in v2. A monitoring system that cannot tell you whether its signals work is indistinguishable from a random number generator with nice UI. PolySign closes the loop by scoring every fired alert against forward price movement and final market resolution.
+
+### `SnapshotArchiver`
+
+- `@Scheduled` daily at 04:00 UTC
+- Reads the last 24h of `price_snapshots` per tracked market
+- Writes one gzipped JSON-Lines file per market to `s3://polysign-archives/snapshots/{yyyy}/{MM}/{dd}/{marketId}.jsonl.gz`
+- Idempotent on S3 key
+- Emits `polysign.archive.snapshots.written` counter
+
+### `AlertOutcomeEvaluator`
+
+- `@Scheduled` every 5 minutes
+- Finds alerts fired between 15 minutes ago and 25 hours ago whose next-due horizon row does not yet exist in `alert_outcomes`.
+- For each alert, for each due horizon (`t15m`, `t1h`, `t24h`):
+  - Fetch the snapshot closest to `firedAt + horizon` from `price_snapshots` (fall back to S3 cold storage if older than 30 days)
+  - Compute `magnitudePp`, `directionRealized`, `wasCorrect`
+  - Write the row with `attribute_not_exists(horizon)` for idempotency
+- **0.5pp dead zone**: if `|magnitudePp| < 0.005`, `directionRealized = "flat"` and `wasCorrect = null` (excluded from precision denominator). This prevents rewarding random noise in flat markets.
+- Emits `polysign.outcomes.evaluated` counter tagged by `type` and `horizon`.
+
+### `ResolutionSweeper`
+
+- `@Scheduled` every 6 hours
+- Finds markets with `closed = true`
+- For each such market, finds every alert ever fired on it
+- Computes the `resolution` outcome row using the final outcome price (0 or 1) as `priceAtHorizon`
+- Idempotent via the same composite-key conditional write
+
+### `SignalPerformanceService` + `SignalPerformanceController`
+
+- `GET /api/signals/performance?type=&horizon=&since=`
+- Query params: `type` optional filter, `horizon` one of `t15m|t1h|t24h|resolution` (default `t1h`), `since` ISO-8601 (default 7 days ago)
+- Scans `alert_outcomes` via the `type-firedAt-index` GSI
+- Returns per-detector aggregates: `count`, `precision`, `avgMagnitudePp`, `medianMagnitudePp`, `meanAbsMagnitudePp`
+- Response shape:
+
+```json
+{
+  "horizon": "t1h",
+  "since": "2026-04-01T00:00:00Z",
+  "detectors": [
+    {
+      "type": "price_movement",
+      "count": 412,
+      "precision": 0.58,
+      "avgMagnitudePp": 0.021,
+      "medianMagnitudePp": 0.014,
+      "meanAbsMagnitudePp": 0.033
+    }
+  ]
+}
+```
+
+**Precision definition**: fraction of alerts whose realized direction at the horizon matches the predicted direction, excluding the dead-zone flat cases from the denominator. Document this in DESIGN.md.
+
+### Known biases to acknowledge in DESIGN.md
+
+- **Survivor bias** in the resolution sweep (closed markets are a non-random subset of all markets).
+- **Lookback bias** at horizon boundaries if snapshot granularity is coarser than 1 minute.
+- **Clustering** of correlated alerts (one big news event produces many correlated alerts, inflating the apparent sample size).
 
 ## ntfy.sh Notification Worker
 
-A Spring `@Component` that polls `alerts-to-notify` via long-polling SQS receive and POSTs to ntfy.sh.
+Spring `@Component` that long-polls `alerts-to-notify` and POSTs to ntfy.sh.
 
-```java
-// severity → ntfy priority mapping
-Map.of("info", "default", "warning", "high", "critical", "max")
-```
-
-Headers: `Title`, `Priority`, `Tags` (`type,severity`), `Click` (polymarket deep link). Body is the alert description. On success, flip `wasNotified = true` on the alert row and delete the SQS message. On failure, let SQS redeliver; after 5 failed attempts it goes to the DLQ.
+- Severity → ntfy priority: `info=default`, `warning=high`, `critical=max`
+- Headers: `Title`, `Priority`, `Tags`, `Click` (polymarket deep link)
+- On success, flip `wasNotified = true` and delete the SQS message.
+- On failure, leave the message for SQS to redeliver; after 5 attempts it goes to the DLQ.
 
 ## API Endpoints (Spring Web `@RestController`)
 
-- `GET /` → serves `index.html` from `src/main/resources/static/`
+- `GET /` → `index.html`
 - `GET /api/markets?category=&watchedOnly=&limit=`
 - `GET /api/markets/{marketId}`
 - `GET /api/markets/{marketId}/price-history?windowMinutes=60`
 - `GET /api/markets/{marketId}/news`
 - `GET /api/markets/{marketId}/whale-trades`
-- `POST /api/markets/{marketId}/watch` — toggles `isWatched`
+- `POST /api/markets/{marketId}/watch`
 - `GET /api/wallets`
 - `GET /api/wallets/{address}/trades?limit=50`
-- `POST /api/wallets` — add
-- `DELETE /api/wallets/{address}` — remove
+- `POST /api/wallets` / `DELETE /api/wallets/{address}`
 - `GET /api/alerts?limit=100&severity=&type=&since=`
+- `GET /api/alerts/by-signal-strength` — alerts sorted by count of distinct detector types firing on the same market in the last 60 minutes
 - `POST /api/alerts/{alertId}/mark-reviewed`
-- `GET /api/stats` — system stats for the dashboard header
+- `GET /api/signals/performance?type=&horizon=&since=` (v2)
+- `GET /api/stats`
 - `GET /actuator/health`
 - `GET /actuator/prometheus`
 
-Use Bean Validation (`@Valid`, `@NotBlank`, `@Pattern` for addresses) on request bodies. Return proper HTTP status codes. Use `@ControllerAdvice` for a global exception handler that returns RFC 7807 `application/problem+json` error responses.
+Use Bean Validation on request bodies. `@ControllerAdvice` global exception handler returns RFC 7807 `application/problem+json`.
 
 ## Dashboard UI
 
-Single `index.html` file. Dark mode Tailwind via CDN. Chart.js via CDN. No build step.
+Single `index.html`. Dark mode Tailwind via CDN. Chart.js via CDN. No build step.
 
 ### Header
-Stats bar: markets tracked, alerts fired today, watched wallets, last poll time. ntfy.sh topic name with a copy button.
+Stats bar: markets tracked, alerts fired today, watched wallets, last poll time. ntfy topic with copy button.
 
-### Top: Live Alert Feed
-Auto-refresh every 10s. Color-coded by severity. Each card: timestamp, type badge, title, description, market link, "mark reviewed" button. Soft ping via Web Audio API on new critical alerts while the tab is open.
+### Signal Quality Panel (v2, above the alert feed)
+Small table fed by `/api/signals/performance?horizon=t1h` refreshed every 60s:
 
-### Middle: Watched Markets Grid
-Cards per watched market: question, category, yes/no prices, 1-hour Chart.js line chart, 24h volume, whale trade count, news count. Click to expand. Un-watch button.
+```
+Detector              | 1h Precision | 24h Precision | Count (7d)
+price_movement        |     58%      |     53%       |    412
+statistical_anomaly   |     63%      |     59%       |    178
+consensus             |     71%      |     66%       |     23
+news_correlation      |     49%      |     47%       |     61
+```
 
-### Bottom: Smart Money Tracker
-Table of watched wallets: alias, truncated address, category, last trade time, total trades, recent direction. Click for trade history. "Add wallet" form.
+Precision cells color-coded: >60% green, 50–60% yellow, <50% red. Count cells link to the filtered alert feed. **This panel is above the fold — it is the most important thing on the dashboard.**
+
+### Live Alert Feed
+Auto-refresh every 10s. Color-coded by severity. Sorted by **Signal Strength** (count of distinct detector types firing on the same market in the last 60 minutes), tiebreak by most recent. A market with 3+ distinct detector types firing gets a badge. Soft ping via Web Audio API on new critical alerts.
+
+### Watched Markets Grid
+Cards per watched market: question, category, prices, 1-hour Chart.js chart, 24h volume, whale trade count, news count.
+
+### Smart Money Tracker
+Table of watched wallets: alias, truncated address, category, last trade time, total trades, recent direction.
 
 ## Project Structure
 
@@ -239,203 +341,183 @@ polysign/
 ├── pom.xml
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example
-├── .gitignore
-├── .github/
-│   └── workflows/
-│       └── ci.yml
+├── .github/workflows/ci.yml
+├── deployment/                         # v2 — real AWS deployment
+│   ├── aws-setup.md
+│   ├── 01-create-tables.sh
+│   ├── 02-create-queues.sh
+│   ├── 03-create-bucket.sh
+│   ├── 04-create-ecr.sh
+│   ├── 05-create-iam.sh
+│   ├── 06-create-fargate.sh
+│   ├── 07-create-alarms.sh
+│   ├── iam-policy.json
+│   ├── task-definition.json
+│   ├── alarms-proof/                   # screenshots of all 4 alarms
+│   └── chaos/                          # evidence from 3 chaos experiments
 ├── src/
-│   ├── main/
-│   │   ├── java/com/polysign/
-│   │   │   ├── PolySignApplication.java
-│   │   │   ├── config/
-│   │   │   │   ├── AwsConfig.java          # DynamoDB, SQS, S3 clients (LocalStack-aware)
-│   │   │   │   ├── DynamoConfig.java        # DynamoDbTable<T> beans
-│   │   │   │   ├── HttpConfig.java          # WebClient + Resilience4j
-│   │   │   │   ├── SchedulingConfig.java
-│   │   │   │   └── BootstrapRunner.java     # Creates tables/queues/buckets on startup
-│   │   │   ├── common/                      # CorrelationId, Clock wrapper, Result<T>
-│   │   │   ├── model/                       # DynamoDB-annotated beans
-│   │   │   │   ├── Market.java
-│   │   │   │   ├── PriceSnapshot.java
-│   │   │   │   ├── Article.java
-│   │   │   │   ├── MarketNewsMatch.java
-│   │   │   │   ├── WatchedWallet.java
-│   │   │   │   ├── WalletTrade.java
-│   │   │   │   └── Alert.java
-│   │   │   ├── repository/                  # Thin wrappers over DynamoDbTable<T>
-│   │   │   ├── polling/
-│   │   │   │   ├── MarketPoller.java
-│   │   │   │   ├── PricePoller.java
-│   │   │   │   ├── WalletPoller.java
-│   │   │   │   └── RssPoller.java
-│   │   │   ├── detector/
-│   │   │   │   ├── PriceMovementDetector.java
-│   │   │   │   ├── StatisticalAnomalyDetector.java
-│   │   │   │   ├── WalletActivityDetector.java
-│   │   │   │   ├── ConsensusDetector.java
-│   │   │   │   └── NewsCorrelationDetector.java
-│   │   │   ├── processing/
-│   │   │   │   ├── KeywordExtractor.java
-│   │   │   │   ├── NewsMatcher.java
-│   │   │   │   ├── NewsConsumer.java          # SQS listener
-│   │   │   │   └── NotificationConsumer.java  # SQS listener → ntfy.sh
-│   │   │   ├── alert/
-│   │   │   │   ├── AlertService.java          # Idempotent alert creation
-│   │   │   │   └── AlertIdFactory.java        # Deterministic ID hashing
-│   │   │   ├── api/
-│   │   │   │   ├── MarketController.java
-│   │   │   │   ├── WalletController.java
-│   │   │   │   ├── AlertController.java
-│   │   │   │   ├── StatsController.java
-│   │   │   │   └── GlobalExceptionHandler.java
-│   │   │   └── metrics/
-│   │   │       └── CustomMetrics.java
-│   │   └── resources/
-│   │       ├── application.yml
-│   │       ├── application-local.yml         # LocalStack endpoints
-│   │       ├── application-aws.yml           # Real AWS profile
-│   │       ├── logback-spring.xml             # JSON structured logging
-│   │       ├── watched_wallets.json
-│   │       └── static/
-│   │           └── index.html
-│   └── test/
-│       └── java/com/polysign/
-│           ├── detector/
-│           │   ├── PriceMovementDetectorTest.java
-│           │   ├── StatisticalAnomalyDetectorTest.java
-│           │   └── ConsensusDetectorTest.java
-│           ├── processing/
-│           │   ├── KeywordExtractorTest.java
-│           │   └── NewsMatcherTest.java
-│           ├── alert/
-│           │   └── AlertIdFactoryTest.java
-│           └── integration/
-│               └── PolySignIntegrationTest.java   # Testcontainers + LocalStack
+│   ├── main/java/com/polysign/
+│   │   ├── PolySignApplication.java
+│   │   ├── config/                     # Aws, Dynamo, Http, Scheduling, BootstrapRunner
+│   │   ├── common/                     # CorrelationId, AppClock, Result<T>
+│   │   ├── model/                      # Market, PriceSnapshot, Article, ..., Alert, AlertOutcome
+│   │   ├── poller/                     # Market, Price, Wallet, Rss pollers
+│   │   ├── detector/                   # PriceMovement, StatisticalAnomaly, WalletActivity, Consensus, NewsCorrelation
+│   │   ├── alert/                      # AlertService, AlertIdFactory
+│   │   ├── backtest/                   # v2 — SnapshotArchiver, AlertOutcomeEvaluator, ResolutionSweeper, SignalPerformanceService
+│   │   ├── notification/               # NotificationConsumer
+│   │   ├── processing/                 # KeywordExtractor, NewsMatcher, NewsConsumer
+│   │   ├── api/                        # Controllers + GlobalExceptionHandler
+│   │   └── metrics/                    # CustomMetrics
+│   └── main/resources/
+│       ├── application.yml, application-local.yml, application-aws.yml
+│       ├── logback-spring.xml
+│       ├── watched_wallets.json
+│       └── static/index.html
+├── src/test/java/com/polysign/
+│   ├── detector/, alert/, processing/, backtest/    # unit tests
+│   └── integration/PolySignIntegrationTest.java     # Testcontainers
 ├── DESIGN.md
 └── README.md
 ```
 
 ## Docker Compose
 
-Services: `localstack`, `polysign` (the Spring Boot app). A single JAR runs everything — schedulers, SQS consumers, and the web server — inside one process. Do NOT split into multiple services in compose; a monolithic Spring Boot deployment is more honest about what this is and easier to reason about. The boundaries between components are enforced in code, not in containers.
+Services: `localstack`, `polysign`. Single JAR runs everything in one process for local dev. Boundaries are enforced in code, not containers.
 
-## Deployment Path to Real AWS (this is what takes it from a 7 to a 9)
+## Deployment to Real AWS (v2 — mandatory)
 
-Include a `deployment/` directory with:
+The project ships deployed on real AWS, with a URL a reviewer can click. A portfolio artifact a recruiter can visit is worth more than any README paragraph.
 
-1. **`deployment/aws-setup.md`** — a step-by-step guide for deploying to a real AWS account:
-   - Create DynamoDB tables via AWS CLI commands (copy-pasteable).
-   - Create SQS queues + DLQs via AWS CLI.
-   - Create the S3 bucket.
-   - Build the Docker image and push to ECR.
-   - Run on ECS Fargate with a task definition (include a sample `task-definition.json`).
-   - IAM policy JSON granting least-privilege access to exactly the tables/queues/bucket the app uses.
-2. **`application-aws.yml`** profile that reads real AWS endpoints (no `endpointOverride`).
-3. A section in the README titled **"Running on Real AWS"** that explains how to flip the profile via `SPRING_PROFILES_ACTIVE=aws`.
+### Target topology
 
-You do not need to actually deploy it — just make the path real and documented so a reviewer can see you've thought it through end to end.
+- **Compute**: ECS Fargate, 1 task, 0.25 vCPU / 0.5 GB RAM, single container running the Spring Boot JAR. Monolithic design maps cleanly to a single-task service.
+- **Public URL**: by default, use the raw ALB DNS (`polysign-alb-xxxx.us-east-1.elb.amazonaws.com`). No domain purchase required. If a domain is available, use ACM for HTTPS; otherwise run HTTP-only (no auth on the app means HTTPS adds no real security).
+  - **Cost fallback**: if the ALB's $17/mo is unacceptable, run on a single EC2 t4g.small ($11/mo) with the task exposing port 8080 directly. Document the tradeoff in the README.
+- **State**: real DynamoDB (on-demand, 8 tables), real SQS (3 main + 3 DLQ), real S3 (`polysign-archives-${ACCOUNT_ID}-${REGION}`). Same bean code as LocalStack, no endpoint override under the `aws` profile.
+- **Logs**: CloudWatch Logs via `awslogs` driver. One log group, 30-day retention. Existing JSON logback config is CloudWatch-compatible; Logs Insights queries on `correlationId` work out of the box.
+- **Metrics**: CloudWatch EMF via `micrometer-registry-cloudwatch2` under the `aws` profile.
+- **Secrets**: `NTFY_TOPIC` in Secrets Manager, injected into the task.
+- **Cost ceiling**: < $30/month. See the cost table in the README.
+
+### CloudWatch alarms (mandatory)
+
+1. `DlqDepth_AlertsToNotify > 0 for 5 minutes` → SNS → email
+2. `TaskCpuUtilization > 80% for 10 minutes` → SNS → email
+3. `DynamoDb_Alerts_ThrottledRequests > 0 for 1 minute` → SNS → email
+4. `NoAlertsFiredForOneHour` composite alarm → SNS → email (catches silent failures)
+
+Screenshots of all 4 alarms (even in OK state) go in `deployment/alarms-proof/`.
+
+### Chaos proof (mandatory)
+
+Run these three experiments against the live deployment and capture evidence in `deployment/chaos/`:
+
+1. **Polymarket circuit breaker opens** — block egress to `*.polymarket.com` via SG rule, watch the breaker state transitions in CloudWatch Logs, revert. Save log lines to `01-polymarket-breaker.log`.
+2. **DLQ alarm fires** — point ntfy base URL at a dead host, let 5 alerts fail through to the DLQ, confirm the email arrives. Save email screenshot + DLQ depth graph to `02-dlq-alarm.png`.
+3. **Idempotent restart** — fire an alert, `aws ecs update-service --force-new-deployment` mid-enqueue, confirm no duplicate alert or notification. Save before/after counts + log lines to `03-idempotent-restart.log`.
+
+Each experiment maps to an Amazon Leadership Principle: Operational Excellence, Bias for Action, Ownership.
+
+### `deployment/` scripts
+
+All scripts in bash + AWS CLI (no Terraform, no CDK). Each script is idempotent (re-runnable). Scripts are numbered in run order: 01-create-tables, 02-create-queues, 03-create-bucket, 04-create-ecr, 05-create-iam, 06-create-fargate, 07-create-alarms.
+
+### README additions
+
+The README must include, above the fold:
+- Live demo URL (or screenshot if the deployment has been spun down for cost)
+- CloudWatch dashboard screenshot showing markets tracked, alerts fired today, DLQ depth
+- Signal quality panel screenshot with real numbers
+- Actual monthly AWS cost with billing dashboard screenshot
+- A one-paragraph "lessons learned from the deploy" section
 
 ## CI (GitHub Actions)
 
 `.github/workflows/ci.yml`:
-- Triggers on push and pull_request.
-- Matrix on `java-version: [25]`.
-- Steps: checkout, setup-java (Temurin), cache Maven, `mvn -B verify`.
-- Integration tests run via Testcontainers (the runner has Docker available by default on `ubuntu-latest`).
+- Triggers on push and pull_request
+- Java 25 Temurin, cache Maven, `mvn -B verify`
+- Testcontainers tests run via default Docker on `ubuntu-latest`
 
-A green CI badge goes at the top of the README.
+Green CI badge at the top of the README.
 
-## Testing Requirements (do not skip)
+## Testing Requirements
 
-- **Unit tests** for every detector. For the statistical anomaly detector, test with synthetic series: flat (no alerts), linear trend (no alerts), random walk (no alerts), sudden spike (alert), gradual drift (no alert).
-- **Unit test** for `AlertIdFactory` proving the same inputs produce the same ID and different inputs do not collide.
-- **Unit tests** for `KeywordExtractor` and `NewsMatcher`.
-- **Integration test** using Testcontainers LocalStack: spin up LocalStack, create tables/queues, insert fake price snapshots, run the price movement detector, assert an alert row is written AND an SQS message lands in `alerts-to-notify`. This one test alone is worth a lot in interviews — it proves the whole pipeline works.
-- Target ≥ 70% line coverage on the `detector/`, `alert/`, and `processing/` packages. Don't chase coverage on config classes or DTOs.
-
-## Build Order
-
-### Phase 1: Foundation (~2.5 hours)
-Maven project, Spring Boot skeleton, Docker + LocalStack (**pinned to `localstack/localstack:3.8`** — do not use `:latest`, it requires an auth token as of March 2026), `AwsConfig` + `DynamoConfig`, `BootstrapRunner` that creates all tables/queues/buckets on startup, `/actuator/health` green, JSON logging wired up. Verify with `aws --endpoint-url=http://localhost:4566 dynamodb list-tables` before moving on.
-
-### Phase 2: Market + Price Polling (~2 hours)
-Verify Polymarket endpoints with one live call first. `MarketPoller` writes markets, `PricePoller` writes `price_snapshots` every 60s with no-change dedupe. Let it run 10 minutes and confirm history accumulates.
-
-### Phase 3: Alert Service + Price Movement Detector (~2 hours)
-`AlertIdFactory` with unit tests first, then `AlertService` (idempotent writes), then `PriceMovementDetector` with thorough unit tests, then wire it into the scheduler and confirm it writes alerts and enqueues SQS messages.
-
-### Phase 4: Notification Consumer + First End-to-End (~1 hour)
-`NotificationConsumer` polling `alerts-to-notify`, posting to ntfy.sh. Install the ntfy app on your phone, subscribe, manually enqueue a test alert, confirm the notification arrives. **Do not move on until you have received a real notification on a real phone.**
-
-### Phase 5: Statistical Anomaly Detector (~1.5 hours)
-Rolling z-score implementation with heavy unit tests on synthetic series. Wire into scheduler. Tune so it does not spam on low-liquidity markets.
-
-### Phase 6: Wallet Tracking + Consensus Detector (~2.5 hours)
-Verify Polymarket data-api wallet endpoints first. `WalletPoller`, `WalletActivityDetector`, `ConsensusDetector` using the GSI. Unit tests for consensus logic with fake trades.
-
-### Phase 7: News Ingestion + Correlation (~2 hours)
-`RssPoller` with Rome, `KeywordExtractor`, `NewsMatcher`, `NewsConsumer` as an SQS listener, `NewsCorrelationDetector`.
-
-### Phase 8: Dashboard (~2 hours)
-Single `index.html`, three sections, auto-refresh, Chart.js mini charts, ntfy topic copy button.
-
-### Phase 9: DLQs, Metrics, Resilience4j Polish (~1.5 hours)
-Confirm every queue has a DLQ wired up. Confirm custom Micrometer metrics appear at `/actuator/prometheus`. Confirm Resilience4j wraps every outbound call and the circuit breaker actually opens when you point the app at a dead endpoint.
-
-### Phase 10: Testcontainers Integration Test + CI (~1.5 hours)
-One end-to-end integration test that exercises the whole price-movement pipeline through real LocalStack. GitHub Actions workflow running `mvn verify`. Green badge in the README.
-
-### Phase 11: README + DESIGN.md (~1.5 hours)
-See sections below. These documents are not an afterthought — they are the primary thing a reviewer will read before looking at code.
+- **Unit tests** for every detector. Statistical detector: synthetic series (flat, linear, noisy, spike, gradual drift, insufficient history, high-vol market, low-volume market).
+- **Unit tests** for `AlertIdFactory` (determinism, no collisions, bucket internals).
+- **Unit tests** for `SnapshotArchiver`: empty day, multi-market day, S3 key format assertion.
+- **Unit tests** for `AlertOutcomeEvaluator`: correct direction, wrong direction, dead-zone flat (excluded from precision), missing snapshot (graceful skip), idempotent re-run.
+- **Unit tests** for `ResolutionSweeper`: up-alert on a YES-resolved market (correct), down-alert on the same market (incorrect).
+- **Unit tests** for `KeywordExtractor`, `NewsMatcher`, `ConsensusDetector`.
+- **Integration test** using Testcontainers LocalStack: spin up LocalStack, create tables/queues, insert fake price snapshots with a 10% move, run PriceMovementDetector, assert:
+  1. Exactly one row in `alerts`
+  2. Exactly one message in `alerts-to-notify`
+  3. Re-running the detector produces no new rows (idempotency)
+  4. After seeding a T+15min snapshot, running `AlertOutcomeEvaluator` produces one row in `alert_outcomes` with `wasCorrect = true` (closes the loop in one test)
+- **Mutation proof**: comment out `alertService.create(...)` in the detector, re-run the integration test, show it fails red. Revert. Show green. Proves the test actually catches regressions.
+- Target ≥ 70% line coverage on `detector/`, `alert/`, `backtest/`, `processing/`.
 
 ## README Must Include
 
-- One-paragraph pitch framed as **"a real-time event-processing and anomaly-detection system"**, not as a "prediction market tool". Lead with the engineering, not the domain.
-- **"Monitoring only, not a trading bot"** disclaimer in the first 10 lines.
+- One-paragraph pitch framed as "a real-time event-processing and anomaly-detection system with measured signal quality".
+- "Monitoring only, not a trading bot" disclaimer in the first 10 lines.
 - CI status badge.
-- Architecture ASCII diagram showing pollers → DynamoDB → detectors → SQS → consumers → (DynamoDB writes + ntfy.sh).
+- **Live demo URL** (or screenshot if spun down).
+- **Signal quality panel screenshot** with real numbers from the live deployment.
+- Architecture ASCII diagram: pollers → DynamoDB → detectors → SQS → consumers → (DynamoDB + ntfy.sh), with the backtest loop (snapshots + alerts → evaluator → outcomes → performance API).
 - Feature list.
-- AWS services table: every table, queue, and bucket, with a one-line justification for each. Include "why DynamoDB over RDS" and "why SQS over in-process queues" in one-sentence form, pointing to `DESIGN.md` for the long version.
-- Setup: `docker-compose up --build`, open `http://localhost:8000`.
-- ntfy.sh phone setup instructions.
-- Configuring watched wallets.
-- Tuning alert thresholds via `application.yml`.
-- **"Running on Real AWS"** section pointing to `deployment/aws-setup.md`.
-- Limitations section: monitoring only; keyword matching misses semantic matches; statistical detector needs more history on low-volume markets; consensus signal needs per-category tuning.
-- Future work: embedding-based news matching, Kalshi integration, orderbook depth analysis, rewriting the detector pipeline as AWS Lambda functions behind EventBridge.
+- AWS services table: every table/queue/bucket with a one-line justification. Include "why DynamoDB over RDS" and "why SQS over in-process queues" in one-sentence form.
+- Setup: `docker-compose up --build`, open `http://localhost:8080`.
+- ntfy.sh phone setup.
+- Configuring watched wallets and tuning thresholds.
+- **"Running on Real AWS"** section pointing to `deployment/aws-setup.md`, with actual monthly cost.
+- **CloudWatch alarms screenshots** (4 panels).
+- Limitations: monitoring only; keyword matching misses semantic matches; stat detector needs more history on low-volume markets; consensus needs per-category tuning; signal quality is measured over a small sample on new deployments.
+- Future work: embedding-based news matching, Kalshi integration, orderbook depth time-series, rewriting the detector pipeline as AWS Lambda + EventBridge.
 
 ## DESIGN.md Must Include
 
-This is the document that turns this project into interview fuel. Treat it as a mini system-design doc.
-
 1. **Problem framing** — one paragraph.
-2. **Data model** — why each DynamoDB table exists, what access patterns it serves, why the partition and sort keys are what they are, why the GSIs are what they are. Be explicit about access patterns in a table.
-3. **Write path** — trace a single price poll from HTTP response → `PricePoller` → dedupe check → DynamoDB write → detector trigger → alert write → SQS enqueue → ntfy.sh POST. One paragraph per hop.
-4. **Idempotency** — explain the deterministic alert ID scheme with a worked example showing how two runs of the same detector on the same window produce the same ID and only one row lands in DynamoDB.
-5. **Failure modes and what happens** — Polymarket down, ntfy.sh down, DynamoDB throttles, SQS redelivery, worker crash mid-consume, DLQ behavior. For each: what the system does, what the user sees, how to recover.
-6. **Why DynamoDB over RDS** — access patterns, TTL, scaling story, tradeoffs (no joins, GSI eventual consistency, item size limits).
-7. **Why SQS over in-process queues** — crash isolation between producer and consumer, natural retry/DLQ, operational visibility via queue depth metrics.
-8. **Why not Kafka** — operational overhead, single-writer-per-partition semantics not needed, SQS is strictly simpler for this scale.
-9. **Scaling story** — what would change if this went from 200 markets to 20,000 and from 10 watched wallets to 10,000. What bottlenecks first (hint: Polymarket's rate limits, then price_snapshots write throughput). What you would do about each.
-10. **What I would do differently on AWS proper** — Lambda + EventBridge for the detectors, CloudWatch alarms on the DLQ depth metrics, X-Ray for tracing, Secrets Manager for the ntfy topic.
+2. **Data model** — per-table access patterns, key choices, GSI justifications.
+3. **Write path** — trace a price poll from HTTP response → PricePoller → dedupe → DynamoDB → detector → alert → SQS → ntfy, one paragraph per hop.
+4. **Idempotency** — deterministic alert ID scheme with a worked example (the Phase 3 composite-key bug, the fix, the 3-run proof table with a specific `alertId`).
+5. **Signal quality story** — the Phase 4.5 tail-zone noise example (0.0045 → 0.0055), the delta-p floor fix, before/after alert counts. Demonstrates product judgment, not just engineering.
+6. **Failure modes** — Polymarket down, ntfy down, DynamoDB throttles, SQS redelivery, worker crash mid-consume, DLQ behavior. For each: what the system does, what the user sees, how to recover.
+7. **Why DynamoDB over RDS** — access patterns, TTL, scaling, tradeoffs (no joins, GSI eventual consistency, item size).
+8. **Why SQS over in-process queues** — crash isolation, retry/DLQ, queue depth metrics.
+9. **Why not Kafka** — operational overhead, SQS is simpler at this scale.
+10. **Scaling story** — 200 → 20,000 markets and 10 → 10,000 wallets. Bottlenecks in order: Polymarket rate limits, then price_snapshots write throughput, then detector fan-out. What to do about each.
+11. **What I would do differently on AWS proper** — Lambda + EventBridge for detectors, X-Ray tracing, Secrets Manager, CloudWatch alarm thresholds tuned by signal-quality data.
+12. **Signal Quality Methodology** (v2) — what precision means here, why it's not accuracy, the 0.5pp dead zone rationale, horizon-based vs resolution-based evaluation, known biases (survivor, lookback, clustering), current measured numbers with sample sizes.
+13. **Operational Runbook** (v2) — for each of the 3 chaos experiments, a paragraph describing what was done, what the system did, and which alarm fired. Cross-reference to `deployment/chaos/`.
 
-Aim for 1,500–2,500 words. This is the document you will actually reread before your Amazon loop.
+Aim for 1,800–3,000 words. This is the document you will reread before your Amazon loop.
 
 ## Critical Implementation Notes
 
-- **Verify Polymarket endpoints with live test requests at the start of phases 2 and 6.** Do not trust the URLs in this spec blindly.
-- **No trading code, no signing libraries, no wallet write access.** This is a read-only public-data tool. Call this out explicitly in the README.
-- **Every outbound HTTP call goes through Resilience4j.** No naked `WebClient` calls in pollers.
-- **Structured JSON logging only.** Every log line has a `correlationId`, and that ID flows from poll → detector → alert → notification so you can grep one event through the whole pipeline.
-- **`.gitignore`** excludes `.env`, `target/`, `.idea/`, `*.iml`, `localstack_data/`, and anything secret.
-- **Commit in clean, reviewable chunks per phase.** The git log itself is a portfolio artifact.
+- **Verify Polymarket endpoints with live test requests at Phases 2 and 6.** Do not trust URLs blindly.
+- **No trading code, no signing libraries, no wallet write access.**
+- **Every outbound HTTP call through Resilience4j.** No naked WebClient calls.
+- **Structured JSON logging only.** Every log line has a `correlationId` flowing poll → detector → alert → notification.
+- **.gitignore** excludes `.env`, `target/`, `.idea/`, `*.iml`, `localstack_data/`, deployment secrets.
+- **Commit in clean reviewable chunks per phase.** The git log is a portfolio artifact.
 
 ## Non-Goals (explicit)
 
 - No trading, ever.
-- No embedding-based news matching in v2 (keyword matching only — the statistical anomaly detector is the "smart" layer for v2).
-- No user accounts, no multi-tenant support, no auth on the API (it runs locally or behind a VPN).
-- No frontend framework. The dashboard is one HTML file. Fighting webpack is not the point of this project.
+- No embedding-based news matching in v2. Keyword matching is v2's news layer; the statistical anomaly detector and the **backtest-measured signal quality scoring** are the "smart" layers for v2. Embeddings are v3.
+- No user accounts, no auth on the API.
+- No frontend framework. One HTML file.
 
-Build it incrementally. Verify each phase before moving on. Do not skip the Testcontainers integration test in phase 10 — it is the single most valuable test in the project.
+## v2 Changelog (from v1)
+
+- **Added Signal Quality & Backtesting subsystem.** New table `alert_outcomes`, new components `SnapshotArchiver`, `AlertOutcomeEvaluator`, `ResolutionSweeper`, `SignalPerformanceService`. New endpoint `/api/signals/performance`. New dashboard panel. New phase: 7.5.
+- **Real AWS deployment is now mandatory**, not optional. New phase: 12. New `deployment/` scripts, alarms, chaos proofs.
+- **Extended `price_snapshots` TTL** from 7 days to 30 days to support 24h look-ahead backtesting from hot storage.
+- **Added orderbook depth capture** at alert fire: `spreadBps` and `depthAtMid` attached to alert metadata. Attributed by the backtest.
+- **Added `alert_outcomes` table** with GSI `type-firedAt-index`.
+- **Added signal quality metrics** to the Micrometer set.
+- **Added `CustomMetrics` + CloudWatch EMF registry** under the `aws` profile.
+- **Updated DESIGN.md requirements** with Signal Quality Methodology and Operational Runbook sections.
+
+Build incrementally. Verify each phase before moving on. Do not skip the Testcontainers integration test in Phase 10 or the chaos proofs in Phase 12.
