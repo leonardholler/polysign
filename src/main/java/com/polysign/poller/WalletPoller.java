@@ -23,14 +23,16 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import software.amazon.awssdk.enhanced.dynamodb.DynamoDbIndex;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
-import software.amazon.awssdk.enhanced.dynamodb.Expression;
-import software.amazon.awssdk.enhanced.dynamodb.model.ScanEnhancedRequest;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.enhanced.dynamodb.Key;
+import software.amazon.awssdk.enhanced.dynamodb.model.Page;
+import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,9 +46,8 @@ import java.util.function.Supplier;
  * The Data API identifies markets by hex {@code conditionId}; our {@code markets}
  * table uses the Gamma numeric {@code marketId}. At startup, {@link #buildCache()}
  * scans all markets and builds an in-memory {@code conditionId → marketId} map.
- * On a cache miss at poll time, a single DynamoDB scan with a FilterExpression is
- * attempted (handles markets added since startup). If the DynamoDB scan also misses,
- * the trade is logged at WARN and skipped — Phase 9 owns retry semantics.
+ * On a cache miss at poll time, the {@code conditionId-index} GSI is queried (O(1)).
+ * If the GSI also misses, the trade is logged at WARN and skipped — Phase 9 owns retry semantics.
  *
  * <h3>Idempotency</h3>
  * {@code wallet_trades} PK=address, SK=txHash. PutItem overwrites on the same
@@ -116,14 +117,23 @@ public class WalletPoller {
      */
     @PostConstruct
     void buildCache() {
-        int count = 0;
-        for (Market m : marketsTable.scan().items()) {
-            if (m.getConditionId() != null && m.getMarketId() != null) {
-                conditionToMarketId.put(m.getConditionId(), m.getMarketId());
-                count++;
+        // Runs before ApplicationRunner beans (BootstrapRunner), so the markets table
+        // may not exist yet on a fresh LocalStack or first-ever deployment. Treat a
+        // missing table as an empty cache — the on-miss GSI query path handles all
+        // lookups at runtime until MarketPoller populates the table.
+        try {
+            int count = 0;
+            for (Market m : marketsTable.scan().items()) {
+                if (m.getConditionId() != null && m.getMarketId() != null) {
+                    conditionToMarketId.put(m.getConditionId(), m.getMarketId());
+                    count++;
+                }
             }
+            log.info("wallet_poller_cache_built conditionMappings={}", count);
+        } catch (Exception e) {
+            log.warn("wallet_poller_cache_build_failed error={} — starting with empty cache",
+                    e.getMessage());
         }
-        log.info("wallet_poller_cache_built conditionMappings={}", count);
     }
 
     @Scheduled(fixedDelayString   = "${polysign.pollers.wallet.interval-ms:60000}",
@@ -256,8 +266,8 @@ public class WalletPoller {
      *
      * <ol>
      *   <li>Cache hit — return immediately.</li>
-     *   <li>Cache miss — scan markets table with FilterExpression for this conditionId,
-     *       populate cache, return the match.</li>
+     *   <li>Cache miss — query {@code conditionId-index} GSI (O(1)); populate cache;
+     *       return the match.</li>
      *   <li>DynamoDB miss — log at WARN and return null (caller skips the trade).</li>
      * </ol>
      */
@@ -268,29 +278,26 @@ public class WalletPoller {
         String marketId = conditionToMarketId.get(conditionId);
         if (marketId != null) return marketId;
 
-        // 2. DynamoDB scan with filter
-        try {
-            Expression filter = Expression.builder()
-                    .expression("conditionId = :cid")
-                    .putExpressionValue(":cid", AttributeValue.fromS(conditionId))
-                    .build();
-
-            Market found = marketsTable.scan(ScanEnhancedRequest.builder()
-                            .filterExpression(filter)
-                            .build())
-                    .items()
-                    .stream()
-                    .findFirst()
-                    .orElse(null);
-
-            if (found != null) {
-                conditionToMarketId.put(conditionId, found.getMarketId());
-                log.debug("wallet_market_resolved_via_dynamo conditionId={} marketId={}",
-                        conditionId, found.getMarketId());
-                return found.getMarketId();
+        // 2. GSI query on conditionId-index — O(1) unlike the prior Scan approach.
+        //    Guard: null/blank conditionId has no GSI entry; skip straight to WARN.
+        if (conditionId != null && !conditionId.isBlank()) {
+            try {
+                DynamoDbIndex<Market> idx = marketsTable.index("conditionId-index");
+                Iterator<Page<Market>> pages = idx.query(QueryConditional.keyEqualTo(
+                        Key.builder().partitionValue(conditionId).build())).iterator();
+                if (pages.hasNext()) {
+                    List<Market> items = pages.next().items();
+                    if (!items.isEmpty()) {
+                        String resolved = items.get(0).getMarketId();
+                        conditionToMarketId.put(conditionId, resolved);
+                        log.debug("wallet_market_resolved_via_dynamo conditionId={} marketId={}",
+                                conditionId, resolved);
+                        return resolved;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("wallet_market_lookup_failed conditionId={} error={}", conditionId, e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("wallet_market_lookup_failed conditionId={} error={}", conditionId, e.getMessage());
         }
 
         // 3. Not found — log structured WARN for Phase 7.5 audit, skip the trade.

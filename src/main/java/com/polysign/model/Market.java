@@ -56,6 +56,7 @@ public class Market {
     public Boolean      getIsWatched()     { return isWatched;     }
     public String       getYesTokenId()    { return yesTokenId;    }
     public String       getClobTokenIds()  { return clobTokenIds;  }
+    @DynamoDbSecondaryPartitionKey(indexNames = "conditionId-index")
     public String       getConditionId()   { return conditionId;   }
 
     // ── Setters ───────────────────────────────────────────────────────────────

@@ -70,15 +70,27 @@ public class BootstrapRunner implements ApplicationRunner {
         createTable(
             "markets",
             List.of(
-                attr("marketId",  ScalarAttributeType.S),
-                attr("category",  ScalarAttributeType.S),
-                attr("updatedAt", ScalarAttributeType.S)
+                attr("marketId",    ScalarAttributeType.S),
+                attr("category",    ScalarAttributeType.S),
+                attr("updatedAt",   ScalarAttributeType.S),
+                attr("conditionId", ScalarAttributeType.S)
             ),
             List.of(key("marketId", KeyType.HASH)),
             List.of(
                 gsi("category-updatedAt-index",
                     key("category",  KeyType.HASH),
-                    key("updatedAt", KeyType.RANGE))
+                    key("updatedAt", KeyType.RANGE)),
+                // KEYS_ONLY projection: WalletPoller only needs marketId from
+                // the conditionId lookup, and marketId is automatically included
+                // as the base table PK. Full projection would double storage
+                // cost for zero benefit. Inlined rather than using gsi() helper
+                // because the helper uses ProjectionType.ALL, which is correct
+                // for the other three GSIs but wrong for this one.
+                GlobalSecondaryIndex.builder()
+                    .indexName("conditionId-index")
+                    .keySchema(key("conditionId", KeyType.HASH))
+                    .projection(Projection.builder().projectionType(ProjectionType.KEYS_ONLY).build())
+                    .build()
             )
         );
 
