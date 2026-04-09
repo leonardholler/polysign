@@ -62,3 +62,54 @@ polysign:
     max-receive-count: 5
   s3:
     archives-bucket: polysign-archives
+
+  pollers:
+    market:
+      interval-ms: 60000
+      initial-delay-ms: 5000
+    price:
+      interval-ms: 60000
+      initial-delay-ms: 30000
+
+# ── Resilience4j ─────────────────────────────────────────────────────────────
+resilience4j:
+  circuitbreaker:
+    instances:
+      polymarket-gamma:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+      polymarket-clob:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+  retry:
+    instances:
+      polymarket-gamma:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 10s
+      polymarket-clob:
+        max-attempts: 3
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 8s
+
+  ratelimiter:
+    instances:
+      polymarket-clob:
+        limit-for-period: 10
+        limit-refresh-period: 1s
+        timeout-duration: 5s
