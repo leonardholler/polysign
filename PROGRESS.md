@@ -589,6 +589,7 @@ Date: 2026-04-09
 ## Phase 5 — Statistical Anomaly Detector + Orderbook Depth Capture
 Status: complete
 Date: 2026-04-09
+Commit: a9a0f47
 
 ### What was built
 
@@ -650,12 +651,13 @@ Date: 2026-04-09
 - src/main/resources/application.yml (statistical detector config additions)
 
 ### Verification
-- `mvn test` → 54 tests, 0 failures:
+- `mvn test` → 59 tests, 0 failures (final count after orderbook fix + detectedAt):
     - StatisticalAnomalyDetectorTest: 15 (12 detector + 3 orderbook)
     - PriceMovementDetectorTest: 16 (13 detector + 3 orderbook)
     - OrderbookServiceTest: 4
     - AlertIdFactoryTest: 12
     - NotificationConsumerTest: 7
+    - (additional tests for orderbook fix and detectedAt — see Post-commit fixes below)
 - `docker compose up -d --build` → both containers healthy
 - Live verification against real Polymarket data (~8 minutes):
     - Statistical anomaly detector running: `checked=502 fired=0` per cycle
@@ -686,17 +688,45 @@ Date: 2026-04-09
    one shot — retries don't fit within 500ms. Used circuit breaker + rate limiter
    (from the existing `polymarket-clob` Resilience4j instances) but no retry.
 
+### Post-commit fixes (both landed in commit a9a0f47)
+
+**Fix 1 — OrderbookService worst-quote bug**
+- **Bug**: `parseBook()` used `getFirst()` on bids and asks. Polymarket returns bids
+  ascending (worst → best) and asks descending (worst → best), so `getFirst()` grabbed
+  the worst bid and worst ask on each side — producing an inflated spread and incorrect
+  depth computation.
+- **Fix**: replaced with `selectBestBid` (stream max by price) and `selectBestAsk`
+  (stream min by price).
+- **Data quality note**: All Phase 5 alerts written before this fix have unreliable
+  `spreadBps` and `depthAtMid` values. **Phase 7.5 backtesting must exclude or
+  recompute orderbook fields for alerts written prior to this fix.** The fix timestamp
+  can be approximated from the commit date (2026-04-09). Filter `alert_outcomes` on
+  `firedAt >= fix_timestamp` for reliable book attribution.
+
+**Fix 2 — `detectedAt` added to alert metadata**
+- `createdAt` remains the 30-min bucketed idempotency key (required for the DynamoDB
+  `attribute_not_exists(alertId)` write guarantee — changing this would break dedupe).
+- `detectedAt` is the raw `clock.now()` instant captured once at the start of each
+  `checkMarket()` call and passed into the metadata map. Both
+  `PriceMovementDetector` and `StatisticalAnomalyDetector` share the same clock call
+  to avoid bucket-boundary flakiness where a single detection straddles two minutes.
+- Use `detectedAt` for forensics (latency measurement, alert lag analysis). Use
+  `createdAt` for deduplication and DynamoDB key operations only.
+
 ### Notes for next phase
-- Phase 6: Wallet Tracking + Consensus Detector.
-  **CLOB `/trades` endpoint returns 401** (noted in Phase 2). Phase 6 must use
-  Polygon RPC fallback or Polymarket Data API — verify before writing code.
+- **Phase 6: Wallet Tracking + Consensus Detector.**
+- **BLOCKER**: Polymarket CLOB `/trades` returns HTTP 401 (requires API key auth).
+  `https://data-api.polymarket.com/trades?user=` must be verified live before writing
+  any Phase 6 code. If that also fails, fall back to Polygon RPC
+  (`https://polygon-rpc.com`). Do not write wallet polling logic until one of these
+  endpoints is confirmed working.
 - The statistical anomaly detector needs ~20 minutes of price history before it
   starts evaluating markets. On a fresh container start, the first ~20 cycles
   will report `fired=0` — this is normal, not a bug.
 - Orderbook `spreadBps` values are high (19960 bps = 200% spread) on some markets
   — this reflects genuinely illiquid books on Polymarket, not a computation error.
   The data is valuable for Phase 7.5 backtesting to correlate signal quality with
-  book quality.
+  book quality (but see the fix-1 data quality note above).
 - The `polysign.detectors.statistical.initial-delay-ms: 70000` puts the stat
   detector 5 seconds after the price movement detector (65s). Both share the
   same `@Scheduled` thread pool (6 threads).
