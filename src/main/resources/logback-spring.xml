@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JSON structured logging via logstash-logback-encoder.
+  Every log line is a JSON object so logs are parseable by CloudWatch Logs Insights,
+  Datadog, and any other log aggregator.
+
+  MDC keys carried on every line:
+    correlationId  — set by CorrelationId.set() at the start of each poll/job cycle
+    app            — spring.application.name
+-->
+<configuration>
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="polysign"/>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Always include correlationId from MDC even when null -->
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+            <customFields>{"app":"${appName}"}</customFields>
+            <!-- Shorten the logger name to keep lines readable -->
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- Application code: DEBUG in local profile (overridden per-profile in application-*.yml) -->
+    <logger name="com.polysign" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <!-- Suppress noisy AWS SDK INFO logs in production -->
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="reactor.netty" level="WARN"/>
+</configuration>

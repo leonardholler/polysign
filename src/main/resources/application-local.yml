@@ -1,0 +1,17 @@
+# Profile activated when running inside docker-compose (SPRING_PROFILES_ACTIVE=local).
+# For IDE development with LocalStack running separately, override AWS_ENDPOINT_URL:
+#   export AWS_ENDPOINT_URL=http://localhost:4566
+spring:
+  config:
+    activate:
+      on-profile: local
+
+aws:
+  # Inside Docker network "localstack" resolves to the LocalStack container.
+  # Outside Docker (IDE dev), override via AWS_ENDPOINT_URL env var.
+  endpoint-override: ${AWS_ENDPOINT_URL:http://localstack:4566}
+
+logging:
+  level:
+    com.polysign: DEBUG
+    software.amazon.awssdk.request: DEBUG

@@ -1,0 +1,12 @@
+[
+  {"address": "0x0000000000000000000000000000000000000001", "alias": "PLACEHOLDER_01", "category": "politics", "notes": "Replace with a top politics trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000002", "alias": "PLACEHOLDER_02", "category": "politics", "notes": "Replace with a top politics trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000003", "alias": "PLACEHOLDER_03", "category": "politics", "notes": "Replace with a top politics trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000004", "alias": "PLACEHOLDER_04", "category": "sports",   "notes": "Replace with a top sports trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000005", "alias": "PLACEHOLDER_05", "category": "sports",   "notes": "Replace with a top sports trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000006", "alias": "PLACEHOLDER_06", "category": "crypto",   "notes": "Replace with a top crypto trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000007", "alias": "PLACEHOLDER_07", "category": "crypto",   "notes": "Replace with a top crypto trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000008", "alias": "PLACEHOLDER_08", "category": "finance",  "notes": "Replace with a top finance trader from https://polymarket.com/leaderboard"},
+  {"address": "0x0000000000000000000000000000000000000009", "alias": "PLACEHOLDER_09", "category": "finance",  "notes": "Replace with a top finance trader from https://polymarket.com/leaderboard"},
+  {"address": "0x000000000000000000000000000000000000000a", "alias": "PLACEHOLDER_10", "category": "other",    "notes": "Replace with a top trader from https://polymarket.com/leaderboard"}
+]

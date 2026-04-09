@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: polysign
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+aws:
+  region: ${AWS_REGION:us-east-1}
+  # endpoint-override is set in application-local.yml for LocalStack
+
+polysign:
+  ntfy:
+    topic: ${NTFY_TOPIC:polysign-leonard-x7k2}
+  detectors:
+    price:
+      threshold-pct: 8.0
+      window-minutes: 15
+      min-volume-usdc: 50000
+    statistical:
+      z-score-threshold: 3.0
+      min-snapshots: 20
+      min-volume-usdc: 50000
+    wallet:
+      min-trade-usdc: 5000
+      consensus-min-wallets: 3
+      consensus-window-minutes: 30
+    news:
+      min-score: 0.5
+      min-volume-usdc: 100000
+  dynamodb:
+    tables:
+      markets: markets
+      price-snapshots: price_snapshots
+      articles: articles
+      market-news-matches: market_news_matches
+      watched-wallets: watched_wallets
+      wallet-trades: wallet_trades
+      alerts: alerts
+  sqs:
+    queues:
+      news-to-process: news-to-process
+      wallet-trades-to-process: wallet-trades-to-process
+      alerts-to-notify: alerts-to-notify
+    dlq:
+      news-to-process: news-to-process-dlq
+      wallet-trades-to-process: wallet-trades-to-process-dlq
+      alerts-to-notify: alerts-to-notify-dlq
+    max-receive-count: 5
+  s3:
+    archives-bucket: polysign-archives

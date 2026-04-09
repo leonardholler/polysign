@@ -1,0 +1,16 @@
+# Profile for deployment on real AWS (SPRING_PROFILES_ACTIVE=aws).
+# No endpoint-override — SDK uses real AWS endpoints.
+# Credentials come from the ECS task role / EC2 instance profile via DefaultCredentialsProvider.
+# See deployment/aws-setup.md for the full deployment guide.
+spring:
+  config:
+    activate:
+      on-profile: aws
+
+aws:
+  region: ${AWS_REGION:us-east-1}
+  # endpoint-override intentionally absent — use real AWS
+
+logging:
+  level:
+    com.polysign: INFO
