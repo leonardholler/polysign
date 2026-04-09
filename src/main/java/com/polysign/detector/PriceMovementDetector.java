@@ -50,6 +50,7 @@ public class PriceMovementDetector {
     private final int windowMinutes;
     private final double minVolumeUsdc;
     private final Duration dedupeWindow;
+    private final double minDeltaP;
 
     public PriceMovementDetector(
             DynamoDbTable<Market> marketsTable,
@@ -59,7 +60,8 @@ public class PriceMovementDetector {
             @Value("${polysign.detectors.price.threshold-pct:8.0}") double thresholdPct,
             @Value("${polysign.detectors.price.window-minutes:15}") int windowMinutes,
             @Value("${polysign.detectors.price.min-volume-usdc:50000}") double minVolumeUsdc,
-            @Value("${polysign.detectors.price.dedupe-window-minutes:30}") int dedupeWindowMinutes) {
+            @Value("${polysign.detectors.price.dedupe-window-minutes:30}") int dedupeWindowMinutes,
+            @Value("${polysign.detectors.price.min-delta-p:0.03}") double minDeltaP) {
         this.marketsTable = marketsTable;
         this.snapshotsTable = snapshotsTable;
         this.alertService = alertService;
@@ -68,6 +70,7 @@ public class PriceMovementDetector {
         this.windowMinutes = windowMinutes;
         this.minVolumeUsdc = minVolumeUsdc;
         this.dedupeWindow = Duration.ofMinutes(dedupeWindowMinutes);
+        this.minDeltaP = minDeltaP;
     }
 
     @Scheduled(fixedDelayString = "${polysign.detectors.price.interval-ms:60000}",
@@ -131,6 +134,19 @@ public class PriceMovementDetector {
 
         double movePct = move.pctChange;
         if (movePct < thresholdPct) {
+            return false;
+        }
+
+        // Minimum absolute probability delta: 0.0045→0.0055 is 22% but only 1bp of implied prob
+        BigDecimal delta = move.toPrice.subtract(move.fromPrice).abs();
+        if (delta.compareTo(BigDecimal.valueOf(minDeltaP)) < 0) {
+            return false;
+        }
+
+        // Extreme-zone filter: tail markets produce huge pct moves from tiny absolute moves
+        double fromD = move.fromPrice.doubleValue();
+        double toD = move.toPrice.doubleValue();
+        if ((fromD < 0.05 && toD < 0.05) || (fromD > 0.95 && toD > 0.95)) {
             return false;
         }
 

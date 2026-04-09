@@ -31,6 +31,7 @@ polysign:
       window-minutes: 15
       min-volume-usdc: 50000
       dedupe-window-minutes: 30
+      min-delta-p: 0.03
       interval-ms: 60000
       initial-delay-ms: 65000
     statistical:

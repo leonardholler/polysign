@@ -539,3 +539,49 @@ Only start Phase 5 after step 5 succeeds.
   algorithm changes.
 - `polysign.detectors.statistical.*` config block is already in application.yml
   (`z-score-threshold: 3.0`, `min-snapshots: 20`, `min-volume-usdc: 50000`).
+
+## Phase 4.5 — PriceMovementDetector tuning
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- Two new signal-quality filters added to `PriceMovementDetector.checkMarket()`, applied
+  AFTER the percentage threshold check and BEFORE the dedupe-bypass decision:
+  1. **Minimum absolute probability delta**: `|toPrice - fromPrice| >= min-delta-p (0.03)`.
+     Blocks alerts like 0.0045 → 0.0055 (22% pct move but only 1 basis point of implied
+     probability change).
+  2. **Extreme-zone filter**: skips the alert if BOTH fromPrice and toPrice are < 0.05
+     OR both are > 0.95. Tail markets routinely produce huge percentage moves from tiny
+     absolute moves and add no trading signal.
+- `minDeltaP` constructor parameter added to `PriceMovementDetector`
+  (`@Value("${polysign.detectors.price.min-delta-p:0.03}")`).
+- `application.yml` — added `min-delta-p: 0.03` under `polysign.detectors.price`.
+- 4 new unit tests in `PriceMovementDetectorTest` (13 total, 0 failures):
+  - `tailZoneTinyDeltaProducesNoAlert` — 0.0045→0.0055: blocked by both filters
+  - `upperTailBothAbove95ProducesNoAlert` — 0.96→0.99: blocked by extreme-zone filter
+  - `meaningfulMidRangeMoveFiresAlert` — 0.45→0.55: passes both filters, alert fires
+  - `justAboveDeltaFloorFiresAlert` — 0.145→0.18: delta=0.035 > floor, alert fires
+
+### Files touched
+- src/main/java/com/polysign/detector/PriceMovementDetector.java
+- src/test/java/com/polysign/detector/PriceMovementDetectorTest.java
+- src/main/resources/application.yml
+
+### Verification
+- `mvn test` → 32 tests, 0 failures (13 PriceMovementDetector + 12 AlertIdFactory + 7 Notification)
+- `docker compose up -d --build` → both containers healthy
+- Alert count before rebuild: **1,913**
+- Alert count after 5 minutes with new filters active: **1,940** (+27 new alerts ≈ 5.4/min)
+- The previous noisy rate (tail-zone markets like 0.004→0.005 firing 22% alerts) is
+  eliminated. Alerts now require both a meaningful percentage move AND a ≥3 pp absolute
+  probability shift outside the tail zones.
+
+### Deviations from spec
+- None. This is an additive tuning pass; no existing behavior was changed.
+
+### Notes for next phase
+- Phase 5: Statistical Anomaly Detector (z-score based).
+  **Do not start Phase 5 until the phone notification smoke test from Phase 4 is confirmed.**
+- `min-delta-p` and the extreme-zone boundaries (0.05 / 0.95) are configurable in
+  `application.yml` if further tuning is needed.
+- The 5.4 alerts/min rate post-filter is a reasonable live signal to watch and tune from.

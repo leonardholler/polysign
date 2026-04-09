@@ -34,6 +34,7 @@ class PriceMovementDetectorTest {
     private static final int WINDOW_MINUTES = 15;
     private static final double MIN_VOLUME = 50_000.0;
     private static final int DEDUPE_WINDOW_MINUTES = 30;
+    private static final double MIN_DELTA_P = 0.03;
 
     private AlertService alertService;
     private PriceMovementDetector detector;
@@ -56,7 +57,8 @@ class PriceMovementDetectorTest {
                 THRESHOLD_PCT,
                 WINDOW_MINUTES,
                 MIN_VOLUME,
-                DEDUPE_WINDOW_MINUTES
+                DEDUPE_WINDOW_MINUTES,
+                MIN_DELTA_P
         );
     }
 
@@ -225,6 +227,57 @@ class PriceMovementDetectorTest {
         verifyAlertCreated(m, snapshots, "warning", false);
     }
 
+
+    // ── Tail zone + tiny delta → no alert ───────────────────────────────────
+
+    @Test
+    void tailZoneTinyDeltaProducesNoAlert() {
+        // 0.0045 → 0.0055: 22% pct move but delta=0.001, both prices < 0.05
+        Market m = market("m1", "100000", false);
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.0045"),
+                snap("m1", NOW,                              "0.0055")
+        );
+
+        verifyNoAlert(m, snapshots);
+    }
+
+    @Test
+    void upperTailBothAbove95ProducesNoAlert() {
+        // 0.96 → 0.99: both prices > 0.95 (upper tail zone)
+        Market m = market("m1", "100000", false);
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.96"),
+                snap("m1", NOW,                              "0.99")
+        );
+
+        verifyNoAlert(m, snapshots);
+    }
+
+    @Test
+    void meaningfulMidRangeMoveFiresAlert() {
+        // 0.45 → 0.55: 22% pct, delta=0.10 — should alert; 22%>=2×8% so bypassDedupe=true
+        Market m = market("m1", "100000", false);
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.45"),
+                snap("m1", NOW,                              "0.55")
+        );
+
+        verifyAlertCreated(m, snapshots, "warning", true);
+    }
+
+    @Test
+    void justAboveDeltaFloorFiresAlert() {
+        // 0.145 → 0.18: 24% pct, delta=0.035 (just above the 0.03 floor); 24%>=2×8% so bypassDedupe=true
+        Market m = market("m1", "100000", false);
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(5)), "0.145"),
+                snap("m1", NOW,                              "0.18")
+        );
+
+        verifyAlertCreated(m, snapshots, "warning", true);
+    }
+
     // ── Helpers for checkMarket with injectable snapshots ─────────────────────
 
     /**
@@ -238,7 +291,7 @@ class PriceMovementDetectorTest {
 
         PriceMovementDetector testDetector = new TestableDetector(
                 spyService, snapshots, THRESHOLD_PCT, WINDOW_MINUTES,
-                MIN_VOLUME, DEDUPE_WINDOW_MINUTES);
+                MIN_VOLUME, DEDUPE_WINDOW_MINUTES, MIN_DELTA_P);
 
         testDetector.checkMarket(market, NOW);
 
@@ -258,7 +311,7 @@ class PriceMovementDetectorTest {
 
         PriceMovementDetector testDetector = new TestableDetector(
                 spyService, snapshots, THRESHOLD_PCT, WINDOW_MINUTES,
-                MIN_VOLUME, DEDUPE_WINDOW_MINUTES);
+                MIN_VOLUME, DEDUPE_WINDOW_MINUTES, MIN_DELTA_P);
 
         boolean result = testDetector.checkMarket(market, NOW);
 
@@ -274,10 +327,11 @@ class PriceMovementDetectorTest {
 
         TestableDetector(AlertService alertService, List<PriceSnapshot> snapshots,
                          double thresholdPct, int windowMinutes,
-                         double minVolumeUsdc, int dedupeWindowMinutes) {
+                         double minVolumeUsdc, int dedupeWindowMinutes,
+                         double minDeltaP) {
             super(null, null, alertService,
                   fixedClock(), thresholdPct, windowMinutes,
-                  minVolumeUsdc, dedupeWindowMinutes);
+                  minVolumeUsdc, dedupeWindowMinutes, minDeltaP);
             this.cannedSnapshots = snapshots;
         }
 
