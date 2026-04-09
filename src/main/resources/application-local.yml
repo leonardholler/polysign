@@ -10,6 +10,10 @@ aws:
   # Inside Docker network "localstack" resolves to the LocalStack container.
   # Outside Docker (IDE dev), override via AWS_ENDPOINT_URL env var.
   endpoint-override: ${AWS_ENDPOINT_URL:http://localstack:4566}
+  # Static credentials for LocalStack (accepts any non-empty value).
+  # Production (application-aws.yml) must NOT set these — IAM roles take over.
+  access-key-id: test
+  secret-access-key: test
 
 logging:
   level:

@@ -845,3 +845,10 @@ regression suite. Phase 7 integration test will cover the end-to-end write → d
   timestamp) is structured for Phase 7.5 audit of the market-miss drop rate.
 - ConsensusDetector fires once per (marketId, 30-min-bucket) via AlertIdFactory dedupe.
   If a market crosses the 3-wallet threshold repeatedly within a bucket, only one alert is created.
+- Integration test uses @MockBean for six scheduler beans to prevent @Scheduled and @PostConstruct
+  from executing during tests. Phase 10 should evaluate a profile-based scheduler disable
+  (@ConditionalOnProperty on @EnableScheduling) if the @MockBean list grows beyond 3-4 beans per
+  test or if Spring context caching becomes a measurable CI bottleneck.
+- Integration tests are gated behind -Dintegration-tests=true. Default `mvn test` runs 65 unit
+  tests (+ 2 skipped). To run the 2 new integration tests: `mvn test -Dintegration-tests=true`
+  with LocalStack up.

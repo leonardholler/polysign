@@ -4,7 +4,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -40,11 +43,28 @@ public class AwsConfig {
     @Value("${aws.endpoint-override:}")
     private String endpointOverride;
 
+    /**
+     * Provides a {@link StaticCredentialsProvider} when {@code aws.access-key-id} and
+     * {@code aws.secret-access-key} are set in the active Spring profile (e.g. the
+     * "local" profile for LocalStack). Falls back to {@link DefaultCredentialsProvider}
+     * for real AWS deployments where credentials come from IAM roles or environment.
+     */
     @Bean
-    public DynamoDbClient dynamoDbClient() {
+    public AwsCredentialsProvider awsCredentialsProvider(
+            @Value("${aws.access-key-id:}") String accessKey,
+            @Value("${aws.secret-access-key:}") String secretKey) {
+        if (!accessKey.isBlank() && !secretKey.isBlank()) {
+            return StaticCredentialsProvider.create(
+                    AwsBasicCredentials.create(accessKey, secretKey));
+        }
+        return DefaultCredentialsProvider.create();
+    }
+
+    @Bean
+    public DynamoDbClient dynamoDbClient(AwsCredentialsProvider awsCredentialsProvider) {
         var builder = DynamoDbClient.builder()
                 .region(Region.of(region))
-                .credentialsProvider(DefaultCredentialsProvider.create());
+                .credentialsProvider(awsCredentialsProvider);
         applyEndpointOverride(builder);
         return builder.build();
     }
@@ -57,19 +77,19 @@ public class AwsConfig {
     }
 
     @Bean
-    public SqsClient sqsClient() {
+    public SqsClient sqsClient(AwsCredentialsProvider awsCredentialsProvider) {
         var builder = SqsClient.builder()
                 .region(Region.of(region))
-                .credentialsProvider(DefaultCredentialsProvider.create());
+                .credentialsProvider(awsCredentialsProvider);
         applyEndpointOverride(builder);
         return builder.build();
     }
 
     @Bean
-    public S3Client s3Client() {
+    public S3Client s3Client(AwsCredentialsProvider awsCredentialsProvider) {
         var builder = S3Client.builder()
                 .region(Region.of(region))
-                .credentialsProvider(DefaultCredentialsProvider.create())
+                .credentialsProvider(awsCredentialsProvider)
                 .forcePathStyle(true);   // required for LocalStack path-style URLs
         applyEndpointOverride(builder);
         return builder.build();
