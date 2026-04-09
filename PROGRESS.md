@@ -453,3 +453,89 @@ not `clock.nowIso()`. Same alertId + same createdAt → same (PK, SK) slot → c
 - SQS queue depth of 10 after the test includes alerts from real markets that also had price
   movements during the test window — only the test-idem-001 alert was verified for idempotency.
 - `polysign.alerts.fired` Prometheus counter is now live at `/actuator/prometheus`.
+
+## Phase 4 — Notification Consumer
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `HttpConfig.java` — added `ntfyClient` WebClient bean (base URL `https://ntfy.sh`,
+  Content-Type `text/plain`; callers wrap all calls with Resilience4j per CONVENTIONS.md)
+- `application.yml` — added Resilience4j `ntfy` circuit breaker (10-call window, 50% failure
+  threshold, 60 s open) and retry (3 attempts, exponential back-off 2s→15s); added
+  `polysign.consumer.notification.poll-interval-ms: 1000`
+- `NotificationConsumer.java` — `@Scheduled(fixedDelay=1s)` SQS long-poll consumer:
+  - Polls `alerts-to-notify` with `maxNumberOfMessages=10`, `waitTimeSeconds=20`
+    (server-side long poll — thread blocks efficiently when queue is empty)
+  - For each message: fetches Alert by alertId via DynamoDB partition-key query,
+    posts to `https://ntfy.sh/{topic}` with Title/Priority/Tags headers,
+    marks `wasNotified=true` via `updateItem`, deletes SQS message
+  - On ntfy failure: message is NOT deleted — visibility timeout requeues it for up to
+    5 retries (maxReceiveCount) before falling into the DLQ
+  - On stale message (alert not found): deletes immediately without posting
+  - ntfy POST wrapped in Resilience4j Retry + CircuitBreaker (`ntfy` instance)
+  - Priority mapping: `critical`→5 (urgent, bypasses DND), `warning`→3, `info`→2
+  - Tags mapping: `price_movement`→📈, `statistical_anomaly`→📊, `consensus`→👥,
+    `news_correlation`→📰, unknown→🔔
+  - `polysign.notifications.sent` Micrometer counter (tagged type+severity)
+  - `alertsQueueUrl` lazily resolved (same pattern as AlertService); package-private
+    so TestableConsumer can pre-set it without stubbing overloaded getQueueUrl
+- `NotificationConsumerTest.java` — 7 tests (all passing):
+  1. Happy path: alert found, ntfy succeeds → message deleted, wasNotified=true
+  2. Alert not found (stale message) → message deleted, ntfy not called
+  3. ntfy fails → message NOT deleted (SQS will redeliver)
+  4. Multiple messages in one batch → each processed independently
+  5. Empty queue → no deletes, no ntfy
+  6. Priority mapping: all severities + null/unknown
+  7. Tags mapping: all types + null/unknown
+
+### Files touched
+- src/main/java/com/polysign/notification/NotificationConsumer.java (new)
+- src/main/java/com/polysign/config/HttpConfig.java (ntfyClient bean added)
+- src/main/resources/application.yml (ntfy R4j config + consumer poll-interval)
+- src/test/java/com/polysign/notification/NotificationConsumerTest.java (new)
+
+### Verification
+- `mvn test` → 28 tests, 0 failures (7 Notification + 12 AlertIdFactory + 9 PriceMovementDetector)
+- `mvn compile` → exit 0
+
+### End-to-end phone verification (manual — required before Phase 5)
+**This step is NOT complete.** The consumer is wired and tested, but you must
+receive a real notification on a real phone before starting Phase 5.
+
+Procedure:
+1. Install the ntfy app on your phone and subscribe to topic `polysign-leonard-x7k2`
+   (or whatever NTFY_TOPIC is set to in your .env).
+2. `docker compose up -d --build` — wait for both containers healthy.
+3. Wait ~65 s for the first `PriceMovementDetector` cycle to fire (it may create alerts
+   if the tracked markets move ≥8%).
+4. If no alerts fire naturally, seed one manually:
+   ```
+   # Put a test alertId on the queue:
+   aws --endpoint-url=http://localhost:4566 sqs send-message \
+     --queue-url http://localhost:4566/000000000000/alerts-to-notify \
+     --message-body <alertId-from-alerts-table>
+   ```
+5. Check the ntfy app on your phone — notification should arrive within 2 s of queueing.
+6. Confirm: `docker logs polysign-polysign-1 | grep notification_sent` shows the event.
+
+Only start Phase 5 after step 5 succeeds.
+
+### Deviations from spec
+1. **`alertsQueueUrl` is package-private (not private)**: Made package-private so the
+   test subclass (`TestableConsumer`) can pre-set it, bypassing the lazy `getQueueUrl`
+   call. The AWS SDK `SqsClient.getQueueUrl` has two overloads (Request + Consumer
+   lambda) which are ambiguous for Mockito stubs. Package-private field avoids stub
+   complexity while keeping production behavior identical.
+2. **`fetchAlert` queries by PK only**: AlertService enqueues only the `alertId` in the
+   SQS message body. Since the alerts table has a composite key (PK=alertId, SK=createdAt),
+   a GetItem would require both keys. We use `QueryConditional.keyEqualTo(PK)` instead,
+   which returns 0 or 1 items (dedupe guarantees at most one Alert per alertId per window).
+
+### Notes for next phase
+- Phase 5: Statistical Anomaly Detector (z-score based).
+  **Start Phase 5 only after the phone notification smoke test above is confirmed.**
+- Same AlertService + AlertIdFactory infrastructure as Phase 3 — only the detection
+  algorithm changes.
+- `polysign.detectors.statistical.*` config block is already in application.yml
+  (`z-score-threshold: 3.0`, `min-snapshots: 20`, `min-volume-usdc: 50000`).
