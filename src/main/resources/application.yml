@@ -38,6 +38,10 @@ polysign:
       z-score-threshold: 3.0
       min-snapshots: 20
       min-volume-usdc: 50000
+      dedupe-window-minutes: 30
+      min-delta-p: 0.03
+      interval-ms: 60000
+      initial-delay-ms: 70000
     wallet:
       min-trade-usdc: 5000
       consensus-min-wallets: 3
