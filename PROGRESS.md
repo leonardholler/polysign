@@ -306,3 +306,65 @@ Structural note: `market_poll_complete` log fields are embedded in the SLF4J mes
 string (e.g. `kept=31247`), not as separate JSON keys. If these need to be parsed
 programmatically by a log aggregator, switch the INFO call to use
 `StructuredArguments.kv()` from logstash-logback-encoder. Not needed for local dev.
+
+## Phase 2.6 (final) — top-N cap by 24h volume
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `application.yml` — final filter thresholds:
+  - `min-volume-usdc: 10000` (quality gate — is this market real?)
+  - `min-volume-24h-usdc: 10000` (quality gate — is it actively trading?)
+  - `min-hours-to-end: 12` (quality gate — not expiring imminently)
+  - `max-markets: 400` (scale gate — of the real/active markets, the 400 most active)
+- `MarketPoller.java` — two-phase pipeline:
+  - **Phase 1 (quality gates)**: quality filters applied per item during pagination,
+    collecting `Candidate` records (raw item + parsed double volumes for sorting)
+  - **Phase 2 (scale gate)**: sort all candidates DESC by volume24h, tiebreak DESC
+    by lifetime volume; take first `max-markets`; record `cutoff_volume24hr`
+    (the water line — volume24h of the 400th market); upsert the capped set
+  - Cap is applied AFTER quality gates so `kept_after_cap == min(passed, 400)`
+  - New inner record `Candidate(raw, volume24h, volumeLifetime)` carries sort keys
+    without re-parsing during the upsert pass
+  - `doUpsert(Map)` extracted as a separate method — only called for the final set
+  - `parseDouble(item, key)` helper returns null on absent/unparseable fields,
+    distinguishing "no data → let through" from "below threshold → filter"
+
+### Files touched
+- src/main/resources/application.yml
+- src/main/java/com/polysign/poller/MarketPoller.java
+
+### Verification — first cycle result
+```
+market_poll_complete of=51677 kept_after_filters=29819 kept_after_cap=400
+    cutoff_volume24hr=61356.11 skip_lifetime=15866 skip_24h=3189 skip_eol=2803
+```
+
+| Metric                   | Value    |
+|--------------------------|----------|
+| Total markets seen       | 51,677   |
+| skip_lifetime (< $10k)   | 15,866   |
+| skip_24h (< $10k/24h)    |  3,189   |
+| skip_eol (< 12h to end)  |  2,803   |
+| kept_after_filters       | 29,819   |
+| **kept_after_cap**       | **400**  |
+| cutoff_volume24hr        | $61,356  |
+
+The 400 most active markets (by 24h volume) all had at least $61k in 24-hour
+volume. The scale gate is deterministic: same input → same 400 markets every cycle.
+
+### Design decision recorded
+Quality gates (lifetime floor, 24h floor, EOL) and scale gate (top-N cap) are
+explicitly separate concerns in both code and config:
+- Quality gates answer "is this market worth tracking at all?"
+- Scale gate answers "of the trackable markets, which are the most active right now?"
+Cap is always applied AFTER floors so the final set is exactly 400 (never inflated
+by markets that pass the cap but would fail a floor).
+
+### Notes for next phase
+- Phase 3 (anomaly detectors) operates on the ~400 markets in DynamoDB.
+- PricePoller now scans ~400 markets per cycle instead of 30k+; CLOB rate-limit
+  budget (10/s) covers the full set in ~40s.
+- `cutoff_volume24hr` in each cycle log shows how the "water line" moves over time
+  — useful for tuning `max-markets` later without reading code.
+- `polysign.markets.tracked` Prometheus gauge reflects the final `kept_after_cap`.
