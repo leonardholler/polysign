@@ -254,3 +254,55 @@ Snapshot count unchanged → dedupe confirmed working at 4 decimal places.
 - The `kept=X of=Y` log in each market poll cycle makes floor tuning straightforward.
 - `price_no_change` is permanently at DEBUG — visible in local dev (application-local.yml
   sets `com.polysign: DEBUG`) but silent in production INFO log level.
+
+## Phase 2.6 — 24h volume and end-of-life filters
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `application.yml` — added two new filter config keys under `polysign.pollers.market`:
+  - `min-volume-24h-usdc: 5000` — 24-hour volume floor
+  - `min-hours-to-end: 6` — end-of-life window
+- `MarketPoller.java` — refactored `upsertMarket()` to return `FilterResult` enum
+  (KEPT | SKIP_NO_ID | SKIP_LIFETIME | SKIP_24H | SKIP_EOL); filter pipeline runs
+  cheapest-first (string parse before DynamoDB read); all three counters aggregated
+  in `pollMarkets()` and emitted in a single INFO line per cycle:
+  `market_poll_complete kept=X of=Y skip_lifetime=A skip_24h=B skip_eol=C`
+
+### Files touched
+- src/main/resources/application.yml
+- src/main/java/com/polysign/poller/MarketPoller.java
+
+### Verification — first cycle result
+```
+market_poll_complete kept=31247 of=51774 skip_lifetime=15844 skip_24h=2836 skip_eol=1847
+```
+
+| Filter                          | Count  | % of total |
+|---------------------------------|--------|------------|
+| Total markets seen              | 51,774 | —          |
+| skip_lifetime (< 10 000 USDC)   | 15,844 | 30.6%      |
+| skip_24h     (< 5 000 USDC/24h) |  2,836 |  5.5%      |
+| skip_eol     (< 6 h to end)     |  1,847 |  3.6%      |
+| **kept**                        | **31,247** | 60.4%  |
+
+### Deviations from spec
+- none
+
+### Notes for next phase
+**Threshold tuning required before starting Phase 3.**
+Target kept range is 100–600 markets for the anomaly detector pipeline.
+Current thresholds keep 31,247 markets — too many for meaningful real-time detection.
+
+Suggested tuning direction (to be confirmed by the user):
+- `min-volume-usdc`: raise from 10 000 to ~100 000 (or higher)
+- `min-volume-24h-usdc`: raise from 5 000 to ~25 000
+- `min-hours-to-end`: raise from 6 to ~24 (eliminates near-expiry noise)
+
+The `market_poll_complete` log line shows all three filter effects — use it to
+evaluate any threshold change without re-reading code.
+
+Structural note: `market_poll_complete` log fields are embedded in the SLF4J message
+string (e.g. `kept=31247`), not as separate JSON keys. If these need to be parsed
+programmatically by a log aggregator, switch the INFO call to use
+`StructuredArguments.kv()` from logstash-logback-encoder. Not needed for local dev.

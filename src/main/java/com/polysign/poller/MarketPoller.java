@@ -23,6 +23,9 @@ import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -30,25 +33,34 @@ import java.util.function.Supplier;
 /**
  * Polls the Polymarket Gamma API for active markets and upserts them into DynamoDB.
  *
- * <p>Key responsibilities:
- * <ul>
- *   <li>Paginate through all active / non-closed markets (200 per page via limit+offset)</li>
- *   <li>Parse JSON-string-encoded list fields: outcomes, clobTokenIds</li>
- *   <li>Pre-extract yesTokenId (clobTokenIds[0]) so PricePoller never re-parses JSON</li>
- *   <li>Classify market category via {@link CategoryClassifier}; log INFO for "other"</li>
- *   <li>Preserve isWatched flag with a read-before-write DynamoDB get</li>
- *   <li>Wrap every Gamma API call in Resilience4j CircuitBreaker + Retry</li>
- *   <li>Per-item catch — one bad market never crashes the scheduler loop</li>
- * </ul>
+ * <p>Pre-upsert filter pipeline (applied in order, cheapest first):
+ * <ol>
+ *   <li>No market ID → skip</li>
+ *   <li>Lifetime volume &lt; {@code min-volume-usdc} (default 10 000) → skip</li>
+ *   <li>24-hour volume &lt; {@code min-volume-24h-usdc} (default 5 000) → skip</li>
+ *   <li>End-date within {@code min-hours-to-end} hours (default 6) → skip</li>
+ * </ol>
+ *
+ * <p>Each cycle emits one INFO summary:
+ * {@code market_poll_complete kept=X of=Y skip_lifetime=A skip_24h=B skip_eol=C}
  */
 @Component
 public class MarketPoller {
 
     private static final Logger log = LoggerFactory.getLogger(MarketPoller.class);
 
-    private static final int    PAGE_LIMIT    = 200;
-    private static final String CB_NAME       = "polymarket-gamma";
+    private static final int    PAGE_LIMIT = 200;
+    private static final String CB_NAME    = "polymarket-gamma";
 
+    // ── Filter decision codes returned by upsertMarket() ─────────────────────
+    private enum FilterResult { KEPT, SKIP_NO_ID, SKIP_LIFETIME, SKIP_24H, SKIP_EOL }
+
+    // ── Configuration ─────────────────────────────────────────────────────────
+    private final double minVolumeUsdc;
+    private final double minVolume24hUsdc;
+    private final long   minHoursToEnd;
+
+    // ── Dependencies ──────────────────────────────────────────────────────────
     private final WebClient             gammaClient;
     private final DynamoDbTable<Market> marketsTable;
     private final AppClock              clock;
@@ -56,7 +68,6 @@ public class MarketPoller {
     private final CircuitBreaker        circuitBreaker;
     private final Retry                 retry;
     private final AtomicLong            trackedCount = new AtomicLong(0);
-    private final double                minVolumeUsdc;
 
     public MarketPoller(
             @Qualifier("gammaApiClient") WebClient gammaClient,
@@ -66,18 +77,22 @@ public class MarketPoller {
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
             MeterRegistry meterRegistry,
-            @Value("${polysign.pollers.market.min-volume-usdc:10000}") double minVolumeUsdc) {
+            @Value("${polysign.pollers.market.min-volume-usdc:10000}")    double minVolumeUsdc,
+            @Value("${polysign.pollers.market.min-volume-24h-usdc:5000}") double minVolume24hUsdc,
+            @Value("${polysign.pollers.market.min-hours-to-end:6}")       long   minHoursToEnd) {
 
-        this.minVolumeUsdc  = minVolumeUsdc;
-        this.gammaClient    = gammaClient;
-        this.marketsTable   = marketsTable;
-        this.clock          = clock;
-        this.mapper         = mapper;
-        this.circuitBreaker = cbRegistry.circuitBreaker(CB_NAME);
-        this.retry          = retryRegistry.retry(CB_NAME);
+        this.minVolumeUsdc    = minVolumeUsdc;
+        this.minVolume24hUsdc = minVolume24hUsdc;
+        this.minHoursToEnd    = minHoursToEnd;
+        this.gammaClient      = gammaClient;
+        this.marketsTable     = marketsTable;
+        this.clock            = clock;
+        this.mapper           = mapper;
+        this.circuitBreaker   = cbRegistry.circuitBreaker(CB_NAME);
+        this.retry            = retryRegistry.retry(CB_NAME);
 
         Gauge.builder("polysign.markets.tracked", trackedCount, AtomicLong::get)
-             .description("Number of active markets processed in the last poll cycle")
+             .description("Number of active markets kept after all filters in the last poll cycle")
              .register(meterRegistry);
     }
 
@@ -89,41 +104,47 @@ public class MarketPoller {
         try (var ignored = CorrelationId.set()) {
             log.info("market_poll_start");
 
-            int total  = 0;
-            int kept   = 0;
-            int offset = 0;
+            int total       = 0;
+            int kept        = 0;
+            int skipLifetime = 0;
+            int skip24h     = 0;
+            int skipEol     = 0;
+            int offset      = 0;
 
             while (true) {
                 final int currentOffset = offset;
                 List<Map<String, Object>> page;
-
                 try {
                     page = fetchPage(currentOffset);
                 } catch (Exception e) {
-                    // Circuit may be open — abort pagination, retry on next scheduled cycle.
                     log.error("market_page_fetch_failed offset={} error={}", currentOffset, e.getMessage(), e);
                     break;
                 }
-
                 if (page.isEmpty()) break;
 
                 for (Map<String, Object> item : page) {
                     total++;
                     try {
-                        if (upsertMarket(item)) kept++;
+                        switch (upsertMarket(item)) {
+                            case KEPT         -> kept++;
+                            case SKIP_LIFETIME -> skipLifetime++;
+                            case SKIP_24H     -> skip24h++;
+                            case SKIP_EOL     -> skipEol++;
+                            case SKIP_NO_ID   -> { /* no-op: malformed item, not worth counting */ }
+                        }
                     } catch (Exception e) {
                         log.warn("market_item_error marketId={} error={}",
                                  item.getOrDefault("id", "unknown"), e.getMessage(), e);
                     }
                 }
 
-                // If we received fewer items than PAGE_LIMIT, this was the last page.
                 if (page.size() < PAGE_LIMIT) break;
                 offset += PAGE_LIMIT;
             }
 
             trackedCount.set(kept);
-            log.info("market_poll_complete kept={} of={}", kept, total);
+            log.info("market_poll_complete kept={} of={} skip_lifetime={} skip_24h={} skip_eol={}",
+                     kept, total, skipLifetime, skip24h, skipEol);
 
         } catch (Exception e) {
             log.error("market_poll_failed error={}", e.getMessage(), e);
@@ -132,10 +153,6 @@ public class MarketPoller {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /**
-     * Fetches one page from the Gamma API, wrapped in CircuitBreaker + Retry.
-     * The inner lambda is a pure supplier — no state captured beyond {@code offset}.
-     */
     private List<Map<String, Object>> fetchPage(int offset) {
         Supplier<List<Map<String, Object>>> call = () -> {
             String body = gammaClient.get()
@@ -148,97 +165,102 @@ public class MarketPoller {
                 .retrieve()
                 .bodyToMono(String.class)
                 .block();
-
             try {
                 return mapper.readValue(body, new TypeReference<>() {});
             } catch (Exception e) {
                 throw new RuntimeException("JSON parse failure for Gamma page offset=" + offset, e);
             }
         };
-
         return Retry.decorateSupplier(retry,
                CircuitBreaker.decorateSupplier(circuitBreaker, call)).get();
     }
 
     /**
-     * Builds a {@link Market} from a raw Gamma API item map and upserts it into DynamoDB.
-     * Preserves the {@code isWatched} flag via read-before-write.
+     * Applies the filter pipeline, then upserts the market if all checks pass.
+     * Filters are evaluated cheapest-first to minimise work for the common reject path.
      *
-     * @return {@code true} if the market was upserted; {@code false} if filtered out
-     *         (no ID, or lifetime volume below {@code minVolumeUsdc} floor).
+     * @return a {@link FilterResult} indicating disposition (never throws)
      */
-    private boolean upsertMarket(Map<String, Object> item) {
+    private FilterResult upsertMarket(Map<String, Object> item) {
         String marketId = stringOrNull(item, "id");
-        if (marketId == null || marketId.isBlank()) {
-            log.debug("market_item_no_id skipped");
-            return false;
+        if (marketId == null || marketId.isBlank()) return FilterResult.SKIP_NO_ID;
+
+        // ── 1. Lifetime volume floor ──────────────────────────────────────────
+        String lifetimeVolumeStr = stringOrNull(item, "volume");
+        if (lifetimeVolumeStr != null) {
+            try {
+                if (Double.parseDouble(lifetimeVolumeStr) < minVolumeUsdc) {
+                    log.debug("market_skip_lifetime marketId={} volume={}", marketId, lifetimeVolumeStr);
+                    return FilterResult.SKIP_LIFETIME;
+                }
+            } catch (NumberFormatException ignored) { /* let through */ }
         }
 
-        // ── Volume floor ──────────────────────────────────────────────────
-        String volumeStr = stringOrNull(item, "volume");
-        if (volumeStr != null) {
+        // ── 2. 24-hour volume floor ───────────────────────────────────────────
+        String volume24hStr = stringOrNull(item, "volume24hr"); // Gamma field name
+        if (volume24hStr != null) {
             try {
-                double volume = Double.parseDouble(volumeStr);
-                if (volume < minVolumeUsdc) {
-                    log.debug("market_below_floor marketId={} volume={}", marketId, volume);
-                    return false;
+                if (Double.parseDouble(volume24hStr) < minVolume24hUsdc) {
+                    log.debug("market_skip_24h marketId={} volume24h={}", marketId, volume24hStr);
+                    return FilterResult.SKIP_24H;
                 }
-            } catch (NumberFormatException ignored) {
-                // unparseable volume — let the market through
+            } catch (NumberFormatException ignored) { /* let through */ }
+        }
+
+        // ── 3. End-of-life filter ─────────────────────────────────────────────
+        String endDateStr = stringOrNull(item, "endDate");
+        if (endDateStr != null) {
+            try {
+                Instant endDate = Instant.parse(endDateStr);
+                Instant cutoff  = clock.now().plus(minHoursToEnd, ChronoUnit.HOURS);
+                if (endDate.isBefore(cutoff)) {
+                    log.debug("market_skip_eol marketId={} endDate={}", marketId, endDateStr);
+                    return FilterResult.SKIP_EOL;
+                }
+            } catch (DateTimeParseException e) {
+                // Non-standard date format — let the market through rather than incorrectly filtering.
+                log.debug("market_end_date_unparseable marketId={} endDate={}", marketId, endDateStr);
             }
         }
 
-        // ── Parse JSON-string-encoded list fields ─────────────────────────────
+        // ── All filters passed: build and persist ─────────────────────────────
         List<String> outcomeList   = parseJsonStringList(item, "outcomes");
         List<String> clobTokenList = parseJsonStringList(item, "clobTokenIds");
-
-        // clobTokenIds[0] = YES token; pre-extracted so PricePoller skips JSON re-parse.
         String yesTokenId = clobTokenList.isEmpty() ? null : clobTokenList.get(0);
 
-        // ── Category classification ───────────────────────────────────────────
         String question  = stringOrNull(item, "question");
         String eventSlug = stringOrNull(item, "slug");
         String category  = CategoryClassifier.classify(question, eventSlug);
-
         if (CategoryClassifier.OTHER.equals(category)) {
             log.info("market_category_other marketId={} question={}", marketId, question);
         }
 
-        // ── Keyword extraction ────────────────────────────────────────────────
         Set<String> keywords = extractKeywords(question);
 
-        // ── Preserve isWatched via read-before-write ──────────────────────────
         Key key = Key.builder().partitionValue(marketId).build();
-        Market existing  = marketsTable.getItem(key);
+        Market existing = marketsTable.getItem(key);
         Boolean isWatched = (existing != null && existing.getIsWatched() != null)
-                            ? existing.getIsWatched()
-                            : Boolean.FALSE;
+                            ? existing.getIsWatched() : Boolean.FALSE;
 
-        // ── Build and persist ─────────────────────────────────────────────────
         Market market = new Market();
         market.setMarketId(marketId);
         market.setQuestion(question);
         market.setCategory(category);
-        market.setEndDate(stringOrNull(item, "endDate"));
-        market.setVolume(stringOrNull(item, "volume"));
-        market.setVolume24h(stringOrNull(item, "volume24hr")); // Gamma field name is volume24hr
+        market.setEndDate(endDateStr);
+        market.setVolume(lifetimeVolumeStr);
+        market.setVolume24h(volume24hStr);
         market.setOutcomes(outcomeList);
         market.setKeywords(keywords);
         market.setIsWatched(isWatched);
         market.setUpdatedAt(clock.nowIso());
         market.setYesTokenId(yesTokenId);
-        market.setClobTokenIds(stringOrNull(item, "clobTokenIds")); // raw JSON string preserved
+        market.setClobTokenIds(stringOrNull(item, "clobTokenIds"));
 
         marketsTable.putItem(market);
-        log.debug("market_upserted marketId={} category={} yesTokenId={}", marketId, category, yesTokenId);
-        return true;
+        log.debug("market_upserted marketId={} category={}", marketId, category);
+        return FilterResult.KEPT;
     }
 
-    /**
-     * Parses a Gamma API field whose JSON value is itself a JSON-encoded array string.
-     * e.g. {@code "outcomes": "[\"Yes\",\"No\"]"}.
-     * Returns an empty (immutable) list if the field is absent, null, or unparseable.
-     */
     private List<String> parseJsonStringList(Map<String, Object> item, String fieldName) {
         Object raw = item.get(fieldName);
         if (raw == null) return List.of();
@@ -257,10 +279,6 @@ public class MarketPoller {
         return v == null ? null : v.toString();
     }
 
-    /**
-     * Tokenises the market question into lowercase, de-stop-worded keywords (length >= 3).
-     * Used for news–market correlation in Phase 5.
-     */
     private static final Set<String> STOP_WORDS = Set.of(
         "a","an","the","and","or","but","in","on","at","to","for","of","with","by",
         "from","is","are","will","would","could","should","who","what","when","where",

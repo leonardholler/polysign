@@ -68,6 +68,8 @@ polysign:
       interval-ms: 60000
       initial-delay-ms: 5000
       min-volume-usdc: 10000
+      min-volume-24h-usdc: 5000
+      min-hours-to-end: 6
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
