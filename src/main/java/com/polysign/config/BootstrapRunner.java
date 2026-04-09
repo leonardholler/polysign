@@ -128,16 +128,21 @@ public class BootstrapRunner implements ApplicationRunner {
         );
 
         // ── wallet_trades ─────────────────────────────────────────────────────
+        // SK is txHash (not timestamp) — natural idempotency key; re-processing
+        // the same on-chain trade from the Data API is a no-op (PutItem overwrite
+        // on the same PK+SK writes identical data). timestamp is a non-key attribute
+        // that serves as the GSI SK for time-range queries in ConsensusDetector.
         createTable(
             "wallet_trades",
             List.of(
                 attr("address",   ScalarAttributeType.S),
-                attr("timestamp", ScalarAttributeType.S),
-                attr("marketId",  ScalarAttributeType.S)
+                attr("txHash",    ScalarAttributeType.S),
+                attr("marketId",  ScalarAttributeType.S),
+                attr("timestamp", ScalarAttributeType.S)
             ),
             List.of(
-                key("address",   KeyType.HASH),
-                key("timestamp", KeyType.RANGE)
+                key("address", KeyType.HASH),
+                key("txHash",  KeyType.RANGE)
             ),
             List.of(
                 gsi("marketId-timestamp-index",

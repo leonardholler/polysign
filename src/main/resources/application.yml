@@ -82,6 +82,9 @@ polysign:
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
+    wallet:
+      interval-ms: 60000
+      initial-delay-ms: 90000
   consumer:
     notification:
       poll-interval-ms: 1000
@@ -100,6 +103,15 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
       polymarket-clob:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+      polymarket-data:
         register-health-indicator: true
         sliding-window-type: COUNT_BASED
         sliding-window-size: 20
@@ -130,6 +142,13 @@ resilience4j:
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2.0
         exponential-max-wait-duration: 8s
+
+      polymarket-data:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 10s
 
       ntfy:
         max-attempts: 3

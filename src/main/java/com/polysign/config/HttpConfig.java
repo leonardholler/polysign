@@ -48,6 +48,21 @@ public class HttpConfig {
     }
 
     /**
+     * Polymarket Data API — fetches per-wallet trade history.
+     * Endpoint used: {@code /trades?user={proxyWallet}&startTime={epochSec}&limit=100}.
+     * The {@code user} parameter is the proxy wallet address (on-chain execution address).
+     * Wrapped in Resilience4j retry + circuit breaker by WalletPoller.
+     */
+    @Bean("dataApiClient")
+    public WebClient dataApiClient() {
+        return WebClient.builder()
+                .baseUrl("https://data-api.polymarket.com")
+                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                .defaultHeader(HttpHeaders.USER_AGENT, "polysign/0.1 (monitoring-bot; not-a-trading-bot)")
+                .build();
+    }
+
+    /**
      * ntfy.sh push notification API — posts plain-text alert payloads.
      * Endpoint used: {@code POST /{topic}} with Title, Priority, Tags headers.
      * Wrapped in Resilience4j retry + circuit breaker by NotificationConsumer.

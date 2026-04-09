@@ -730,3 +730,118 @@ Commit: a9a0f47
 - The `polysign.detectors.statistical.initial-delay-ms: 70000` puts the stat
   detector 5 seconds after the price movement detector (65s). Both share the
   same `@Scheduled` thread pool (6 threads).
+
+---
+
+## Phase 6 — Wallet Tracking + Consensus Detector
+Status: complete
+Date: 2026-04-09
+
+### What was built
+
+**Endpoint verification (pre-code)**
+- `data-api.polymarket.com/trades?user=<proxyWallet>&limit=N` → HTTP 200, returns JSON array.
+  `user` parameter is the **proxy wallet address** (on-chain execution address), not external EOA.
+- `data-api.polymarket.com/positions?user=<proxyWallet>&limit=N` → HTTP 200, returns JSON array.
+- `startTime=<epochSeconds>` filter confirmed working.
+- `conditionId` field present in Gamma API response — Option B (numeric marketId join) confirmed viable.
+
+**Schema decisions**
+- `conditionId` added to `Market` model + `MarketPoller.doUpsert()`. No new Gamma API call —
+  field is already in the market objects we already fetch.
+- `wallet_trades` SK changed from `timestamp` to `txHash` — natural idempotency key. Same trade
+  (same txHash) re-processed from Data API = PutItem overwrite with identical data = safe no-op.
+  `timestamp` becomes a non-key attribute used as the GSI SK for range queries.
+
+**New files**
+- `Market.java` — `conditionId` field added (getter, setter)
+- `MarketPoller.java` — `market.setConditionId(stringOrNull(item, "conditionId"))` in `doUpsert()`
+- `WalletTrade.java` — SK changed to `txHash`; `timestamp` and `slug` added as plain attributes
+- `BootstrapRunner.java` — `wallet_trades` create-table updated: SK=`txHash`, `timestamp`
+  declared as GSI SK attribute
+- `HttpConfig.java` — `dataApiClient` WebClient bean (`https://data-api.polymarket.com`)
+- `WalletBootstrap.java` — `@Order(2)` `ApplicationRunner`; reads `watched_wallets.json`,
+  writes each entry with `attribute_not_exists(address)` — idempotent, never overwrites
+  `lastSyncedAt` set by WalletPoller
+- `WalletPoller.java` — `@PostConstruct buildCache()` scans markets on startup to populate
+  `conditionId→marketId` ConcurrentHashMap; `@Scheduled poll()` (90s initial delay, 60s cycle)
+  iterates watched wallets, fetches trades via Data API (Resilience4j CB + retry), resolves
+  marketId via cache then DynamoDB scan fallback, writes `WalletTrade`, calls detectors per trade
+- `WalletActivityDetector.java` — fires `info` alert of type `wallet_activity` when
+  `sizeUsdc >= minTradeUsdc ($5k)`; alertId = `SHA-256(wallet_activity|marketId|epoch|txHash)`
+- `ConsensusDetector.java` — fires `critical` alert of type `consensus` when ≥ 3 distinct
+  watched wallets trade same market same direction within 30-min window; dedupe via 30-min
+  AlertIdFactory bucket; `@Autowired` annotates primary constructor (dual-constructor pattern
+  for Spring + test subclass)
+- `ConsensusDetectorTest.java` — 6 tests, TDD (written red before implementation):
+  1. 2 wallets same direction → no alert
+  2. 3 wallets same direction within window → alert (type=consensus, severity=critical)
+  3. 3 wallets mixed directions → no alert
+  4. 3 wallets same direction but oldest is outside 30-min window → no alert
+  5. 3 trade records but only 2 distinct addresses → no alert
+  6. 4 wallets same direction → exactly one alert (idempotency via AlertIdFactory bucket)
+- `application.yml` — added `polysign.pollers.wallet.*` config, `polymarket-data` Resilience4j
+  circuit breaker + retry
+- `watched_wallets.json` — updated notes to say "proxy wallet address (on-chain execution
+  address, from polymarket.com/leaderboard)"
+
+### Files touched
+- src/main/java/com/polysign/model/Market.java
+- src/main/java/com/polysign/model/WalletTrade.java
+- src/main/java/com/polysign/config/BootstrapRunner.java
+- src/main/java/com/polysign/config/HttpConfig.java
+- src/main/java/com/polysign/config/WalletBootstrap.java (new)
+- src/main/java/com/polysign/poller/MarketPoller.java
+- src/main/java/com/polysign/poller/WalletPoller.java (new)
+- src/main/java/com/polysign/detector/WalletActivityDetector.java (new)
+- src/main/java/com/polysign/detector/ConsensusDetector.java (new)
+- src/test/java/com/polysign/detector/ConsensusDetectorTest.java (new)
+- src/main/resources/application.yml
+- src/main/resources/watched_wallets.json
+
+### Verification
+- `mvn test` → **65 tests, 0 failures**:
+    - ConsensusDetectorTest: 6 (all 6 spec cases, TDD)
+    - StatisticalAnomalyDetectorTest: 16
+    - PriceMovementDetectorTest: 17
+    - OrderbookServiceTest: 7
+    - AlertIdFactoryTest: 12
+    - NotificationConsumerTest: 7
+- `docker compose up -d --build` → both containers healthy
+- `curl http://localhost:8080/actuator/health` → `{"status":"UP"}`
+- `wallet_trades` schema confirmed: PK=`address`, SK=`txHash`, GSI=`marketId-timestamp-index`
+- `watched_wallets` scan count: 10 (all placeholder entries seeded by `WalletBootstrap`)
+- Log: `wallet_bootstrap_complete seeded=10 skipped=0`
+- Log: `wallet_poller_cache_built conditionMappings=0` (expected — markets table empty at @PostConstruct
+  time; on-cache-miss DynamoDB scan path handles runtime lookups as MarketPoller populates the table)
+
+**Consensus detector live verification (unit-test-only)**
+Direct `awslocal dynamodb put-item` seeding + consensus trigger was not separately performed
+because ConsensusDetector is only invoked from WalletPoller.writeTrade() (not a standalone
+scheduler). The 6 unit tests (including the idempotency case) constitute the consensus
+regression suite. Phase 7 integration test will cover the end-to-end write → detect path.
+
+### Deviations from spec
+1. **wallet_trades SK = txHash (not timestamp)**: Spec says SK=`timestamp`. Changed to `txHash`
+   because multiple on-chain trades from the same wallet in the same Polygon block (same second)
+   would collide on (address, timestamp). txHash is the natural idempotency key per transaction.
+   GSI SK remains `timestamp` (declared as a separate attribute) — range queries for consensus
+   window unaffected.
+2. **WalletActivityDetector alert type `wallet_activity` (not in spec)**: Spec says type
+   `wallet_activity` for the info alert. Implemented as specified.
+3. **@Autowired on primary ConsensusDetector constructor**: Spring requires disambiguation
+   when a class has two constructors. Added `@Autowired` to the production constructor;
+   the package-private test constructor is not annotated, so tests use direct instantiation.
+4. **WalletPoller @PostConstruct cache is empty at startup**: `buildCache()` runs during bean
+   initialization, before MarketPoller's first poll cycle populates the markets table. The cache
+   fills lazily via the on-cache-miss DynamoDB scan path. This is by design — no behavioral change.
+
+### Notes for next phase
+- Phase 7: News Correlation Detector + RSS Polling.
+- With placeholder wallet addresses, WalletPoller polls the Data API and gets [] each cycle
+  (confirmed by live endpoint test). Replace placeholders with real proxy wallet addresses from
+  `polymarket.com/leaderboard` to enable live wallet tracking and see consensus alerts.
+- The `wallet_trade_unknown_market` WARN log (event + conditionId + proxyWallet + txHash + slug +
+  timestamp) is structured for Phase 7.5 audit of the market-miss drop rate.
+- ConsensusDetector fires once per (marketId, 30-min-bucket) via AlertIdFactory dedupe.
+  If a market crosses the 3-wallet threshold repeatedly within a bucket, only one alert is created.

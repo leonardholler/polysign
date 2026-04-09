@@ -32,6 +32,7 @@ public class Market {
     private String  updatedAt;
     private String  yesTokenId;   // clobTokenIds[0] — YES outcome token for CLOB calls
     private String  clobTokenIds; // raw JSON string: "["<yes_id>","<no_id>"]"
+    private String  conditionId;  // Gamma "conditionId" hex hash — matches Data API trade.conditionId
 
     // ── Key / index getters (annotated) ───────────────────────────────────────
 
@@ -55,6 +56,7 @@ public class Market {
     public Boolean      getIsWatched()     { return isWatched;     }
     public String       getYesTokenId()    { return yesTokenId;    }
     public String       getClobTokenIds()  { return clobTokenIds;  }
+    public String       getConditionId()   { return conditionId;   }
 
     // ── Setters ───────────────────────────────────────────────────────────────
 
@@ -70,4 +72,5 @@ public class Market {
     public void setUpdatedAt(String updatedAt)        { this.updatedAt    = updatedAt;    }
     public void setYesTokenId(String yesTokenId)      { this.yesTokenId   = yesTokenId;   }
     public void setClobTokenIds(String clobTokenIds)  { this.clobTokenIds = clobTokenIds; }
+    public void setConditionId(String conditionId)    { this.conditionId  = conditionId;  }
 }

@@ -299,6 +299,7 @@ public class MarketPoller {
         market.setUpdatedAt(clock.nowIso());
         market.setYesTokenId(yesTokenId);
         market.setClobTokenIds(stringOrNull(item, "clobTokenIds"));
+        market.setConditionId(stringOrNull(item, "conditionId"));
 
         marketsTable.putItem(market);
         log.debug("market_upserted marketId={} category={}", marketId, category);
