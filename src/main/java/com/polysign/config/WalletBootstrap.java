@@ -19,16 +19,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Idempotent bootstrap — seeds the {@code watched_wallets} DynamoDB table from
+ * Fallback wallet bootstrap — seeds the {@code watched_wallets} DynamoDB table from
  * {@code watched_wallets.json} on the classpath. Runs once at startup after
- * {@link BootstrapRunner} (Order=1) has created the tables.
+ * {@link WalletDiscovery} (Order=2) has attempted the Polymarket leaderboard API.
  *
- * <p>Uses {@code attribute_not_exists(address)} so that existing rows (with a
- * real {@code lastSyncedAt} set by WalletPoller) are never overwritten. Running
- * this bootstrap repeatedly or restarting the app is safe.
+ * <p>Uses {@code attribute_not_exists(address)} so that existing rows (seeded by
+ * WalletDiscovery or with a real {@code lastSyncedAt} set by WalletPoller) are
+ * never overwritten. Running this bootstrap repeatedly or restarting the app is safe.
  */
 @Component
-@Order(2)
+@Order(3)
 public class WalletBootstrap implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(WalletBootstrap.class);
