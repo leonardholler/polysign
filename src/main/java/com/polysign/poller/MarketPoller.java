@@ -309,6 +309,7 @@ public class MarketPoller {
         market.setUpdatedAt(clock.nowIso());
         market.setYesTokenId(yesTokenId);
         market.setClobTokenIds(stringOrNull(item, "clobTokenIds"));
+        market.setSlug(eventSlug);
         market.setConditionId(stringOrNull(item, "conditionId"));
         // "closed" is present in Gamma API responses but always false here because we filter
         // closed=false. Set it from the response anyway so re-polling a market that closes

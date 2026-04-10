@@ -238,6 +238,7 @@ public class AlertController {
         String question = market != null && market.getQuestion() != null
                 ? truncate(market.getQuestion(), 120)
                 : null;
+        Double score = extractScore(alert);
         return new AlertDto(
                 alert.getAlertId(),
                 alert.getCreatedAt(),
@@ -254,9 +255,19 @@ public class AlertController {
                 question,
                 market != null ? market.getCurrentYesPrice() : null,
                 market != null ? market.getVolume24h() : null,
+                market != null ? market.getSlug() : null,
                 signalStrength,
                 signalStrength >= BADGE_THRESHOLD,
-                metadataHighlight(alert));
+                metadataHighlight(alert),
+                score);
+    }
+
+    private Double extractScore(Alert alert) {
+        if (alert.getMetadata() == null) return null;
+        String s = alert.getMetadata().get("score");
+        if (s == null) return null;
+        try { return Double.parseDouble(s); }
+        catch (NumberFormatException e) { return null; }
     }
 
     private String parseSince(String since, Duration defaultLookback) {

@@ -24,7 +24,7 @@
 <body class="text-gray-100 min-h-screen font-mono">
 
 <!-- ── Header stats bar ─────────────────────────────────────────────────── -->
-<header class="border-b border-gray-800 px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-400 sticky top-0 z-20" style="background:#0a0e17">
+<header class="px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-400 sticky top-0 z-20" style="background:linear-gradient(180deg,#0f1420 0%,#0a0e17 100%);border-bottom:1px solid rgba(59,130,246,0.15)">
   <span class="text-white font-bold text-base mr-2">PolySign</span>
   <span>Markets: <span id="s-markets" class="text-green-400 font-semibold">—</span></span>
   <span>Alerts today: <span id="s-alerts" class="text-yellow-400 font-semibold">—</span></span>
@@ -66,7 +66,7 @@
     <span class="text-gray-600 font-normal normal-case">(signal-strength sorted, refreshed every 10s)</span>
     <span id="alert-badge-legend" class="ml-2 text-yellow-500 text-[10px]">★ = 3+ detector types</span>
   </h2>
-  <div id="alert-feed" class="space-y-1">
+  <div id="alert-feed" class="space-y-1" style="max-height:500px;overflow-y:auto"
     <div class="text-gray-600 text-xs">Loading…</div>
   </div>
 </section>
@@ -212,7 +212,10 @@ async function loadStats() {
     document.getElementById('s-markets').textContent = d.marketsTracked ?? '—';
     document.getElementById('s-alerts').textContent  = d.alertsFiredToday ?? '—';
     document.getElementById('s-wallets').textContent = d.watchedWallets ?? '—';
-    document.getElementById('s-poll').textContent    = d.lastPollTime ? relativeTime(d.lastPollTime) : '—';
+    const pollEl = document.getElementById('s-poll');
+    pollEl.textContent = d.lastPollTime ? relativeTime(d.lastPollTime) : '—';
+    const pollAge = d.lastPollTime ? Math.floor((Date.now() - new Date(d.lastPollTime)) / 1000) : 9999;
+    pollEl.className = pollAge < 120 ? 'font-semibold text-green-400' : 'font-semibold text-red-400';
     document.getElementById('s-topic').textContent   = d.ntfyTopic ?? '—';
   } catch (_) {}
 }
@@ -300,6 +303,9 @@ async function loadAlerts() {
       alerts = alerts.filter(a => a.type === alertTypeFilter);
     }
 
+    // drop low-score news alerts (single-keyword false positives)
+    alerts = alerts.filter(a => (a.score ?? 1) >= 0.6);
+
     // detect new critical alerts
     const currentIds = new Set(alerts.map(a => a.alertId));
     const hasNewCritical = alerts.some(a =>
@@ -310,7 +316,7 @@ async function loadAlerts() {
 
     if (alerts.length === 0) {
       document.getElementById('alert-feed').innerHTML =
-        '<div class="text-gray-600 text-xs">No alerts in the last 60 minutes.</div>';
+        '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-1">◎</div>No alerts in the last 60 minutes</div>';
       return;
     }
 
@@ -320,8 +326,9 @@ async function loadAlerts() {
         ? `<span class="text-xs text-gray-500">S${a.signalStrength}</span>` : '';
       const meta = renderMetaHighlight(a);
       const price = a.currentYesPrice != null ? `<span class="text-gray-500">${(a.currentYesPrice * 100).toFixed(1)}¢</span>` : '';
+      const pmLink = a.marketSlug ? `https://polymarket.com/event/${a.marketSlug}` : 'https://polymarket.com';
       const question = a.marketQuestion
-        ? `<a href="https://www.google.com/search?q=polymarket+${encodeURIComponent(a.marketQuestion)}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${truncate(a.marketQuestion, 80)}</a>` : '';
+        ? `<a href="${pmLink}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${truncate(a.marketQuestion, 80)}</a>` : '';
 
       return `<div class="rounded px-3 py-2 ${severityBg(a.severity)} severity-${a.severity} border-l-2 ${scoreBorderClass(a.score)} ${a.badge ? 'ping-anim' : ''}" data-id="${a.alertId}">
         <div class="flex flex-wrap items-center gap-2">
@@ -363,7 +370,7 @@ async function loadWatchedMarkets() {
 
     if (markets.length === 0) {
       document.getElementById('markets-grid').innerHTML =
-        '<div class="text-gray-600 text-xs col-span-3">No watched markets. Use POST /api/markets/{id}/watch to add one.</div>';
+        '<div class="text-center py-8 text-gray-600 text-xs col-span-3"><div class="text-2xl mb-1">◇</div>No watched markets — POST /api/markets/{id}/watch to add one</div>';
       return;
     }
 
@@ -375,15 +382,15 @@ async function loadWatchedMarkets() {
 
     for (const m of markets) {
       const card = document.createElement('div');
-      card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2';
+      card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2 hover:border-gray-700 transition-colors duration-200';
       card.innerHTML = `
-        <div class="font-semibold text-gray-200 leading-tight">${truncate(m.question || m.marketId, 100)}</div>
+        <div class="font-semibold text-gray-200 leading-tight">${m.slug ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" class="hover:text-blue-400 hover:underline">${truncate(m.question || m.marketId, 100)}</a>` : truncate(m.question || m.marketId, 100)}</div>
         <div class="flex items-center gap-3 text-gray-400">
           <span>Yes: <span class="text-green-400 font-semibold">${m.currentYesPrice != null ? (m.currentYesPrice * 100).toFixed(1) + '¢' : '—'}</span></span>
           <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24h ?? m.volume24Hr)}</span></span>
           <span class="ml-auto text-gray-600">${m.category || ''}</span>
         </div>
-        <canvas id="spark-${m.marketId}" height="50"></canvas>
+        <div style="height:50px;overflow:hidden;position:relative"><canvas id="spark-${m.marketId}"></canvas></div>
       `;
       grid.appendChild(card);
 
@@ -404,7 +411,10 @@ async function loadSparkline(marketId) {
     const canvas = document.getElementById(`spark-${marketId}`);
     if (!canvas) return;
 
-    if (sparkCharts[marketId]) sparkCharts[marketId].destroy();
+    if (sparkCharts[marketId]) {
+      sparkCharts[marketId].destroy();
+      delete sparkCharts[marketId];
+    }
 
     sparkCharts[marketId] = new Chart(canvas, {
       type: 'line',
@@ -443,7 +453,7 @@ async function loadWallets() {
 
     if (wallets.length === 0) {
       document.getElementById('wallet-body').innerHTML =
-        '<tr><td colspan="6" class="text-gray-600 py-2">No watched wallets configured.</td></tr>';
+        '<tr><td colspan="6" class="text-center text-gray-600 py-6"><div class="text-2xl mb-1">◈</div>No watched wallets configured</td></tr>';
       return;
     }
 

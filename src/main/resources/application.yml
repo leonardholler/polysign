@@ -47,7 +47,7 @@ polysign:
       consensus-min-wallets: 3
       consensus-window-minutes: 30
     news:
-      min-score: 0.5
+      min-score: 0.65
       min-volume-usdc: 100000
   dynamodb:
     tables:

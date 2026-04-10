@@ -71,7 +71,7 @@ public class NewsCorrelationDetector {
             AlertService                   alertService,
             NewsMatcher                    newsMatcher,
             AppClock                       clock,
-            @Value("${polysign.detectors.news.min-score:0.5}")        double minScore,
+            @Value("${polysign.detectors.news.min-score:0.65}")       double minScore,
             @Value("${polysign.detectors.news.min-volume-usdc:100000}") double minVolumeUsdc) {
         this.marketsTable  = marketsTable;
         this.matchesTable  = matchesTable;
@@ -107,15 +107,20 @@ public class NewsCorrelationDetector {
         double score = newsMatcher.score(articleKw, marketKw);
         if (score < minScore) return;
 
+        // Matched keywords: intersection — require at least 2 to prevent single-keyword
+        // false positives (e.g. "Iran ceasefire" matching every market that mentions Iran).
+        Set<String> matched = new HashSet<>(articleKw != null ? articleKw : Set.of());
+        if (marketKw != null) matched.retainAll(marketKw);
+        if (matched.size() < 2) {
+            log.debug("event=news_keyword_count_skip marketId={} matched={}", market.getMarketId(), matched.size());
+            return;
+        }
+
         double vol = parseVolume(market);
         if (vol < minVolumeUsdc) {
             log.debug("event=news_volume_skip marketId={} volume24h={}", market.getMarketId(), vol);
             return;
         }
-
-        // Matched keywords: intersection, used for attribution analysis (Phase 7.5).
-        Set<String> matched = new HashSet<>(articleKw != null ? articleKw : Set.of());
-        if (marketKw != null) matched.retainAll(marketKw);
 
         // Write market_news_matches row BEFORE alert (safe to duplicate — same PK/SK overwrites).
         MarketNewsMatch newsMatch = new MarketNewsMatch();

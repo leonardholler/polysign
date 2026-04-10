@@ -38,11 +38,15 @@ public record AlertDto(
         String marketQuestion,
         BigDecimal currentYesPrice,
         String volume24h,
+        String marketSlug,         // Polymarket event slug for direct links
 
         // Signal strength — count of distinct detector types on this market in last 60 min
         int signalStrength,
         boolean badge,             // true when signalStrength >= 3
 
         // Decision 7 — type-specific metadata highlight for the feed row
-        String metadataHighlight
+        String metadataHighlight,
+
+        // news_correlation score (from metadata); null for other alert types
+        Double score
 ) {}
