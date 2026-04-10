@@ -5,6 +5,7 @@ import com.polysign.alert.AlertService;
 import com.polysign.common.AppClock;
 import com.polysign.model.Alert;
 import com.polysign.model.WalletTrade;
+import com.polysign.model.WatchedWallet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,7 +41,8 @@ public class ConsensusDetector {
     private static final Logger log = LoggerFactory.getLogger(ConsensusDetector.class);
     private static final String ALERT_TYPE = "consensus";
 
-    private final DynamoDbTable<WalletTrade> walletTradesTable;
+    private final DynamoDbTable<WalletTrade>   walletTradesTable;
+    private final DynamoDbTable<WatchedWallet> watchedWalletsTable;
     private final AlertService alertService;
     private final AppClock clock;
     private final Duration consensusWindow;
@@ -48,28 +50,31 @@ public class ConsensusDetector {
 
     @Autowired
     public ConsensusDetector(
-            DynamoDbTable<WalletTrade> walletTradesTable,
+            DynamoDbTable<WalletTrade>   walletTradesTable,
+            DynamoDbTable<WatchedWallet> watchedWalletsTable,
             AlertService alertService,
             AppClock clock,
             @Value("${polysign.detectors.wallet.consensus-window-minutes:30}") int consensusWindowMinutes,
             @Value("${polysign.detectors.wallet.consensus-min-wallets:3}") int consensusMinWallets) {
-        this.walletTradesTable  = walletTradesTable;
-        this.alertService       = alertService;
-        this.clock              = clock;
-        this.consensusWindow    = Duration.ofMinutes(consensusWindowMinutes);
+        this.walletTradesTable   = walletTradesTable;
+        this.watchedWalletsTable = watchedWalletsTable;
+        this.alertService        = alertService;
+        this.clock               = clock;
+        this.consensusWindow     = Duration.ofMinutes(consensusWindowMinutes);
         this.consensusMinWallets = consensusMinWallets;
     }
 
-    // Constructor for unit-test injection (Duration instead of int minutes).
+    // Constructor for unit-test injection (Duration instead of int minutes, no watchedWalletsTable).
     ConsensusDetector(DynamoDbTable<WalletTrade> walletTradesTable,
                       AlertService alertService,
                       AppClock clock,
                       Duration consensusWindow,
                       int consensusMinWallets) {
-        this.walletTradesTable  = walletTradesTable;
-        this.alertService       = alertService;
-        this.clock              = clock;
-        this.consensusWindow    = consensusWindow;
+        this.walletTradesTable   = walletTradesTable;
+        this.watchedWalletsTable = null; // not needed in unit tests — alias falls back to address prefix
+        this.alertService        = alertService;
+        this.clock               = clock;
+        this.consensusWindow     = consensusWindow;
         this.consensusMinWallets = consensusMinWallets;
     }
 
@@ -110,12 +115,16 @@ public class ConsensusDetector {
             Set<String> distinctWallets = entry.getValue();
 
             if (distinctWallets.size() >= consensusMinWallets) {
-                // Find the most common outcome (YES/NO) among the agreeing wallets.
-                Map<String, Long> outcomeCounts = inWindow.stream()
+                // Collect the trades for this direction to build per-wallet detail later.
+                List<WalletTrade> consensusTrades = inWindow.stream()
                         .filter(t -> direction.equals(t.getSide())
                                 && t.getAddress() != null
-                                && distinctWallets.contains(t.getAddress().toLowerCase())
-                                && t.getOutcome() != null)
+                                && distinctWallets.contains(t.getAddress().toLowerCase()))
+                        .toList();
+
+                // Find the most common outcome (YES/NO) among the agreeing wallets.
+                Map<String, Long> outcomeCounts = consensusTrades.stream()
+                        .filter(t -> t.getOutcome() != null)
                         .collect(Collectors.groupingBy(WalletTrade::getOutcome, Collectors.counting()));
                 String outcome = outcomeCounts.isEmpty() ? "?"
                         : outcomeCounts.entrySet().stream()
@@ -124,7 +133,7 @@ public class ConsensusDetector {
                                 .orElse("?");
 
                 fireConsensusAlert(marketId, direction, outcome, distinctWallets, slug, now,
-                        triggeringTrade.getPrice());
+                        triggeringTrade.getPrice(), consensusTrades);
                 return; // one alert per call — both directions cannot be checked simultaneously
             }
         }
@@ -132,9 +141,26 @@ public class ConsensusDetector {
 
     private void fireConsensusAlert(String marketId, String direction, String outcome,
                                     Set<String> distinctWallets, String slug, Instant now,
-                                    BigDecimal currentPrice) {
+                                    BigDecimal currentPrice, List<WalletTrade> consensusTrades) {
         String alertId    = AlertIdFactory.generate(ALERT_TYPE, marketId, now, consensusWindow);
         Instant createdAt = AlertIdFactory.bucketedInstant(now, consensusWindow);
+
+        // Per-wallet size sums (one wallet may have multiple trades within the window).
+        Map<String, BigDecimal> sizeByAddress = new HashMap<>();
+        for (WalletTrade t : consensusTrades) {
+            if (t.getAddress() == null) continue;
+            String addr = t.getAddress().toLowerCase();
+            BigDecimal sz = t.getSizeUsdc() != null ? t.getSizeUsdc() : BigDecimal.ZERO;
+            sizeByAddress.merge(addr, sz, BigDecimal::add);
+        }
+        BigDecimal totalSizeUsdc = sizeByAddress.values().stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Sort by size descending: "alias:BUY:2400.00|alias2:BUY:1100.00"
+        String walletDetails = sizeByAddress.entrySet().stream()
+                .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
+                .map(e -> lookupAlias(e.getKey()) + ":" + direction + ":"
+                        + e.getValue().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString())
+                .collect(Collectors.joining("|"));
 
         // Compute implied market sentiment from direction + outcome.
         // BUY YES → bullish, SELL NO → bullish, SELL YES → bearish, BUY NO → bearish.
@@ -159,6 +185,8 @@ public class ConsensusDetector {
         metadata.put("consensusOutcome",   sentiment);
         metadata.put("walletCount",        String.valueOf(distinctWallets.size()));
         metadata.put("wallets",            String.join(",", distinctWallets));
+        metadata.put("walletDetails",      walletDetails);
+        metadata.put("totalSizeUsdc",      totalSizeUsdc.toPlainString());
         metadata.put("currentPrice",       currentPrice != null ? currentPrice.toPlainString() : "?");
         metadata.put("detectedAt",         now.toString());
 
@@ -182,6 +210,22 @@ public class ConsensusDetector {
             log.info("consensus_alert_fired marketId={} direction={} outcome={} sentiment={} walletCount={}",
                     marketId, direction, outcome, sentiment, distinctWallets.size());
         }
+    }
+
+    /** Returns the wallet alias from watchedWalletsTable, or an 8-char address prefix as fallback. */
+    private String lookupAlias(String address) {
+        if (watchedWalletsTable != null && address != null) {
+            try {
+                WatchedWallet w = watchedWalletsTable.getItem(
+                        Key.builder().partitionValue(address).build());
+                if (w != null && w.getAlias() != null && !w.getAlias().isBlank()) {
+                    return w.getAlias();
+                }
+            } catch (Exception e) {
+                log.debug("alias_lookup_failed address={}", address);
+            }
+        }
+        return address != null ? address.substring(0, Math.min(8, address.length())) : "?";
     }
 
     /**

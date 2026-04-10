@@ -241,6 +241,7 @@ function renderAlertDetail(a) {
       const pct = Math.abs(Math.round(parseFloat(m.sentimentScore || 0) * 100));
       const col = m.sentimentDirection === 'YES' ? 'text-emerald-400' : 'text-red-400';
       return (title ? `<span class="text-gray-400">${truncate(title, 50)}</span> ` : '') +
+             `<span class="text-[9px] font-mono bg-gray-800 text-gray-400 rounded px-1 py-0.5">AI</span> ` +
              `<span class="${col}">${dir} ${pct}%</span>` +
              (m.source ? ` <span class="text-gray-600">${m.source}</span>` : '');
     }
@@ -249,13 +250,23 @@ function renderAlertDetail(a) {
            (score ? `<span class="text-gray-600">match: ${Math.round(parseFloat(score)*100)}%</span>` : '');
   }
   if (a.type === 'consensus') {
-    const wc  = m.walletCount, dir = m.direction || m.consensusDirection || '';
-    const out = m.consensusOutcome || '';
-    const tot = m.totalSizeUsdc ? '$' + fmt(parseFloat(m.totalSizeUsdc)) : '';
-    const col = out === 'bullish' ? 'text-emerald-400' : 'text-red-400';
-    return `<span class="${col}">${wc || '?'} wallets ${dir} ${(m.outcome||'').toUpperCase()}</span>` +
-           (tot ? ` <span class="text-gray-500">${tot} total</span>` : '') +
-           (out ? ` <span class="${col}">(${out})</span>` : '');
+    const wc        = m.walletCount || '?';
+    const dir       = m.direction || '';
+    const out       = (m.outcome || '').toUpperCase();
+    const sentiment = m.consensusOutcome || '';
+    const tot       = m.totalSizeUsdc ? '$' + fmt(parseFloat(m.totalSizeUsdc)) : '';
+    const col       = sentiment === 'bullish' ? 'text-emerald-400' : 'text-red-400';
+    let walletBreakdown = '';
+    if (m.walletDetails) {
+      const parts = m.walletDetails.split('|').map(p => {
+        const segs = p.split(':');
+        return segs[0] + ' $' + fmt(parseFloat(segs[2] || 0));
+      });
+      walletBreakdown = `<br><span class="text-gray-500 text-[10px]">${parts.join(' · ')}</span>`;
+    }
+    return `<span class="${col}">${wc} wallets ${dir} ${out}${tot ? ' — ' + tot + ' total' : ''}</span>` +
+           (sentiment ? ` <span class="${col}">(${sentiment})</span>` : '') +
+           walletBreakdown;
   }
   if (a.type === 'wallet_activity') {
     const alias = m.alias || m.walletAlias || '';
@@ -404,6 +415,7 @@ function renderWallets(wallets) {
               && w.address !== '_comment'
               && !(w.alias || '').startsWith('PLACEHOLDER')
               && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h)
+    .filter(w => w.recentDirection || w.lastMarketQuestion)
     .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
 
   document.getElementById('st-wallets-active').textContent = filtered.length + ' active in 24h';
@@ -431,7 +443,7 @@ function renderWallets(wallets) {
     const borderCol = isBullish ? 'border-l-emerald-600' : 'border-l-red-700';
     const dirCol    = isBullish ? 'text-emerald-400'     : 'text-red-400';
     const size      = w.lastSizeUsdc ? '$' + fmt(parseFloat(w.lastSizeUsdc)) : '';
-    const question  = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 40) : '—';
+    const question  = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
     const tradeInfo = dir
       ? `${dir}${outcome ? ' ' + outcome : ''} on "${question}"`
       : '—';

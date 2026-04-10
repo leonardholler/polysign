@@ -139,15 +139,25 @@ public class NewsCorrelationDetector {
      */
     public void checkMarkets(Article article) {
         List<Market> markets = getOrLoadMarkets();
-        List<Candidate> candidates = new ArrayList<>();
 
-        for (Market market : markets) {
+        // Pre-score all markets by keyword quality; iterate best-first so the rate-limited
+        // Claude API slots go to the strongest keyword matches, not arbitrary arrival order.
+        Set<String> articleKw = article.getKeywords();
+        record PreScore(Market market, double kScore) {}
+        List<PreScore> sortedByKeyword = markets.stream()
+                .map(m -> new PreScore(m, newsMatcher.score(articleKw, m.getKeywords())))
+                .filter(ps -> ps.kScore() >= keywordPrefilterThreshold)
+                .sorted(Comparator.comparingDouble(PreScore::kScore).reversed())
+                .toList();
+
+        List<Candidate> candidates = new ArrayList<>();
+        for (PreScore ps : sortedByKeyword) {
             try {
-                Candidate c = scoreMarket(article, market);
+                Candidate c = scoreMarket(article, ps.market());
                 if (c != null) candidates.add(c);
             } catch (Exception e) {
                 log.warn("event=news_check_failed marketId={} articleId={} error={}",
-                        market.getMarketId(), article.getArticleId(), e.getMessage());
+                        ps.market().getMarketId(), article.getArticleId(), e.getMessage());
             }
         }
 
