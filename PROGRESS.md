@@ -1020,3 +1020,100 @@ Date: 2026-04-09
   when the auth layer is implemented.
 - `price_snapshots` TTL is now 30 days (extended from 7 days in this phase) — this is the
   minimum needed for the t24h horizon look-back with adequate history.
+
+---
+
+## Phase 8 — Dashboard + Signal Strength + Signal Quality Panel
+
+**Status: COMPLETE**
+**Commits**: `53480ae` (API controllers + PhoneWorthinessFilter), `7ecaaaa` (dashboard)
+
+### What was built
+
+**Commit 1: API controllers + PhoneWorthinessFilter** (15 files, +1113 / -23)
+
+- `PhoneWorthinessFilter.java` — 3-rule gate: (a) consensus auto-pass, (b) ≥2 distinct
+  detector types on same market in last 15min (multi-detector convergence), (c) severity=critical
+  AND t1h precision ≥ 0.60 (fails closed on null precision)
+- `NotificationConsumer.java` — wired: evaluate worthiness → persist `phoneWorthy` on Alert →
+  conditionally push to ntfy → always delete SQS message; `updatePhoneWorthy` is package-private
+  so tests can no-op it
+- `Alert.java` — added `phoneWorthy` (Boolean) and `reviewed` (Boolean) fields
+- `Market.java` — added `currentYesPrice` (BigDecimal); denormalized by PricePoller after each
+  snapshot write
+- `AppStats.java` — `@Component` with volatile `lastMarketPollAt`; set by MarketPoller, read by
+  StatsController
+- `MarketPoller.java` — calls `appStats.setLastMarketPollAt(clock.now())` after each successful
+  poll cycle
+- `PricePoller.java` — updates `market.currentYesPrice` + `marketsTable.updateItem(market)` after
+  each snapshot (best-effort, WARN on failure)
+- `AlertDto.java` — record: alert fields + marketQuestion (truncated 120), currentYesPrice,
+  volume24h (from metadata), signalStrength (distinct detector types, 60min window), badge
+  (signalStrength ≥ 3), metadataHighlight (type-keyed: movePct/zScore/walletCount/score/sizeUsdc)
+- `MarketController.java` — 6 endpoints: GET /api/markets (category GSI), GET /{id},
+  GET /{id}/price-history, GET /{id}/news, GET /{id}/whale-trades, POST /{id}/watch
+- `AlertController.java` — GET /api/alerts (scan + enrich + signal-strength),
+  GET /by-signal-strength (60min window, sorted desc), POST /{id}/mark-reviewed;
+  batch Market lookup via `DynamoDbEnhancedClient.batchGetItem` in chunks of 100
+- `WalletController.java` — GET /api/wallets, GET /{address}/trades, POST /api/wallets
+- `StatsController.java` — GET /api/stats; reads `polysign.markets.tracked` Micrometer gauge,
+  scans alerts for today UTC, scans watchedWallets count, reads appStats.lastMarketPollAt
+- `PhoneWorthinessFilterTest.java` — 6 unit tests covering all rule branches using
+  TestableFilter subclass (overrides `queryRecentAlertsForMarket`), @Mock
+  SignalPerformanceService, lenient clock stub
+- `NotificationConsumerTest.java` — updated: added AlwaysWorthyFilter inner class,
+  updated TestableConsumer constructor, added no-op updatePhoneWorthy override
+- `MarketPollerKeywordTest.java` — updated: added AppStats constructor param
+
+**Commit 2: dashboard** (1 file, +477)
+
+- `src/main/resources/static/index.html` — single dark-mode page, Tailwind CDN + Chart.js CDN,
+  no build step; 5 sections:
+  - **Header stats bar**: markets tracked, alerts today, watched wallets, last poll, ntfy topic
+    copy button; 30s refresh
+  - **Signal Quality Panel** (above fold): fetches `/api/signals/performance` for t1h + t24h;
+    precision color-coded green (≥60%) / yellow (50–60%) / red (<50%); null → "—"; count cells
+    link to filtered alert feed; 60s refresh
+  - **Live Alert Feed**: 10s refresh; signal-strength sorted; ★ badge on 3+ detector types;
+    severity color-coded; per-type metadata highlight (↕movePct / σzScore / 👥walletCount /
+    📰score / $sizeUsdc); mark-reviewed button; Web Audio API soft ping on new critical alerts
+  - **Watched Markets Grid**: Chart.js sparklines (1h price history); currentYesPrice, vol24h,
+    category; 2min refresh
+  - **Smart Money Tracker**: table of watched wallets with alias, truncated address, category,
+    last trade, trade count, recent direction; 60s refresh
+
+### Files touched
+**New**
+- `src/main/java/com/polysign/common/AppStats.java`
+- `src/main/java/com/polysign/notification/PhoneWorthinessFilter.java`
+- `src/main/java/com/polysign/api/AlertDto.java`
+- `src/main/java/com/polysign/api/MarketController.java`
+- `src/main/java/com/polysign/api/AlertController.java`
+- `src/main/java/com/polysign/api/WalletController.java`
+- `src/main/java/com/polysign/api/StatsController.java`
+- `src/main/resources/static/index.html`
+- `src/test/java/com/polysign/notification/PhoneWorthinessFilterTest.java`
+
+**Modified**
+- `src/main/java/com/polysign/model/Alert.java`
+- `src/main/java/com/polysign/model/Market.java`
+- `src/main/java/com/polysign/notification/NotificationConsumer.java`
+- `src/main/java/com/polysign/poller/MarketPoller.java`
+- `src/main/java/com/polysign/poller/PricePoller.java`
+- `src/test/java/com/polysign/notification/NotificationConsumerTest.java`
+- `src/test/java/com/polysign/poller/MarketPollerKeywordTest.java`
+
+### Verification
+- `mvn test` → **125 unit tests, 0 failures** (119 prior + 6 new PhoneWorthinessFilterTest)
+- `mvn test -Dintegration-tests=true` → **125 tests, 0 failures, 0 skipped**
+
+### Deviations from spec
+None. All 6 PhoneWorthinessFilterTest cases implemented. All dashboard sections implemented
+per spec. DECISION 7 (live market context in AlertDto + per-type metadataHighlight) implemented.
+
+### Notes for next phase
+- `ResolutionSweeper` BLOCKER from Phase 7.5 still open: `Market.java` needs `closed` + 
+  `resolvedOutcomePrice` fields.
+- `currentYesPrice` denormalization means the Market row is updated on every non-duplicate
+  price snapshot. If write throughput becomes a concern, batch or TTL the update.
+- The dashboard is unauthenticated. Add auth (API key or JWT) when the auth layer is added.
