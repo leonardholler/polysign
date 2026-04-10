@@ -191,7 +191,7 @@ class NotificationConsumerTest {
         AlwaysWorthyFilter() {
             super(mock(DynamoDbTable.class),
                   mock(SignalPerformanceService.class),
-                  new AppClock());
+                  new AppClock(), 0.60);
         }
 
         @Override

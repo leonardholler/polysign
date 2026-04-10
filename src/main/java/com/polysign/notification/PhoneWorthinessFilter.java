@@ -11,6 +11,7 @@ import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
+import org.springframework.beans.factory.annotation.Value;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,7 +40,8 @@ public class PhoneWorthinessFilter {
     private static final Logger   log                  = LoggerFactory.getLogger(PhoneWorthinessFilter.class);
     private static final Duration CONVERGENCE_WINDOW   = Duration.ofMinutes(15);
     private static final Duration PRECISION_LOOKBACK   = Duration.ofDays(7);
-    private static final double   PRECISION_THRESHOLD  = 0.60;
+    /** Raise back to 0.60 once price detector precision improves above 50%. */
+    private final double precisionThreshold;
 
     private final DynamoDbTable<Alert>      alertsTable;
     private final SignalPerformanceService  performanceService;
@@ -48,10 +50,12 @@ public class PhoneWorthinessFilter {
     public PhoneWorthinessFilter(
             DynamoDbTable<Alert> alertsTable,
             SignalPerformanceService performanceService,
-            AppClock clock) {
+            AppClock clock,
+            @Value("${polysign.notification.min-precision:0.60}") double minPrecision) {
         this.alertsTable        = alertsTable;
         this.performanceService = performanceService;
         this.clock              = clock;
+        this.precisionThreshold = minPrecision;
     }
 
     /**
@@ -119,7 +123,7 @@ public class PhoneWorthinessFilter {
             return resp.detectors().stream()
                     .filter(d -> type.equals(d.type()))
                     .findFirst()
-                    .map(d -> d.precision() != null && d.precision() >= PRECISION_THRESHOLD)
+                    .map(d -> d.precision() != null && d.precision() >= precisionThreshold)
                     .orElse(false);
         } catch (Exception e) {
             log.warn("phone_worthy_precision_failed type={} error={}", type, e.getMessage());

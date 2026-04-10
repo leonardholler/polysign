@@ -94,8 +94,11 @@ public class AlertService {
             return false;
         }
 
-        log.info("alert_created alertId={} type={} severity={} marketId={}",
-                alert.getAlertId(), alert.getType(), alert.getSeverity(), alert.getMarketId());
+        String tier = alert.getMetadata() != null
+                ? alert.getMetadata().getOrDefault("liquidityTier", "unknown")
+                : "unknown";
+        log.info("alert_created alertId={} marketId={} type={} tier={} severity={}",
+                alert.getAlertId(), alert.getMarketId(), alert.getType(), tier, alert.getSeverity());
 
         Counter.builder("polysign.alerts.fired")
                 .tag("type", alert.getType())

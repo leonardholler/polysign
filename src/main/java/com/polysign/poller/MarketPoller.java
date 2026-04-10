@@ -30,6 +30,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -73,10 +74,12 @@ public class MarketPoller {
     private record Candidate(Map<String, Object> raw, double volume24h, double volumeLifetime) {}
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    private final double minVolumeUsdc;
-    private final double minVolume24hUsdc;
-    private final long   minHoursToEnd;
-    private final int    maxMarkets;
+    private final double         minVolumeUsdc;
+    private final double         minVolume24hUsdc;
+    private final long           minHoursToEnd;
+    private final int            maxMarkets;
+    private final List<Pattern>  excludedQuestionPatterns;
+    private final Set<String>    excludedCategories;
 
     // ── Dependencies ──────────────────────────────────────────────────────────
     private final WebClient             gammaClient;
@@ -102,12 +105,20 @@ public class MarketPoller {
             @Value("${polysign.pollers.market.min-volume-usdc:10000}")    double minVolumeUsdc,
             @Value("${polysign.pollers.market.min-volume-24h-usdc:10000}") double minVolume24hUsdc,
             @Value("${polysign.pollers.market.min-hours-to-end:12}")      long   minHoursToEnd,
-            @Value("${polysign.pollers.market.max-markets:400}")          int    maxMarkets) {
+            @Value("${polysign.pollers.market.max-markets:400}")          int    maxMarkets,
+            @Value("${polysign.pollers.market.excluded-question-patterns:}") String excludedPatternsCsv,
+            @Value("${polysign.pollers.market.excluded-categories:}")        String excludedCategoriesCsv) {
 
         this.minVolumeUsdc    = minVolumeUsdc;
         this.minVolume24hUsdc = minVolume24hUsdc;
         this.minHoursToEnd    = minHoursToEnd;
         this.maxMarkets       = maxMarkets;
+        this.excludedQuestionPatterns = Arrays.stream(excludedPatternsCsv.split(","))
+                .map(String::trim).filter(s -> !s.isBlank())
+                .map(Pattern::compile).collect(Collectors.toList());
+        this.excludedCategories = Arrays.stream(excludedCategoriesCsv.split(","))
+                .map(String::trim).filter(s -> !s.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
         this.gammaClient      = gammaClient;
         this.marketsTable     = marketsTable;
         this.clock            = clock;
@@ -136,6 +147,7 @@ public class MarketPoller {
             int skipLifetime = 0;
             int skip24h      = 0;
             int skipEol      = 0;
+            int skipPattern  = 0;
             int offset       = 0;
 
             while (true) {
@@ -184,6 +196,26 @@ public class MarketPoller {
                             } catch (DateTimeParseException ignored2) {
                                 // Unparseable end-date — let through rather than silently filter.
                                 log.debug("market_end_date_unparseable marketId={} endDate={}", marketId, endDateStr);
+                            }
+                        }
+
+                        // ── Quality gate 4: excluded question patterns / categories ──
+                        String question = stringOrNull(item, "question");
+                        if (question != null && !excludedQuestionPatterns.isEmpty()) {
+                            final String q = question;
+                            if (excludedQuestionPatterns.stream().anyMatch(p -> p.matcher(q).matches())) {
+                                log.debug("market_skip_excluded_pattern marketId={} question={}", marketId, q);
+                                skipPattern++;
+                                continue;
+                            }
+                        }
+                        if (!excludedCategories.isEmpty()) {
+                            String slug = stringOrNull(item, "slug");
+                            String cat  = CategoryClassifier.classify(question, slug);
+                            if (excludedCategories.contains(cat)) {
+                                log.debug("market_skip_excluded_category marketId={} category={}", marketId, cat);
+                                skipPattern++;
+                                continue;
                             }
                         }
 
@@ -242,11 +274,28 @@ public class MarketPoller {
                 }
             }
 
+            // ── Phase 6: Unwatch markets that fell out of top 25 ─────────────
+            // Scan all markets; any that are still isWatched=true but not in the
+            // current autoWatch set are stale auto-watches — reset them to false.
+            int unwatched = 0;
+            for (Market existing : marketsTable.scan().items()) {
+                if (Boolean.TRUE.equals(existing.getIsWatched())
+                        && !autoWatch.contains(existing.getMarketId())) {
+                    existing.setIsWatched(false);
+                    marketsTable.putItem(existing);
+                    unwatched++;
+                }
+            }
+            log.info("auto_watch updated={} markets by volume24h", autoWatch.size());
+            if (unwatched > 0) {
+                log.info("auto_watch_unwatch markets_unwatched={}", unwatched);
+            }
+
             trackedCount.set(kept);
             appStats.setLastMarketPollAt(clock.now());
             log.info("market_poll_complete of={} kept_after_filters={} kept_after_cap={} "
-                     + "cutoff_volume24hr={} skip_lifetime={} skip_24h={} skip_eol={}",
-                     total, afterFilters, kept, cutoffVol24hStr, skipLifetime, skip24h, skipEol);
+                     + "cutoff_volume24hr={} skip_lifetime={} skip_24h={} skip_eol={} skip_pattern={}",
+                     total, afterFilters, kept, cutoffVol24hStr, skipLifetime, skip24h, skipEol, skipPattern);
 
         } catch (Exception e) {
             log.error("market_poll_failed error={}", e.getMessage(), e);

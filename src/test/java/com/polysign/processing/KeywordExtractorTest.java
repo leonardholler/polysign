@@ -30,17 +30,17 @@ class KeywordExtractorTest {
     @Test
     void filtersOutStopWords() {
         Set<String> result = extractor.extract("will the president win the election");
-        assertThat(result).doesNotContain("will", "the");
-        assertThat(result).contains("president", "win", "election");
+        assertThat(result).doesNotContain("will", "the", "win"); // "win" is 3 chars → below min length
+        assertThat(result).contains("president", "election");
     }
 
     // ── Minimum token length ──────────────────────────────────────────────────
 
     @Test
-    void dropsTokensShorterThan3Chars() {
-        Set<String> result = extractor.extract("US UK EU NATO summit");
-        // US, UK, EU are 2 chars → dropped; NATO, summit → kept
-        assertThat(result).doesNotContain("us", "uk", "eu");
+    void dropsTokensShorterThan4Chars() {
+        Set<String> result = extractor.extract("US UK EU win NATO summit");
+        // US, UK, EU are 2 chars; "win" is 3 chars → all dropped (min length is 4)
+        assertThat(result).doesNotContain("us", "uk", "eu", "win");
         assertThat(result).contains("nato", "summit");
     }
 

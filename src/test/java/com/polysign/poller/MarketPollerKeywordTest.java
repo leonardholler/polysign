@@ -46,7 +46,7 @@ class MarketPollerKeywordTest {
                 new SimpleMeterRegistry(),
                 keywordExtractor,
                 new AppStats(),
-                10_000, 10_000, 12, 400
+                10_000, 10_000, 12, 400, "", ""
         );
 
         Map<String, Object> fakeItem = Map.of(

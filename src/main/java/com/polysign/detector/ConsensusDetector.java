@@ -15,6 +15,7 @@ import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -109,22 +110,57 @@ public class ConsensusDetector {
             Set<String> distinctWallets = entry.getValue();
 
             if (distinctWallets.size() >= consensusMinWallets) {
-                fireConsensusAlert(marketId, direction, distinctWallets, slug, now);
+                // Find the most common outcome (YES/NO) among the agreeing wallets.
+                Map<String, Long> outcomeCounts = inWindow.stream()
+                        .filter(t -> direction.equals(t.getSide())
+                                && t.getAddress() != null
+                                && distinctWallets.contains(t.getAddress().toLowerCase())
+                                && t.getOutcome() != null)
+                        .collect(Collectors.groupingBy(WalletTrade::getOutcome, Collectors.counting()));
+                String outcome = outcomeCounts.isEmpty() ? "?"
+                        : outcomeCounts.entrySet().stream()
+                                .max(Map.Entry.comparingByValue())
+                                .map(Map.Entry::getKey)
+                                .orElse("?");
+
+                fireConsensusAlert(marketId, direction, outcome, distinctWallets, slug, now,
+                        triggeringTrade.getPrice());
                 return; // one alert per call — both directions cannot be checked simultaneously
             }
         }
     }
 
-    private void fireConsensusAlert(String marketId, String direction,
-                                    Set<String> distinctWallets, String slug, Instant now) {
+    private void fireConsensusAlert(String marketId, String direction, String outcome,
+                                    Set<String> distinctWallets, String slug, Instant now,
+                                    BigDecimal currentPrice) {
         String alertId    = AlertIdFactory.generate(ALERT_TYPE, marketId, now, consensusWindow);
         Instant createdAt = AlertIdFactory.bucketedInstant(now, consensusWindow);
 
+        // Compute implied market sentiment from direction + outcome.
+        // BUY YES → bullish, SELL NO → bullish, SELL YES → bearish, BUY NO → bearish.
+        String sentiment;
+        if ("?".equals(outcome)) {
+            sentiment = "BUY".equalsIgnoreCase(direction) ? "bullish" : "bearish";
+        } else {
+            boolean bullish = ("BUY".equalsIgnoreCase(direction) && "YES".equalsIgnoreCase(outcome))
+                           || ("SELL".equalsIgnoreCase(direction) && "NO".equalsIgnoreCase(outcome));
+            sentiment = bullish ? "bullish" : "bearish";
+        }
+        String verb = "BUY".equalsIgnoreCase(direction) ? "buying" : "selling";
+
+        String priceStr = currentPrice != null
+                ? String.format("%.1f\u00a2", currentPrice.doubleValue() * 100.0)
+                : "?";
+
         Map<String, String> metadata = new HashMap<>();
-        metadata.put("direction",   direction);
-        metadata.put("walletCount", String.valueOf(distinctWallets.size()));
-        metadata.put("wallets",     String.join(",", distinctWallets));
-        metadata.put("detectedAt",  now.toString());
+        metadata.put("direction",          direction);
+        metadata.put("outcome",            outcome);
+        metadata.put("consensusDirection", direction + " " + outcome.toUpperCase());
+        metadata.put("consensusOutcome",   sentiment);
+        metadata.put("walletCount",        String.valueOf(distinctWallets.size()));
+        metadata.put("wallets",            String.join(",", distinctWallets));
+        metadata.put("currentPrice",       currentPrice != null ? currentPrice.toPlainString() : "?");
+        metadata.put("detectedAt",         now.toString());
 
         Alert alert = new Alert();
         alert.setAlertId(alertId);
@@ -132,18 +168,18 @@ public class ConsensusDetector {
         alert.setType(ALERT_TYPE);
         alert.setSeverity("critical");
         alert.setMarketId(marketId);
-        alert.setTitle(String.format("Consensus: %d wallets going %s on market %s",
-                distinctWallets.size(), direction, marketId));
+        alert.setTitle(String.format("%d wallets %s %s (%s) — market at %s",
+                distinctWallets.size(), verb, outcome.toUpperCase(), sentiment, priceStr));
         alert.setDescription(String.format(
-                "%d distinct watched wallets traded %s within the last %d minutes",
-                distinctWallets.size(), direction, consensusWindow.toMinutes()));
-        alert.setLink(slug != null ? "https://polymarket.com/event/" + slug : null);
+                "%d distinct watched wallets %s %s within the last %d minutes",
+                distinctWallets.size(), verb, outcome.toUpperCase(), consensusWindow.toMinutes()));
+        alert.setLink(slug != null ? "https://polymarket.com/event/" + cleanSlug(slug) : null);
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
         if (created) {
-            log.info("consensus_alert_fired marketId={} direction={} walletCount={}",
-                    marketId, direction, distinctWallets.size());
+            log.info("consensus_alert_fired marketId={} direction={} outcome={} sentiment={} walletCount={}",
+                    marketId, direction, outcome, sentiment, distinctWallets.size());
         }
     }
 
@@ -162,5 +198,21 @@ public class ConsensusDetector {
                 .stream()
                 .flatMap(page -> page.items().stream())
                 .collect(Collectors.toList());
+    }
+
+    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
+    private static String cleanSlug(String slug) {
+        if (slug == null) return slug;
+        String s = slug;
+        while (true) {
+            int last = s.lastIndexOf('-');
+            if (last < 0) break;
+            String tail = s.substring(last + 1);
+            if (!tail.matches("\\d+")) break;
+            if (tail.length() < 3) break;
+            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
+            s = s.substring(0, last);
+        }
+        return s;
     }
 }

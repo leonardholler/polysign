@@ -26,29 +26,56 @@ polysign:
   ntfy:
     topic: ${NTFY_TOPIC:polysign-leonard-x7k2}
   detectors:
+    liquidity-tiers:
+      tier1-min-volume: 250000   # volume24h > this → Tier 1 (liquid)
+      tier2-min-volume: 50000    # volume24h >= this → Tier 2 (moderate); below → Tier 3 (illiquid)
     price:
-      threshold-pct: 8.0
+      threshold-pct: 8.0         # kept for reference (= tier1 value); tier1 is authoritative
+      threshold-pct-tier1: 8.0
+      threshold-pct-tier2: 14.0
+      threshold-pct-tier3: 20.0
       window-minutes: 15
-      min-volume-usdc: 50000
       dedupe-window-minutes: 30
       min-delta-p: 0.03
+      max-bypass-per-hour: 3        # cap: at most 3 bypass-mode alerts per market per hour
+      # Resolution zone config
+      resolution-zone-high: 0.65    # above this, bullish resolution is interesting
+      resolution-zone-low: 0.35     # below this, bearish resolution is interesting
+      mid-range-threshold-multiplier: 2.0  # mid-range moves need 2x the tier threshold
+      zone-entry-threshold-discount: 0.25  # zone transitions get 25% lower threshold
+      # Per-window volume config
+      min-window-volume: 5000       # minimum volume during the move window
+      high-volume-window-threshold: 20000  # volume threshold for resolution zone discount
       interval-ms: 60000
       initial-delay-ms: 65000
     statistical:
-      z-score-threshold: 3.0
+      z-score-threshold: 3.0     # kept for reference (= tier1 value); tier1 is authoritative
+      z-score-threshold-tier1: 3.0
+      z-score-threshold-tier2: 4.0
+      z-score-threshold-tier3: 5.0
       min-snapshots: 20
-      min-volume-usdc: 50000
       dedupe-window-minutes: 30
       min-delta-p: 0.03
       interval-ms: 60000
       initial-delay-ms: 70000
+    orderbook-gate:
+      max-spread-bps: 500        # Tier 2/3 alerts dropped if spread exceeds this
+      min-depth-at-mid: 100.0    # Tier 2/3 alerts dropped if depth below this (USDC)
     wallet:
       min-trade-usdc: 5000
       consensus-min-wallets: 3
       consensus-window-minutes: 30
     news:
-      min-score: 0.65
+      min-score: 0.75
       min-volume-usdc: 100000
+      dedupe-window-minutes: 1440   # 24 hours — same article-market pair fires once per day
+      max-matches-per-article: 3    # cap: top 3 markets by score per article
+      keyword-prefilter-threshold: 0.15   # minimum keyword score to send to Claude (lowered from 0.3 to pass more articles)
+      sentiment-relevance-threshold: 0.3  # minimum |sentiment| to fire alert
+      sentiment-confidence-threshold: 0.5 # minimum confidence to fire alert
+      claude-model: "claude-sonnet-4-6"
+      claude-max-tokens: 150
+      claude-timeout-ms: 5000             # hard timeout on the API call
   dynamodb:
     tables:
       markets: markets
@@ -80,6 +107,12 @@ polysign:
       min-volume-24h-usdc: 10000
       min-hours-to-end: 12
       max-markets: 400
+      # Comma-separated regex patterns to exclude low-signal markets.
+      # Matches against the full market question (case-insensitive via (?i) prefix).
+      excluded-question-patterns: "(?i).*\\btweets?\\b.*\\d+.*\\d+.*,(?i).*\\bposts?\\b.*\\d+.*\\d+.*"
+      # Comma-separated category names to exclude entirely (e.g. "sports").
+      # Empty by default — tune via config without code changes.
+      excluded-categories: ""
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
@@ -95,11 +128,17 @@ polysign:
         - https://rss.politico.com/politics-news.xml          # Politico — political intelligence for election markets
         - https://www.theguardian.com/world/rss               # The Guardian World — broad world coverage
         - https://feeds.npr.org/1001/rss.xml                  # NPR News — US news (Reuters/AP are no longer public)
+  notification:
+    min-precision: 0.40  # Raise back to 0.60 once price detector precision improves above 50%
   consumer:
     notification:
       poll-interval-ms: 1000
     news:
       poll-interval-ms: 1000
+
+logging:
+  level:
+    com.polysign.detector.PriceMovementDetector: DEBUG
 
 
 # ── Resilience4j ─────────────────────────────────────────────────────────────
@@ -134,6 +173,15 @@ resilience4j:
 
       ntfy:
         register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+
+      claude-api:
+        register-health-indicator: false
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
         failure-rate-threshold: 50

@@ -24,10 +24,9 @@ import java.util.Map;
  * <p>Called synchronously by {@link com.polysign.poller.WalletPoller} after each
  * successful trade write. No scheduler — driven by the polling cycle.
  *
- * <p>Alert deduplication: a 5-minute window is applied, keyed on
- * (address + marketId + direction). All fills for the same wallet/market/direction
- * within the same 5-minute bucket collapse into a single alert, preventing
- * multi-level orderbook fills from generating dozens of separate alerts for one trade.
+ * <p>Alert deduplication: a 24-hour window keyed on txHash ensures the same on-chain
+ * trade never fires more than one alert per day, even if the poller re-fetches it
+ * across multiple cycles. txHash is the canonical natural-key for a trade.
  */
 @Component
 public class WalletActivityDetector {
@@ -67,13 +66,16 @@ public class WalletActivityDetector {
         String direction   = trade.getSide() != null ? trade.getSide().toLowerCase() : "?";
         String outcome     = trade.getOutcome() != null ? trade.getOutcome() : "?";
 
-        // Bucket by (address + marketId + direction) within a 5-minute window.
-        // All fills for the same wallet/market/direction within the window share
-        // one alertId — orderbook multi-level fills collapse into a single alert.
-        String dedupeKey = trade.getAddress() + "|" + trade.getMarketId() + "|" + direction;
+        // txHash is the canonical idempotency key: one on-chain trade = one alert.
+        // A 24-hour bucketing window ensures the same txHash processed in multiple
+        // poll cycles on the same day always maps to the same (alertId, createdAt)
+        // composite key, so the DynamoDB attribute_not_exists condition deduplicates it.
+        String txHash     = trade.getTxHash() != null ? trade.getTxHash() : "";
+        String dedupeKey  = trade.getAddress() + "|" + txHash;
+        Duration dedupeWindow = Duration.ofMinutes(1440); // 24 hours
         String alertId    = AlertIdFactory.generate(
-                ALERT_TYPE, trade.getMarketId(), now, Duration.ofMinutes(5), dedupeKey);
-        Instant createdAt = AlertIdFactory.bucketedInstant(now, Duration.ofMinutes(5));
+                ALERT_TYPE, trade.getMarketId(), now, dedupeWindow, dedupeKey);
+        Instant createdAt = AlertIdFactory.bucketedInstant(now, dedupeWindow);
 
         Map<String, String> metadata = new HashMap<>();
         metadata.put("address",    trade.getAddress());
@@ -99,13 +101,32 @@ public class WalletActivityDetector {
                 walletLabel, direction, outcome, sizeUsdc,
                 trade.getPrice() != null ? trade.getPrice().doubleValue() : 0.0,
                 trade.getMarketQuestion() != null ? trade.getMarketQuestion() : trade.getMarketId()));
-        alert.setLink(slug != null ? "https://polymarket.com/event/" + slug : null);
+        alert.setLink(slug != null ? "https://polymarket.com/event/" + cleanSlug(slug) : null);
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
         if (created) {
-            log.info("wallet_activity_alert_fired address={} alias={} sizeUsdc={:.2f} marketId={}",
-                    trade.getAddress(), alias, sizeUsdc, trade.getMarketId());
+            log.info("event=wallet_activity_alert_fired address={} alias={} sizeUsdc={} marketId={}",
+                    trade.getAddress(), alias, String.format("%.2f", sizeUsdc), trade.getMarketId());
+        } else {
+            log.debug("event=wallet_trade_skipped_duplicate txHash={} address={}",
+                    txHash, trade.getAddress());
         }
+    }
+
+    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
+    private static String cleanSlug(String slug) {
+        if (slug == null) return slug;
+        String s = slug;
+        while (true) {
+            int last = s.lastIndexOf('-');
+            if (last < 0) break;
+            String tail = s.substring(last + 1);
+            if (!tail.matches("\\d+")) break;
+            if (tail.length() < 3) break;
+            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
+            s = s.substring(0, last);
+        }
+        return s;
     }
 }

@@ -5,8 +5,11 @@ import com.polysign.alert.AlertService;
 import com.polysign.common.AppClock;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Alert;
+import com.polysign.model.LiquidityTier;
 import com.polysign.model.Market;
 import com.polysign.model.PriceSnapshot;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,15 +29,32 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Threshold-based price movement detector.
+ * Threshold-based price movement detector with liquidity-adjusted thresholds.
  *
  * <p>Runs every 60 seconds. For each active market, queries the last 60 minutes
  * of snapshots and fires a {@code price_movement} alert if price moved
- * &ge; {@code thresholdPct} within any {@code windowMinutes}-minute span,
- * provided 24h volume &ge; {@code minVolumeUsdc}.
+ * &ge; the tier-specific threshold within any {@code windowMinutes}-minute span.
+ * No hard volume floor — all markets are in scope. Low-liquidity markets simply
+ * require proportionally stronger moves.
+ *
+ * <h3>Tiers and thresholds</h3>
+ * <ul>
+ *   <li>Tier 1 (liquid, volume24h &gt; $250k): 8% threshold. No orderbook gate.</li>
+ *   <li>Tier 2 (moderate, $50k–$250k): 14% threshold. Orderbook gate required.</li>
+ *   <li>Tier 3 (illiquid, &lt; $50k): 20% threshold. Orderbook gate required.</li>
+ * </ul>
+ *
+ * <h3>Orderbook depth gate (Tier 2 and Tier 3 only)</h3>
+ * Before firing, calls {@link OrderbookService}. Silently drops the alert if:
+ * <ul>
+ *   <li>{@code spreadBps > maxSpreadBps} (default 500 bps) — spread too wide</li>
+ *   <li>{@code depthAtMid < minDepthAtMid} (default $100 USDC) — book too thin</li>
+ * </ul>
+ * On orderbook call failure, fires the alert with null book fields rather than
+ * suppressing a potential real signal.
  *
  * <p>Dedupe: 30-minute bucketed window via {@link AlertIdFactory}. Bypassed
- * (unbucketed) if the move exceeds 2&times; the threshold.
+ * (unbucketed) if the move exceeds 2&times; the tier threshold.
  */
 @Component
 public class PriceMovementDetector {
@@ -45,37 +65,94 @@ public class PriceMovementDetector {
 
     private final DynamoDbTable<Market> marketsTable;
     private final DynamoDbTable<PriceSnapshot> snapshotsTable;
+    private final DynamoDbTable<Alert> alertsTable;
     private final AlertService alertService;
     private final OrderbookService orderbookService;
     private final AppClock clock;
+    private final MeterRegistry meterRegistry;
 
-    private final double thresholdPct;
+    // Tier-specific percentage thresholds
+    private final double thresholdPctTier1;
+    private final double thresholdPctTier2;
+    private final double thresholdPctTier3;
+
+    // Tier boundaries
+    private final double tier1MinVolume;
+    private final double tier2MinVolume;
+
+    // Orderbook depth gate (Tier 2 and Tier 3 only)
+    private final double maxSpreadBps;
+    private final double minDepthAtMid;
+
+    // Resolution zone config
+    private final double resolutionZoneHigh;
+    private final double resolutionZoneLow;
+    private final double midRangeThresholdMultiplier;
+    private final double zoneEntryThresholdDiscount;
+
+    // Per-window volume config
+    private final double minWindowVolume;
+    private final double highVolumeWindowThreshold;
+
     private final int windowMinutes;
-    private final double minVolumeUsdc;
     private final Duration dedupeWindow;
     private final double minDeltaP;
+    private final int maxBypassPerHour;
+
+    /** Zone transition classification for the price move. */
+    enum ZoneTransition {
+        ENTERED_BULLISH, ENTERED_BEARISH, DEEPENING_BULLISH, DEEPENING_BEARISH, MID_RANGE
+    }
 
     public PriceMovementDetector(
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<PriceSnapshot> snapshotsTable,
+            DynamoDbTable<Alert> alertsTable,
             AlertService alertService,
             OrderbookService orderbookService,
             AppClock clock,
-            @Value("${polysign.detectors.price.threshold-pct:8.0}") double thresholdPct,
-            @Value("${polysign.detectors.price.window-minutes:15}") int windowMinutes,
-            @Value("${polysign.detectors.price.min-volume-usdc:50000}") double minVolumeUsdc,
-            @Value("${polysign.detectors.price.dedupe-window-minutes:30}") int dedupeWindowMinutes,
-            @Value("${polysign.detectors.price.min-delta-p:0.03}") double minDeltaP) {
-        this.marketsTable = marketsTable;
-        this.snapshotsTable = snapshotsTable;
-        this.alertService = alertService;
-        this.orderbookService = orderbookService;
-        this.clock = clock;
-        this.thresholdPct = thresholdPct;
-        this.windowMinutes = windowMinutes;
-        this.minVolumeUsdc = minVolumeUsdc;
-        this.dedupeWindow = Duration.ofMinutes(dedupeWindowMinutes);
-        this.minDeltaP = minDeltaP;
+            MeterRegistry meterRegistry,
+            @Value("${polysign.detectors.price.threshold-pct-tier1:8.0}")   double thresholdPctTier1,
+            @Value("${polysign.detectors.price.threshold-pct-tier2:14.0}")  double thresholdPctTier2,
+            @Value("${polysign.detectors.price.threshold-pct-tier3:20.0}")  double thresholdPctTier3,
+            @Value("${polysign.detectors.price.window-minutes:15}")          int windowMinutes,
+            @Value("${polysign.detectors.liquidity-tiers.tier1-min-volume:250000}") double tier1MinVolume,
+            @Value("${polysign.detectors.liquidity-tiers.tier2-min-volume:50000}")  double tier2MinVolume,
+            @Value("${polysign.detectors.orderbook-gate.max-spread-bps:500}")       double maxSpreadBps,
+            @Value("${polysign.detectors.orderbook-gate.min-depth-at-mid:100.0}")   double minDepthAtMid,
+            @Value("${polysign.detectors.price.resolution-zone-high:0.65}")          double resolutionZoneHigh,
+            @Value("${polysign.detectors.price.resolution-zone-low:0.35}")           double resolutionZoneLow,
+            @Value("${polysign.detectors.price.mid-range-threshold-multiplier:2.0}") double midRangeThresholdMultiplier,
+            @Value("${polysign.detectors.price.zone-entry-threshold-discount:0.25}") double zoneEntryThresholdDiscount,
+            @Value("${polysign.detectors.price.min-window-volume:5000}")             double minWindowVolume,
+            @Value("${polysign.detectors.price.high-volume-window-threshold:20000}") double highVolumeWindowThreshold,
+            @Value("${polysign.detectors.price.dedupe-window-minutes:30}")   int dedupeWindowMinutes,
+            @Value("${polysign.detectors.price.min-delta-p:0.03}")          double minDeltaP,
+            @Value("${polysign.detectors.price.max-bypass-per-hour:3}")     int maxBypassPerHour) {
+        this.marketsTable                = marketsTable;
+        this.snapshotsTable              = snapshotsTable;
+        this.alertsTable                 = alertsTable;
+        this.alertService                = alertService;
+        this.orderbookService            = orderbookService;
+        this.clock                       = clock;
+        this.meterRegistry               = meterRegistry;
+        this.thresholdPctTier1           = thresholdPctTier1;
+        this.thresholdPctTier2           = thresholdPctTier2;
+        this.thresholdPctTier3           = thresholdPctTier3;
+        this.windowMinutes               = windowMinutes;
+        this.tier1MinVolume              = tier1MinVolume;
+        this.tier2MinVolume              = tier2MinVolume;
+        this.maxSpreadBps                = maxSpreadBps;
+        this.minDepthAtMid               = minDepthAtMid;
+        this.resolutionZoneHigh          = resolutionZoneHigh;
+        this.resolutionZoneLow           = resolutionZoneLow;
+        this.midRangeThresholdMultiplier = midRangeThresholdMultiplier;
+        this.zoneEntryThresholdDiscount  = zoneEntryThresholdDiscount;
+        this.minWindowVolume             = minWindowVolume;
+        this.highVolumeWindowThreshold   = highVolumeWindowThreshold;
+        this.dedupeWindow                = Duration.ofMinutes(dedupeWindowMinutes);
+        this.minDeltaP                   = minDeltaP;
+        this.maxBypassPerHour            = maxBypassPerHour;
     }
 
     @Scheduled(fixedDelayString = "${polysign.detectors.price.interval-ms:60000}",
@@ -113,17 +190,17 @@ public class PriceMovementDetector {
 
     /**
      * Check a single market for price movement. Returns true if an alert was
-     * created (new), false otherwise (no movement, filtered, or deduplicated).
+     * created (new), false otherwise (no movement, filtered, suppressed, or deduplicated).
      *
      * <p>Package-private so unit tests can call it directly with synthetic data
      * without needing a full DynamoDB scan.
      */
     boolean checkMarket(Market market, Instant now) {
-        // Volume gate
         double volume24h = parseVolume(market.getVolume24h());
-        if (volume24h < minVolumeUsdc) {
-            return false;
-        }
+        LiquidityTier tier = LiquidityTier.classify(volume24h, tier1MinVolume, tier2MinVolume);
+
+        // Tier-specific percentage threshold — no hard volume floor
+        double thresholdPct = thresholdForTier(tier);
 
         // Query snapshots for the last LOOKBACK_MINUTES
         List<PriceSnapshot> snapshots = querySnapshots(market.getMarketId(), now);
@@ -138,9 +215,6 @@ public class PriceMovementDetector {
         }
 
         double movePct = move.pctChange;
-        if (movePct < thresholdPct) {
-            return false;
-        }
 
         // Minimum absolute probability delta: 0.0045→0.0055 is 22% but only 1bp of implied prob
         BigDecimal delta = move.toPrice.subtract(move.fromPrice).abs();
@@ -148,63 +222,184 @@ public class PriceMovementDetector {
             return false;
         }
 
-        // Extreme-zone filter: tail markets produce huge pct moves from tiny absolute moves
         double fromD = move.fromPrice.doubleValue();
-        double toD = move.toPrice.doubleValue();
-        if ((fromD < 0.05 && toD < 0.05) || (fromD > 0.95 && toD > 0.95)) {
-            return false;
+        double toD   = move.toPrice.doubleValue();
+        String direction = move.toPrice.compareTo(move.fromPrice) >= 0 ? "up" : "down";
+        double volumeInWindow = computeVolumeInWindow(snapshots);
+
+        // Diagnostic state — populated as we pass through each filter stage below.
+        ZoneTransition zoneTransition    = ZoneTransition.MID_RANGE; // refined below
+        double effectiveThresholdPct     = thresholdPct;             // refined below
+        String filterReason              = null;
+        boolean fired                    = false;
+
+        // ── Resolved market filter ────────────────────────────────────────────
+        // Skip markets that have effectively resolved (destination at terminal price).
+        // A market at 2¢ or 98¢ has no actionable edge; alert would be noise.
+        if (toD < 0.02 || toD > 0.98) {
+            filterReason = "FILTERED_RESOLVED";
+
+        // ── Extreme-zone filter ───────────────────────────────────────────────
+        // Tail markets produce huge pct moves from tiny absolute moves.
+        } else if ((fromD < 0.05 && toD < 0.05) || (fromD > 0.95 && toD > 0.95)) {
+            filterReason = "FILTERED_EXTREME_ZONE";
+
+        } else {
+            zoneTransition = computeZoneTransition(fromD, toD, direction);
+
+            // ── Per-window volume check ───────────────────────────────────────
+            // If snapshots carry static volume24h (same value throughout), volumeInWindow == -1.0.
+            // TODO: capture per-snapshot volume deltas to enable per-window volume filtering
+            if (volumeInWindow >= 0.0 && volumeInWindow < minWindowVolume) {
+                filterReason = "FILTERED_LOW_VOLUME"; // noise: move happened on negligible volume
+
+            } else {
+                // ── Effective threshold computation ───────────────────────────
+                // Priority order: zone-entry discount < mid-range multiplier (mutually exclusive).
+                effectiveThresholdPct = thresholdPct;
+                if (zoneTransition == ZoneTransition.MID_RANGE) {
+                    effectiveThresholdPct *= midRangeThresholdMultiplier;
+                } else if (zoneTransition == ZoneTransition.ENTERED_BULLISH
+                        || zoneTransition == ZoneTransition.ENTERED_BEARISH) {
+                    effectiveThresholdPct *= (1.0 - zoneEntryThresholdDiscount);
+                }
+                // Additional discount for heavy-volume resolution-zone moves
+                boolean inResolutionZone = (zoneTransition != ZoneTransition.MID_RANGE);
+                if (inResolutionZone) {
+                    if (volumeInWindow >= highVolumeWindowThreshold) {
+                        effectiveThresholdPct *= (1.0 - zoneEntryThresholdDiscount);
+                    } else if (volumeInWindow < 0.0 && volume24h > tier1MinVolume) {
+                        effectiveThresholdPct *= (1.0 - zoneEntryThresholdDiscount);
+                    }
+                }
+
+                if (movePct < effectiveThresholdPct) {
+                    filterReason = "FILTERED_BELOW_THRESHOLD";
+
+                } else if (!hasMomentum(snapshots, direction)) {
+                    filterReason = "FILTERED_NO_MOMENTUM";
+
+                } else {
+                    // ── Orderbook depth gate (Tier 2 and Tier 3 only) ─────────
+                    boolean watched    = Boolean.TRUE.equals(market.getIsWatched());
+                    String severity    = watched ? "critical" : "warning";
+                    boolean bypassDedupe = movePct >= thresholdPct * 2
+                            && isActivelyMoving(snapshots, now);
+
+                    Optional<OrderbookService.BookSnapshot> book;
+                    if (tier == LiquidityTier.TIER_1) {
+                        // Capture for metadata, but gate does not apply
+                        book = captureOrderbook(market.getYesTokenId());
+                    } else {
+                        // Gate applies: check book quality before deciding to fire
+                        book = captureOrderbook(market.getYesTokenId());
+                        if (book.isPresent()) {
+                            OrderbookService.BookSnapshot snap = book.get();
+                            if (snap.spreadBps() > maxSpreadBps) {
+                                recordSuppression(ALERT_TYPE, tier, "spread");
+                                log.info("alert_suppressed_thin_book marketId={} tier={} spreadBps={} depthAtMid={} reason=spread",
+                                        market.getMarketId(), tier.label(),
+                                        String.format("%.2f", snap.spreadBps()),
+                                        String.format("%.2f", snap.depthAtMid()));
+                                filterReason = "FILTERED_THIN_BOOK";
+                            } else if (snap.depthAtMid() < minDepthAtMid) {
+                                recordSuppression(ALERT_TYPE, tier, "depth");
+                                log.info("alert_suppressed_thin_book marketId={} tier={} spreadBps={} depthAtMid={} reason=depth",
+                                        market.getMarketId(), tier.label(),
+                                        String.format("%.2f", snap.spreadBps()),
+                                        String.format("%.2f", snap.depthAtMid()));
+                                filterReason = "FILTERED_THIN_BOOK";
+                            }
+                        }
+                        // book.isEmpty() means the call failed — fire anyway (per spec)
+                    }
+
+                    if (filterReason == null) {
+                        // ── Per-market bypass rate cap ─────────────────────────
+                        if (bypassDedupe) {
+                            int recentCount = countRecentBypassAlerts(market.getMarketId(), now);
+                            if (recentCount >= maxBypassPerHour) {
+                                log.info("alert_rate_capped marketId={} count={}",
+                                        market.getMarketId(), recentCount);
+                                filterReason = "FILTERED_RATE_CAPPED";
+                            }
+                        }
+
+                        if (filterReason == null) {
+                            // ── Fire the alert ────────────────────────────────
+                            // Always use the 30-minute dedupe window so that two polls detecting
+                            // the same directional move within the same bucket produce the same
+                            // alertId and the DynamoDB attribute_not_exists condition deduplicates
+                            // them. Previously bypassDedupe used Duration.ZERO which gave per-second
+                            // IDs and caused the same move to fire 2-3x.
+                            Duration effectiveWindow = dedupeWindow;
+                            // Direction is included in the hash to distinguish UP vs DOWN moves
+                            // within the same time bucket for the same market.
+                            String alertId = AlertIdFactory.generate(ALERT_TYPE,
+                                    market.getMarketId(), now, effectiveWindow, direction);
+                            Instant bucketedAt = AlertIdFactory.bucketedInstant(now, effectiveWindow);
+
+                            Map<String, String> metadata = new HashMap<>();
+                            metadata.put("movePct",        String.format("%.2f", movePct));
+                            metadata.put("fromPrice",      move.fromPrice.toPlainString());
+                            metadata.put("toPrice",        move.toPrice.toPlainString());
+                            metadata.put("direction",      direction);
+                            metadata.put("zoneTransition", zoneTransition.name());
+                            metadata.put("spanMinutes",    String.valueOf(move.spanMinutes));
+                            metadata.put("volume24h",      String.format("%.0f", volume24h));
+                            metadata.put("liquidityTier",  tier.label());
+                            metadata.put("isWatched",      String.valueOf(watched));
+                            metadata.put("bypassedDedupe", String.valueOf(bypassDedupe));
+                            if (book.isPresent()) {
+                                metadata.put("spreadBps",  String.format("%.2f", book.get().spreadBps()));
+                                metadata.put("depthAtMid", String.format("%.2f", book.get().depthAtMid()));
+                            }
+                            metadata.put("detectedAt", now.toString());
+
+                            Alert alert = new Alert();
+                            alert.setAlertId(alertId);
+                            alert.setCreatedAt(bucketedAt.toString());
+                            alert.setType(ALERT_TYPE);
+                            alert.setSeverity(severity);
+                            alert.setMarketId(market.getMarketId());
+                            alert.setTitle(String.format("%.1f%% price move %s", movePct, direction));
+                            alert.setDescription(String.format(
+                                    "%s moved %.1f%% %s in %d min (%.4f → %.4f)",
+                                    market.getQuestion() != null
+                                            ? market.getQuestion() : market.getMarketId(),
+                                    movePct, direction, move.spanMinutes,
+                                    move.fromPrice, move.toPrice));
+                            String linkSlug = market.getSlug() != null
+                                    ? market.getSlug() : market.getMarketId();
+                            alert.setLink("https://polymarket.com/event/" + cleanSlug(linkSlug));
+                            alert.setMetadata(metadata);
+
+                            fired = alertService.tryCreate(alert);
+                            filterReason = fired ? "ALERT_FIRED" : "FILTERED_DEDUPE";
+                        }
+                    }
+                }
+            }
         }
 
-        // Determine severity and dedupe behavior
-        boolean watched = Boolean.TRUE.equals(market.getIsWatched());
-        String severity = watched ? "critical" : "warning";
-        boolean bypassDedupe = movePct >= thresholdPct * 2;
-        Duration effectiveWindow = bypassDedupe ? Duration.ZERO : dedupeWindow;
+        // ── Diagnostic log (fires when move is large enough to be interesting) ─
+        if (movePct >= minDeltaP * 100) {
+            log.debug("price_check marketId={} question={} from={} to={} movePct={}% zone={} momentum={} volWindow={} effectiveThresh={}% result={}",
+                    market.getMarketId(),
+                    market.getQuestion() != null
+                            ? market.getQuestion().substring(0, Math.min(50, market.getQuestion().length()))
+                            : "?",
+                    String.format("%.3f", fromD),
+                    String.format("%.3f", toD),
+                    String.format("%.1f", movePct),
+                    zoneTransition,
+                    hasMomentum(snapshots, direction),
+                    String.format("%.0f", volumeInWindow),
+                    String.format("%.1f", effectiveThresholdPct),
+                    filterReason != null ? filterReason : "ALERT_FIRED");
+        }
 
-        String alertId = AlertIdFactory.generate(ALERT_TYPE, market.getMarketId(),
-                now, effectiveWindow);
-
-        // createdAt must be deterministic for the same alertId so that the
-        // composite key (PK=alertId, SK=createdAt) targets the same DynamoDB
-        // item on every detector cycle. Without this, attribute_not_exists(alertId)
-        // would see a new (PK,SK) slot each second and never reject duplicates.
-        Instant bucketedAt = AlertIdFactory.bucketedInstant(now, effectiveWindow);
-
-        String direction = move.toPrice.compareTo(move.fromPrice) >= 0 ? "up" : "down";
-
-        // Orderbook capture — one CLOB call per alert, not per poll.
-        // 500ms budget; failure → null fields (book is bonus, not a blocker).
-        Optional<OrderbookService.BookSnapshot> book = captureOrderbook(market.getYesTokenId());
-
-        Map<String, String> metadata = new HashMap<>();
-        metadata.put("movePct", String.format("%.2f", movePct));
-        metadata.put("fromPrice", move.fromPrice.toPlainString());
-        metadata.put("toPrice", move.toPrice.toPlainString());
-        metadata.put("direction", direction);
-        metadata.put("spanMinutes", String.valueOf(move.spanMinutes));
-        metadata.put("volume24h", String.format("%.0f", volume24h));
-        metadata.put("isWatched", String.valueOf(watched));
-        metadata.put("bypassedDedupe", String.valueOf(bypassDedupe));
-        book.ifPresent(b -> {
-            metadata.put("spreadBps", String.format("%.2f", b.spreadBps()));
-            metadata.put("depthAtMid", String.format("%.2f", b.depthAtMid()));
-        });
-        metadata.put("detectedAt", now.toString());
-
-        Alert alert = new Alert();
-        alert.setAlertId(alertId);
-        alert.setCreatedAt(bucketedAt.toString());
-        alert.setType(ALERT_TYPE);
-        alert.setSeverity(severity);
-        alert.setMarketId(market.getMarketId());
-        alert.setTitle(String.format("%.1f%% price move %s", movePct, direction));
-        alert.setDescription(String.format("%s moved %.1f%% %s in %d min (%.4f → %.4f)",
-                market.getQuestion() != null ? market.getQuestion() : market.getMarketId(),
-                movePct, direction, move.spanMinutes, move.fromPrice, move.toPrice));
-        alert.setLink("https://polymarket.com/event/" + market.getMarketId());
-        alert.setMetadata(metadata);
-
-        return alertService.tryCreate(alert);
+        return fired;
     }
 
     /**
@@ -242,6 +437,155 @@ public class PriceMovementDetector {
     }
 
     /**
+     * Returns true if the price is actively still moving — i.e., the delta between
+     * the most recent snapshot and a snapshot ~5 minutes ago is at least minDeltaP.
+     *
+     * <p>Used to guard bypass-dedupe mode: a large historical move with a now-settled
+     * price should not continuously re-fire on every 60-second cycle.
+     *
+     * <p>Package-private for test access.
+     */
+    boolean isActivelyMoving(List<PriceSnapshot> snapshots, Instant now) {
+        if (snapshots.isEmpty()) return false;
+
+        // Most recent snapshot
+        PriceSnapshot latest = snapshots.get(snapshots.size() - 1);
+        BigDecimal latestPrice = latest.getMidpoint();
+        if (latestPrice == null) return false;
+
+        // Look for a snapshot from roughly 5 minutes ago (within 2–8 min window)
+        Instant recentCutoff   = now.minus(Duration.ofMinutes(8));
+        Instant recentFloor    = now.minus(Duration.ofMinutes(2));
+
+        BigDecimal olderPrice = null;
+        for (int i = snapshots.size() - 2; i >= 0; i--) {
+            PriceSnapshot snap = snapshots.get(i);
+            if (snap.getMidpoint() == null || snap.getTimestamp() == null) continue;
+            Instant ts = Instant.parse(snap.getTimestamp());
+            if (ts.isBefore(recentCutoff)) break; // too old
+            if (ts.isBefore(recentFloor)) {
+                olderPrice = snap.getMidpoint();
+                break;
+            }
+        }
+
+        if (olderPrice == null) {
+            // Not enough recent history to judge — assume settling to be conservative
+            return false;
+        }
+
+        BigDecimal recentDelta = latestPrice.subtract(olderPrice).abs();
+        return recentDelta.compareTo(BigDecimal.valueOf(minDeltaP)) >= 0;
+    }
+
+    /**
+     * Classify the zone transition for a price move from {@code fromD} to {@code toD}.
+     *
+     * <ul>
+     *   <li>ENTERED_BULLISH — crossed from mid-range into &gt;resolutionZoneHigh</li>
+     *   <li>ENTERED_BEARISH — crossed from mid-range into &lt;resolutionZoneLow</li>
+     *   <li>DEEPENING_BULLISH — was already above high and moved higher</li>
+     *   <li>DEEPENING_BEARISH — was already below low and moved lower</li>
+     *   <li>MID_RANGE — both prices in the 35–65 band, or reversal from resolution zone</li>
+     * </ul>
+     *
+     * Package-private for test access.
+     */
+    ZoneTransition computeZoneTransition(double fromD, double toD, String direction) {
+        boolean toIsHigh = toD > resolutionZoneHigh;
+        boolean toIsLow  = toD < resolutionZoneLow;
+
+        if (toIsHigh && "up".equals(direction)) {
+            // Moving into or deeper into the bullish zone
+            return fromD <= resolutionZoneHigh
+                    ? ZoneTransition.ENTERED_BULLISH
+                    : ZoneTransition.DEEPENING_BULLISH;
+        }
+        if (toIsLow && "down".equals(direction)) {
+            // Moving into or deeper into the bearish zone
+            return fromD >= resolutionZoneLow
+                    ? ZoneTransition.ENTERED_BEARISH
+                    : ZoneTransition.DEEPENING_BEARISH;
+        }
+        // Everything else: mid-range move, or reversal away from a resolution zone
+        return ZoneTransition.MID_RANGE;
+    }
+
+    /**
+     * Approximate volume traded during the detection window by computing the delta
+     * between the latest and earliest snapshot's {@code volume24h} field.
+     *
+     * <p>Returns the positive delta if the volume24h values differ (indicating the
+     * market's rolling 24h volume changed during the window). Returns {@code -1.0}
+     * as a sentinel when the values are identical or null, indicating that per-window
+     * volume data is not available and callers should fall back to market-level volume.
+     *
+     * <p>Package-private for test access.
+     */
+    double computeVolumeInWindow(List<PriceSnapshot> snapshots) {
+        if (snapshots.size() < 2) return -1.0;
+        BigDecimal earliest = snapshots.get(0).getVolume24h();
+        BigDecimal latest   = snapshots.get(snapshots.size() - 1).getVolume24h();
+        if (earliest == null || latest == null) return -1.0;
+        if (earliest.compareTo(latest) == 0) return -1.0; // static — no per-window data
+        double delta = latest.subtract(earliest).doubleValue();
+        return delta >= 0 ? delta : -1.0; // guard against clock skew or stale data
+    }
+
+    /**
+     * Check that the most recent snapshot-to-snapshot move is in {@code direction}.
+     * If fewer than 3 snapshots are available, returns true (no penalization).
+     * Null midpoints are treated as non-moving (conservative).
+     *
+     * <p>Requires only the latest move to be in the correct direction. This filters
+     * stale/reversed signals (latest snapshot moved against direction) but allows
+     * intermediate jitter (one flat or reversed step in the middle).
+     *
+     * <p>Package-private for test access.
+     */
+    boolean hasMomentum(List<PriceSnapshot> snapshots, String direction) {
+        int n = snapshots.size();
+        if (n < 3) return true;
+
+        PriceSnapshot s1 = snapshots.get(n - 2);
+        PriceSnapshot s2 = snapshots.get(n - 1); // most recent
+
+        if (s1.getMidpoint() == null || s2.getMidpoint() == null) {
+            return true; // missing data: don't penalize
+        }
+
+        boolean up = "up".equals(direction);
+
+        // Only require the latest move to be in the right direction.
+        // This filters stale/reversed signals but allows intermediate jitter.
+        return up
+                ? s2.getMidpoint().compareTo(s1.getMidpoint()) > 0
+                : s2.getMidpoint().compareTo(s1.getMidpoint()) < 0;
+    }
+
+    /**
+     * Count price_movement alerts fired for this market in the last 60 minutes,
+     * using the marketId-createdAt-index GSI. Returns 0 if the table is unavailable
+     * (e.g. in unit-test contexts where alertsTable is null).
+     *
+     * <p>Package-private so tests can override to inject a fixed count.
+     */
+    int countRecentBypassAlerts(String marketId, Instant now) {
+        if (alertsTable == null) return 0;
+        String from = now.minus(Duration.ofHours(1)).toString();
+        String to   = now.toString();
+        var qc = QueryConditional.sortBetween(
+                Key.builder().partitionValue(marketId).sortValue(from).build(),
+                Key.builder().partitionValue(marketId).sortValue(to).build());
+        return (int) alertsTable.index("marketId-createdAt-index")
+                .query(r -> r.queryConditional(qc))
+                .stream()
+                .flatMap(p -> p.items().stream())
+                .filter(a -> ALERT_TYPE.equals(a.getType()))
+                .count();
+    }
+
+    /**
      * Capture orderbook depth. Package-private so tests can override to
      * inject synthetic book data or simulate failures.
      */
@@ -268,6 +612,23 @@ public class PriceMovementDetector {
                 .toList();
     }
 
+    private double thresholdForTier(LiquidityTier tier) {
+        return switch (tier) {
+            case TIER_1 -> thresholdPctTier1;
+            case TIER_2 -> thresholdPctTier2;
+            case TIER_3 -> thresholdPctTier3;
+        };
+    }
+
+    private void recordSuppression(String detectorType, LiquidityTier tier, String reason) {
+        Counter.builder("polysign.alerts.suppressed")
+                .tag("type",   detectorType)
+                .tag("tier",   tier.label())
+                .tag("reason", reason)
+                .register(meterRegistry)
+                .increment();
+    }
+
     private static double pctChange(BigDecimal from, BigDecimal to) {
         if (from.signum() == 0) return 0.0;
         return to.subtract(from)
@@ -279,6 +640,27 @@ public class PriceMovementDetector {
     private static double parseVolume(String raw) {
         if (raw == null || raw.isBlank()) return 0.0;
         try { return Double.parseDouble(raw); } catch (NumberFormatException e) { return 0.0; }
+    }
+
+    /**
+     * Strips trailing numeric outcome IDs from a Polymarket market-level slug to produce
+     * an event-level URL. Market slugs follow the pattern {@code {event-slug}-{outcome-id}}.
+     * Only strips segments that are purely numeric, 3+ digits, and don't look like years (2020–2030).
+     */
+    static String cleanSlug(String slug) {
+        if (slug == null) return slug;
+        String s = slug;
+        while (true) {
+            int last = s.lastIndexOf('-');
+            if (last < 0) break;
+            String tail = s.substring(last + 1);
+            if (!tail.matches("\\d+")) break;                                         // not purely numeric
+            if (tail.length() < 3) break;                                             // 1-2 digit numbers are not outcome IDs
+            if (tail.length() == 4 && tail.compareTo("2020") >= 0
+                    && tail.compareTo("2030") <= 0) break;                            // looks like a year — keep
+            s = s.substring(0, last);
+        }
+        return s;
     }
 
     /** Result of the max-move search — package-private for testability. */

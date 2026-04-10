@@ -44,7 +44,7 @@ class PhoneWorthinessFilterTest {
         TestableFilter(DynamoDbTable<Alert> table,
                        SignalPerformanceService svc,
                        AppClock clock) {
-            super(table, svc, clock);
+            super(table, svc, clock, 0.60);
         }
 
         void stubRecentAlerts(List<Alert> alerts) { this.stubbedAlerts = alerts; }

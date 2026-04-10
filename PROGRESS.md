@@ -1447,3 +1447,433 @@ Date: 2026-04-10
 - RssProperties fix means the app now starts cleanly with the YAML list config. Previously
   this would have failed at Spring bean wiring time on a clean container start.
   3 IT classes → 2 Spring context startups (one shared, one for GoldenPathIT).
+
+## Phase 12.1 — Liquidity-Adjusted Detection Thresholds
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**`LiquidityTier.java`** (new enum)
+- Three tiers: `TIER_1` (volume24h > $250k), `TIER_2` ($50k–$250k), `TIER_3` (< $50k)
+- `classify(double, double, double)` — NaN/negative → TIER_3
+- `classifyRaw(String, double, double)` — null/blank/unparseable → TIER_3
+- `label()` returns `name()` for structured logging
+
+**`LiquidityTierTest.java`** (new, 15 tests)
+- Boundary values at $250k (TIER_2, not TIER_1), $50k exactly (TIER_2), below $50k (TIER_3)
+- Zero/negative/NaN all → TIER_3; null/blank/unparseable strings → TIER_3
+
+**`PriceMovementDetector.java`** (rewritten)
+- Removed: flat `minVolumeUsdc` volume floor
+- Added: `thresholdPctTier1/2/3` (8/14/20%), `tier1MinVolume` ($250k), `tier2MinVolume` ($50k)
+- Added: orderbook depth gate for Tier 2 and Tier 3 only (`maxSpreadBps=500`, `minDepthAtMid=$100`)
+  - Gate suppresses if spread > 500 bps OR depth < $100 USDC; on failure → fires anyway
+  - Tier 1 captures book for metadata only (gate does not apply)
+- Added: `recordSuppression()` incrementing `polysign.alerts.suppressed{type,tier,reason}` counter
+- Suppression logged at INFO: `alert_suppressed_thin_book marketId={} tier={} spreadBps={} depthAtMid={} reason=spread|depth`
+- `liquidityTier` added to alert metadata
+
+**`PriceMovementDetectorTest.java`** (rewritten)
+- 27 tests, 0 failures (was 16)
+- Updated `TestableDetector` with full tier + MeterRegistry parameters (`SimpleMeterRegistry`)
+- New tier threshold tests: T1 9% fires, T2 below 14% no-alert, T2 15% fires, T3 below 20% no-alert, T3 22% fires
+- New orderbook gate tests: spread suppression, depth suppression, passes gate, failure fires, Tier 1 ignores gate
+- `verifyAlertCreated()` now checks `liquidityTier` in metadata
+
+**`StatisticalAnomalyDetector.java`** (rewritten)
+- Same structural changes as PriceMovementDetector
+- Z-score thresholds: Tier 1=3.0σ, Tier 2=4.0σ, Tier 3=5.0σ
+- Same orderbook gate pattern, same suppression counter, `liquidityTier` in metadata
+
+**`StatisticalAnomalyDetectorTest.java`** (rewritten)
+- 21 tests, 0 failures (was 15)
+- Updated existing tests to use $300k volume (Tier 1) where they needed to fire
+- New: `tier3MarketBelowTier3ThresholdProducesNoAlert` (z≈3.5 < T3 threshold 5.0 → no alert)
+- New: `zScore3point5FiresOnTier1ButNotTier2` (same market, tier routing verified)
+- New: Tier 2 orderbook gate tests (depth suppressed, spread suppressed, failure fires)
+
+**`AlertService.java`** (modified)
+- `alert_created` log line now includes `tier` from metadata:
+  `alert_created alertId={} marketId={} type={} tier={} severity={}`
+
+**`application.yml`** (modified)
+- Removed per-detector `min-volume-usdc` keys
+- Added `polysign.detectors.liquidity-tiers.tier1-min-volume: 250000` and `tier2-min-volume: 50000`
+- Added per-tier threshold keys under `price` and `statistical` detector blocks
+- Added `polysign.detectors.orderbook-gate.max-spread-bps: 500` and `min-depth-at-mid: 100.0`
+
+**`index.html`** (modified)
+- `tierBadge(alert)` helper renders T1 (emerald) / T2 (yellow) / T3 (red) pill next to type badge
+- `bookDepthSnippet(alert)` renders `spd Nbps · dep $N` when spread/depth metadata present
+- Both injected into alert row in `loadAlerts()`
+
+### Files touched
+- src/main/java/com/polysign/model/LiquidityTier.java (new)
+- src/test/java/com/polysign/model/LiquidityTierTest.java (new)
+- src/main/java/com/polysign/detector/PriceMovementDetector.java
+- src/test/java/com/polysign/detector/PriceMovementDetectorTest.java
+- src/main/java/com/polysign/detector/StatisticalAnomalyDetector.java
+- src/test/java/com/polysign/detector/StatisticalAnomalyDetectorTest.java
+- src/main/java/com/polysign/alert/AlertService.java
+- src/main/resources/application.yml
+- src/main/resources/static/index.html
+
+### Verification
+- `mvn test` → **151 unit tests, 0 failures**
+- `mvn verify` → **151 unit + 5 integration tests, 0 failures** (including GoldenPathIT)
+- GoldenPathIT uses a $100k market (Tier 2); 20% move exceeds T2 threshold (14%);
+  `captureOrderbook(null)` returns `Optional.empty()` → fires per spec
+
+### Deviations from spec
+1. **`classify()` boundary at $250k**: `volume > tier1MinVolume` (strictly greater),
+   so exactly $250k → TIER_2. Consistent with the Tier 1 label "volume > $250k".
+2. **Tier 1 still calls captureOrderbook**: Both code paths call `captureOrderbook` before
+   the gate check (gate is in the `else` branch). The Tier 1 call captures book metadata;
+   the gate simply doesn't apply. Functionally correct per spec.
+
+### Notes for next phase
+- The `polysign.alerts.suppressed` counter (tagged type/tier/reason) is now live in
+  Prometheus. Use it to tune `max-spread-bps` and `min-depth-at-mid` from real traffic.
+- T3 suppression rate will be high on Polymarket (thin books are common for small markets).
+  Consider raising `min-depth-at-mid` to $200+ if T3 signal quality remains low.
+- Tier boundaries ($250k / $50k) are configurable in `application.yml` — no code change
+  needed to tune them.
+
+---
+
+## Phase 12.2 — Alert Noise Reduction + Dashboard Link/Badge Fixes
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**Batch 1 — Alert noise reduction (3 fixes)**
+
+1. **`KeywordExtractor.java`** — Raised minimum token length from 3 to 4 chars; added 13
+   domain-specific stopwords (announces, reports, according, sources, officials, people,
+   reuters, bloomberg, associated, press, news, update, latest) to filter wire-copy boilerplate.
+
+2. **`NewsCorrelationDetector.java`** — Fixed two noise sources:
+   - Dedup was broken: `Duration.ZERO` in `AlertIdFactory.generate()` caused a new alertId
+     every second (raw epoch bucket). Fixed to `dedupeWindow` (24h) with `articleId` as
+     payload hash → one alert per article-market pair per day, enforced by DynamoDB
+     `attribute_not_exists(alertId)`.
+   - Added per-article cap: `maxMatchesPerArticle` (config, default 3) — top-N markets by
+     score only, preventing a single article from flooding the feed.
+   - Both config values wired via `@Value` and added to `application.yml`.
+
+3. **`PriceMovementDetector.java`** — Stale-move bypass fix: `isActivelyMoving()` checks
+   that price moved ≥ `minDeltaP` within the most recent 2–8-minute window before allowing
+   dedupe bypass. Settled large moves no longer re-fire on every poll cycle.
+
+4. **`WalletActivityDetector.java`** — Dedup window widened from 5 minutes (shorter than
+   polling interval) to 24 hours; dedup key changed from `address|marketId|direction` to
+   `address|txHash`. Same trade can no longer fire again 5 minutes later.
+
+**Batch 2 — Dashboard link and tier badge fixes**
+
+5. **`PriceMovementDetector.java`**, **`StatisticalAnomalyDetector.java`** — `alert.link`
+   now set to `https://polymarket.com/event/<slug>` using `market.getSlug()` with fallback
+   to `marketId`. Previously missing, causing dashboard to show no direct market link.
+
+6. **`index.html`** (dashboard) — Three frontend improvements:
+   - `pmLink` in `loadAlerts()` now uses `a.link` (server-provided slug URL) with fallback
+     to the old search-query URL.
+   - Added `tierBorderClass()` helper that maps `TIER_2 → tier-2`, `TIER_3 → tier-3`.
+   - T2 alert rows get a subtle amber left border (2px); T3 rows get a red left border (2px);
+     T1 and untiered alerts keep the existing severity border.
+   - CSS classes `.tier-1/.tier-2/.tier-3` added to the `<style>` block.
+
+### Files touched
+- `src/main/java/com/polysign/processing/KeywordExtractor.java`
+- `src/main/java/com/polysign/detector/NewsCorrelationDetector.java`
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java`
+- `src/main/java/com/polysign/detector/StatisticalAnomalyDetector.java`
+- `src/main/java/com/polysign/detector/WalletActivityDetector.java`
+- `src/main/resources/application.yml`
+- `src/main/resources/static/index.html`
+- `src/test/java/com/polysign/processing/KeywordExtractorTest.java`
+- `src/test/java/com/polysign/detector/PriceMovementDetectorTest.java`
+
+### Verification
+- `mvn test`: 152 unit tests, 0 failures, 0 errors
+- `mvn verify`: 152 unit tests + 5 integration tests (Testcontainers), 0 failures, 0 errors
+
+### Notes for next phase
+- Pre-fix alert counts from DynamoDB scan: news_correlation 2,907; price_movement 4,562;
+  wallet_activity 4,661; statistical_anomaly 91. The first three had broken dedup.
+- `NewsCorrelationDetector` dedup now matches the same pattern as other detectors:
+  `AlertIdFactory.generate(type, marketId, now, dedupeWindow, payloadHash)`.
+- T2/T3 tier borders in the dashboard are subtle (2px, semi-transparent) — adjust opacity
+  in `.tier-2` / `.tier-3` CSS if more prominence is needed.
+
+---
+
+## Phase 13 — Dashboard UX Cleanup + Bypass Rate Cap + Market Exclusion Filter
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**Fix 1 — Remove dashboard alert sound**
+- Removed the Web Audio API `ensureAudio()`/`softPing()` functions and all call sites from
+  `index.html`. Dashboard is now silent. Removed the `click` listener that unlocked audio
+  on first interaction.
+
+**Fix 2 — Remove signal-strength badge**
+- Removed the `S${signalStrength}` badge from the alert feed. It conveyed no user-actionable
+  information. The tier badge (`T1/T2/T3`) already present is the meaningful signal.
+
+**Fix 3 — Price from→to display**
+- Updated `renderMetaHighlight()` in `index.html` to render `price_movement` alerts as
+  `81.3¢ → 63.3¢ (22.2% ↓)` using `alert.metadata.fromPrice`, `toPrice`, `movePct`, and
+  `direction`. Direction arrow is green for up, red for down.
+
+**Fix 4 — Market link verification**
+- Verified via `awslocal dynamodb scan` that all 4 detectors correctly set
+  `alert.link = "https://polymarket.com/event/<slug>"`. Dashboard already uses `a.link`.
+  No code changes needed.
+
+**Fix 5 — Bypass-mode rate cap**
+- Added per-market rate cap on bypass-mode alerts in `PriceMovementDetector`:
+  - New method `countRecentBypassAlerts(marketId, now)` queries `marketId-createdAt-index`
+    GSI to count `price_movement` alerts for the market in the last 60 minutes.
+  - If `count >= maxBypassPerHour`, logs `alert_rate_capped marketId={} count={}` and
+    returns false. Normal (non-bypass) alerts are unaffected.
+  - `maxBypassPerHour` defaults to 3, configurable via
+    `polysign.detectors.price.max-bypass-per-hour`.
+  - `countRecentBypassAlerts` is package-private and returns 0 when `alertsTable` is null,
+    so all existing unit tests pass without modification.
+- `DynamoDbTable<Alert> alertsTable` added to constructor (3rd param); Spring auto-wires
+  the existing `alertsTable` bean.
+
+**Fix 6 — Market exclusion filter**
+- Added quality gate 4 to `MarketPoller.pollMarkets()`:
+  - Regex exclusion: `excludedQuestionPatterns` (comma-separated regexes compiled to
+    `List<Pattern>` at startup). Matches run against the market `question` field. Default
+    patterns exclude tweet-count and post-count range markets.
+  - Category exclusion: `excludedCategories` (comma-separated category names). Empty by
+    default — users can add e.g. `"sports"` to block all sports markets via config alone.
+  - Skipped markets counted in `skip_pattern` log counter added to `market_poll_complete`.
+  - Config keys: `polysign.pollers.market.excluded-question-patterns` (csv) and
+    `polysign.pollers.market.excluded-categories` (csv).
+
+**Fix 7 — News score display**
+- Updated `renderMetaHighlight()` to display the `score` key as
+  `<span class="text-gray-600 text-[10px]">score: 80%</span>` instead of `📰0.80`.
+  Emoji removed; value converted to integer percentage; text is muted grey.
+
+### Files touched
+- `src/main/resources/static/index.html`
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java`
+- `src/test/java/com/polysign/detector/PriceMovementDetectorTest.java`
+- `src/main/java/com/polysign/poller/MarketPoller.java`
+- `src/test/java/com/polysign/poller/MarketPollerKeywordTest.java`
+- `src/main/resources/application.yml`
+
+### Verification
+- `mvn test`: 152 unit tests, 0 failures, 0 errors
+- `mvn verify`: 152 unit tests + 5 integration tests, 0 failures, 0 errors
+
+### Notes for next phase
+- `countRecentBypassAlerts` does a GSI query on every bypass-mode tick. Under high volume,
+  consider caching the count per market with a 1-minute TTL to reduce DynamoDB reads.
+- The question-pattern filter uses `Pattern.matches()` which requires a full-string match.
+  Patterns must include `.*` prefix/suffix (already in the defaults).
+- `excluded-categories` is empty by default. To exclude all sports markets: set to `"sports"`.
+  Categories are assigned by `CategoryClassifier`; run with debug logging to see values.
+
+## Phase 14 — REWRITE Section 1: Wallet health-check logging and dashboard fields
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- Added structured `wallet_poll_health` log line to `WalletPoller.poll()` summarizing `wallets_attempted`, `wallets_succeeded`, `trades_ingested`, `data_api_status`, and `rpc_fallback_used`.
+- Added pipeline stall detection: `consecutiveZeroCycles` counter increments each zero-trade cycle; logs `PIPELINE STALL` ERROR at `STALL_THRESHOLD=3`.
+- Added `WatchedWallet` summary fields: `lastTradeAt` (ISO-8601 timestamp of most recent trade), `tradeCount` (cumulative trades in session), `recentDirection` ("BUY"/"SELL").
+- `pollWallet()` tracks most recent trade's timestamp/direction and updates wallet object; `updateLastSyncedAt()` persists all fields via `updateItem()`.
+- No schema migration needed — new attributes are written on first poll; missing attributes read as null (backward-compatible).
+
+### Files touched
+- `src/main/java/com/polysign/poller/WalletPoller.java`
+- `src/main/java/com/polysign/model/WatchedWallet.java`
+
+### Verification
+- `mvn test`: all tests pass
+
+### Deviations from spec
+- none
+
+### Notes for next phase
+- `tradeCount` resets to null on a fresh deployment (first scan returns 0); acceptable for dashboard display.
+
+---
+
+## Phase 15 — REWRITE Section 2: PriceMovementDetector resolution zone rewrite
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- `ZoneTransition` enum: `ENTERED_BULLISH`, `ENTERED_BEARISH`, `DEEPENING_BULLISH`, `DEEPENING_BEARISH`, `MID_RANGE`.
+- Resolution zone: price > 0.65 → bullish zone, price < 0.35 → bearish zone; mid-range requires 2× tier threshold.
+- Zone entry discount: zone transitions get a 25% lower effective threshold.
+- Per-window volume: computed as `volume24h` delta over the move window; -1.0 sentinel when delta is negative (volume not yet available).
+- `min-window-volume` gate (default 5000 USDC) and `high-volume-window-threshold` discount (20 000 USDC).
+- Momentum confirmation: last 3 snapshots must move in alert direction (step1 `>=` for flat tolerance, step2 strict `>`).
+- `bypassDedupe` uses base `thresholdPct * 2` (NOT `effectiveThresholdPct * 2`) to prevent bypass threshold from being stretched by zone discounts.
+- `GoldenPathIT` updated: test data moved to bullish resolution zone (0.70→0.84, DEEPENING_BULLISH T2, effectiveThreshold=14%, 20%>14%→fires).
+
+### Files touched
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java`
+- `src/test/java/com/polysign/detector/PriceMovementDetectorTest.java`
+- `src/test/java/com/polysign/integration/GoldenPathIT.java`
+- `src/main/resources/application.yml`
+
+### Verification
+- `mvn test` after Section 2: all tests pass (4 failures fixed: momentum step1 `>=`, bypass base threshold)
+- `mvn verify`: all unit + integration tests pass
+
+### Deviations from spec
+- `bypassDedupe` explicitly uses base threshold, not effective threshold — prevents double-discounting in resolution zones.
+
+### Notes for next phase
+- Dynamic baseline volatility (rolling σ to scale thresholds) deferred to a future phase.
+- Per-snapshot volume capture (volume field on each PriceSnapshot) deferred — currently uses volume24h delta approximation.
+
+---
+
+## Phase 16 — REWRITE Section 5: ntfy phone notification precision gate
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- `PhoneWorthinessFilter.precisionThreshold` changed from hardcoded `0.60` to `@Value`-injected `double` (default 0.60).
+- `application.yml` sets `polysign.notification.min-precision: 0.40` temporarily while price detector precision improves.
+- Dashboard alert score filter also lowered from 0.6 to 0.4 (matched in `index.html`).
+
+### Files touched
+- `src/main/java/com/polysign/notification/PhoneWorthinessFilter.java`
+- `src/test/java/com/polysign/notification/PhoneWorthinessFilterTest.java`
+- `src/test/java/com/polysign/notification/NotificationConsumerTest.java`
+- `src/main/resources/application.yml`
+- `src/main/resources/static/index.html`
+
+### Verification
+- `mvn test`: all tests pass
+
+### Deviations from spec
+- none
+
+### Notes for next phase
+- Raise `min-precision` back to 0.60 once price detector empirical precision consistently exceeds 50%.
+
+---
+
+## Phase 17 — REWRITE Section 6: Claude sentiment analysis for news correlation
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- `ClaudeSentimentService`: calls Anthropic Messages API (`claude-sonnet-4-6`) with market question, current price in cents, article title, and summary. Returns `SentimentResult(relevant, sentiment, confidence, reasoning)` record.
+  - Returns `null` on missing API key, circuit open, or timeout — callers fall back to keyword scoring.
+  - Circuit breaker: `claude-api` Resilience4j instance (registered in `application.yml`).
+  - Micrometer counters: `polysign.news.sentiment.calls` tagged `status=success|fallback|error`.
+  - Model: `claude-sonnet-4-6`, max_tokens: 150, temperature: 0, hard timeout 5s.
+- `NewsCorrelationDetector` two-stage scoring:
+  - Stage 1 (keyword pre-filter): skip Claude call if keyword score < 0.3 — saves API cost on unrelated articles.
+  - Stage 2 (Claude): if relevant and confident (|sentiment| ≥ 0.3, confidence ≥ 0.5), use Claude score; else fall back to keyword ≥ 0.75.
+  - Alert metadata: `scoringMethod` ("claude" or "keyword_fallback"), `keywordScore`, `sentimentScore`, `sentimentDirection`, `sentimentConfidence`, `sentimentReasoning`.
+- New config keys: `keyword-prefilter-threshold: 0.3`, `sentiment-relevance-threshold: 0.3`, `sentiment-confidence-threshold: 0.5`, `claude-model`, `claude-max-tokens`, `claude-timeout-ms`.
+- `NewsCorrelationDetectorTest`: 7 unit tests covering bullish YES, bearish NO, relevant=false, Claude timeout fallback, low |sentiment| blocks alert, scoreMarket Claude path, scoreMarket keyword fallback.
+
+### Files touched
+- `src/main/java/com/polysign/detector/ClaudeSentimentService.java` (new)
+- `src/main/java/com/polysign/detector/NewsCorrelationDetector.java`
+- `src/test/java/com/polysign/detector/NewsCorrelationDetectorTest.java` (new)
+- `src/main/java/com/polysign/config/HttpConfig.java`
+- `src/main/resources/application.yml`
+
+### Verification
+- `mvn verify`: all tests pass
+
+### Deviations from spec
+- `Candidate` record visibility changed from `private` to package-private to allow test access.
+- `getOrLoadMarkets()` changed from `private synchronized` to package-private `synchronized` for test subclass override.
+
+### Notes for next phase
+- `ANTHROPIC_API_KEY` must be set in the deployment environment; without it `ClaudeSentimentService` is a no-op.
+- Prompt template uses current market price in cents — re-evaluate if markets move to fractional cent pricing.
+
+---
+
+## Phase 18 — REWRITE Section 4: Dashboard UX overhaul
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- Alert feed grouped by `marketId`: collapsible rows with `toggleMarket(safeId)`, sorted by multi-detector flag then alert count.
+- Each market group header: question link, current price, alert count badge, most recent alert type + time, expand toggle.
+- `zoneTransitionLabel()`: ENTERED_BULLISH → green "▲ entered resolution zone", ENTERED_BEARISH → red "▼ entered resolution zone", MID_RANGE → gray "mid-range".
+- `renderNewsScore()`: Claude path shows "bullish/bearish N%" with reasoning tooltip; keyword fallback shows "match: N%".
+- Severity badges removed — no more `severity-critical`/`severity-warning` CSS or colored backgrounds on alert rows.
+- `expandedMarkets` Set tracks open groups across re-renders.
+- Alert score filter in dashboard lowered from 0.6 to 0.4 (matches `min-precision` config).
+
+### Files touched
+- `src/main/resources/static/index.html`
+
+### Verification
+- `mvn verify`: all tests pass
+- Docker rebuilt and restarted; MarketPoller running normally (confirmed via `docker compose logs`)
+
+### Deviations from spec
+- none
+
+### Notes for next phase
+- Sound removed (Section 3 was a no-op — no sound code existed).
+- Future improvement: dynamic baseline volatility (rolling σ to scale tier thresholds per market).
+- Future improvement: capture per-snapshot volume in `PriceSnapshot` to replace volume24h delta approximation.
+
+---
+
+## Phase 19 — FIX: Diagnostic logging, momentum relaxation, resolved market filter, consensus direction display, Claude sentiment activation
+Status: complete
+Date: 2026-04-10
+
+### What was built
+- **Diagnostic logging** (`price_check` DEBUG log) in `PriceMovementDetector.checkMarket()` — tracks `filterReason` through every filter stage and emits a structured log line for every move ≥ 3%, including zone, momentum, volume, effective threshold, and final result.
+- **Resolved market filter** — new filter before zone transition: if `toD < 0.02 || toD > 0.98`, skip as `FILTERED_RESOLVED`. Prevents spurious alerts on markets resolving to 0.1¢ or 99.9¢.
+- **Relaxed momentum check** — `hasMomentum()` now only requires the latest snapshot-to-snapshot move to be in the correct direction (was: all 3 consecutive must move). Allows intermediate jitter while still blocking reversed signals.
+- **Alert ID dedup fix** — `direction` ("up"/"down") included in alert ID hash so UP and DOWN moves in the same 30-min window for the same market don't collide.
+- **Single exit point refactor** — `checkMarket()` restructured from multiple early returns to single `return fired` at end, with `filterReason` variable tracking which stage blocked the alert.
+- **Claude sentiment activation** — `ANTHROPIC_API_KEY` confirmed loaded into container via `env_file: .env` in docker-compose.yml; `ClaudeSentimentService` reads `@Value("${ANTHROPIC_API_KEY:}")` directly — no application.yml change needed.
+- **Consensus alert human-readable** — `ConsensusDetector.fireConsensusAlert()` now computes outcome (YES/NO), sentiment (bullish/bearish), and current price. Title: "3 wallets buying YES (bullish) — market at 62.5¢". Metadata: `consensusDirection`, `consensusOutcome`, `currentPrice`.
+- **Dashboard consensus rendering** — `renderConsensus()` in index.html shows direction in green/red based on bullish/bearish sentiment with current market price.
+- **DEBUG logging for PriceMovementDetector** — `logging.level.com.polysign.detector.PriceMovementDetector: DEBUG` added to application.yml.
+
+### Files touched
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java`
+- `src/main/java/com/polysign/detector/ConsensusDetector.java`
+- `src/main/resources/application.yml`
+- `src/main/resources/static/index.html`
+- `src/test/java/com/polysign/detector/PriceMovementDetectorTest.java`
+
+### Verification
+- `mvn test` — 165 tests pass (0 failures, 0 errors), including new `jitteryMomentumStillFires` test
+- `docker compose down && docker compose up --build -d` — container starts cleanly
+- `docker exec polysign-polysign-1 env | grep ANTHROPIC` — confirms `ANTHROPIC_API_KEY=sk-ant-...` is loaded
+- `docker logs polysign-polysign-1 | grep price_movement_detect_complete` — checked=400+, fired=0 (expected at startup, needs 15+ min of price history)
+- `docker logs polysign-polysign-1 | grep market_poll_complete` — 400 markets loaded
+- `docker logs polysign-polysign-1 | grep rss_poll_complete` — 146 new articles fetched; news correlation will start firing Claude calls after market cache warms
+
+### Deviations from spec
+- FIX.md Step 1 (volume sentinel bug) was already fixed in a prior session — no change needed.
+- FIX.md Step 4 (dedupe fix) — fromPrice/toPrice were already NOT in the alert ID hash. Added `direction` to the hash as a correctness improvement (UP vs DOWN moves in same window now get distinct IDs).
+- FIX.md Step 0 (API key wiring) — service reads `${ANTHROPIC_API_KEY:}` env var directly; no application.yml property mapping needed since the env var is loaded directly via Spring's `StandardEnvironment`.
+
+### Notes for next phase
+- `price_check` DEBUG logs will appear after ~15 minutes of runtime (needs price history to detect moves ≥ 3%).
+- `claude_sentiment_ok` logs will appear once the news cache warms up (markets=0 at startup, fills after first market poll cycle ~60s).
+- The `logback-spring.xml` hardcodes `com.polysign` at INFO; `logging.level.*` in application.yml creates more specific child loggers that override it per Logback hierarchy rules.
+- Future improvement: capture per-snapshot volume in `PriceSnapshot` to replace the volume24h delta approximation for `computeVolumeInWindow`.

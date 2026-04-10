@@ -1,0 +1,1 @@
+Read `PROGRESS.md` to reconstruct state, then read `REWRITE.md` and implement all 5 sections in the order specified. Read each source file on-demand right before modifying it. Run `mvn test` after Section 2. Run `mvn verify` at the end. Rebuild and restart Docker after all changes. Update `PROGRESS.md` when complete.

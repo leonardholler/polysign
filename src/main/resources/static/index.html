@@ -3,47 +3,131 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PolySign Dashboard</title>
+  <title>PolySign</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = { darkMode: 'class' }</script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-  <style>
-    body { background: #0a0e17; }
-    .badge-ring { box-shadow: 0 0 0 2px #f59e0b; }
-    .severity-critical { border-left: 3px solid #ef4444; }
-    .severity-warning  { border-left: 3px solid #f59e0b; }
-    .severity-info     { border-left: 3px solid #3b82f6; }
-    .ping-anim { animation: ping-once 0.6s ease-out; }
-    @keyframes ping-once {
-      0%   { transform: scale(1); opacity: 1; }
-      80%  { transform: scale(1.06); opacity: 0.8; }
-      100% { transform: scale(1); opacity: 1; }
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            gray: {
+              950: '#030712',
+            }
+          }
+        }
+      }
     }
+  </script>
+  <style>
+    html, body { background: #030712; }
+    .live-pulse { animation: pulse-live 2s infinite; }
+    @keyframes pulse-live {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+    .progress-bar-fill { transition: width 0.4s ease; }
   </style>
 </head>
-<body class="text-gray-100 min-h-screen font-mono">
+<body class="text-gray-100 min-h-screen font-mono text-sm">
 
-<!-- ── Header stats bar ─────────────────────────────────────────────────── -->
-<header class="px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-400 sticky top-0 z-20" style="background:linear-gradient(180deg,#0f1420 0%,#0a0e17 100%);border-bottom:1px solid rgba(59,130,246,0.15)">
-  <span class="text-white font-bold text-base mr-2">PolySign</span>
-  <span>Markets: <span id="s-markets" class="text-green-400 font-semibold">—</span></span>
-  <span>Alerts today: <span id="s-alerts" class="text-yellow-400 font-semibold">—</span></span>
-  <span>Watched wallets: <span id="s-wallets" class="text-blue-400 font-semibold">—</span></span>
-  <span>Last poll: <span id="s-poll" class="font-semibold">—</span></span>
-  <span class="ml-auto flex items-center gap-1">
-    ntfy:
-    <code id="s-topic" class="text-purple-400 cursor-pointer hover:underline" title="Click to copy">—</code>
-    <button onclick="copyTopic()" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-1 rounded text-[10px]">copy</button>
+<!-- ── Fixed header ─────────────────────────────────────────────────────── -->
+<header class="fixed top-0 left-0 right-0 z-30 h-10 flex items-center px-4 gap-3 border-b border-gray-800"
+        style="background:#030712;">
+  <span class="font-bold text-white text-base tracking-tight mr-2">PolySign</span>
+  <span id="conn-status" class="flex items-center gap-1.5 text-xs">
+    <span id="conn-dot" class="w-2 h-2 rounded-full bg-gray-600"></span>
+    <span id="conn-label" class="text-gray-500">—</span>
+  </span>
+  <span class="text-gray-700 text-xs hidden sm:inline">|</span>
+  <span class="text-gray-500 text-xs hidden sm:inline">
+    <span id="h-markets" class="text-gray-300">—</span> markets
+  </span>
+  <span class="text-gray-700 text-xs hidden sm:inline">|</span>
+  <span class="text-gray-500 text-xs hidden sm:inline">
+    poll <span id="h-poll" class="text-gray-300">—</span>
+  </span>
+  <span class="ml-auto text-gray-500 text-xs hidden sm:flex items-center gap-1">
+    ntfy: <code id="h-topic" class="text-purple-400 cursor-pointer hover:underline" title="Click to copy" onclick="copyTopic()">—</code>
   </span>
 </header>
 
-<main class="max-w-screen-xl mx-auto px-4 py-4 space-y-6">
+<div class="pt-10">
 
-<!-- ── Signal Quality Panel ─────────────────────────────────────────────── -->
-<section id="signal-quality-section">
-  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Signal Quality <span class="text-gray-600 font-normal normal-case">(7-day lookback, refreshed every 60s)</span></h2>
-  <div class="overflow-x-auto">
-    <table class="w-full text-xs border-collapse">
+<!-- ── Stats row ─────────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-800 border-b border-gray-800">
+  <div class="bg-gray-900 px-4 py-3">
+    <div class="text-xs text-gray-500 mb-0.5">Markets Tracked</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-markets">—</div>
+    <div class="text-xs text-gray-600" id="st-watched">— watched</div>
+  </div>
+  <div class="bg-gray-900 px-4 py-3">
+    <div class="text-xs text-gray-500 mb-0.5">Alerts Today</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-alerts">—</div>
+    <div class="text-xs text-gray-600" id="st-resolution">— in resolution zone</div>
+  </div>
+  <div class="bg-gray-900 px-4 py-3">
+    <div class="text-xs text-gray-500 mb-0.5">Signal Precision</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-precision">—</div>
+    <div class="text-xs text-gray-600">7-day, 1h horizon</div>
+  </div>
+  <div class="bg-gray-900 px-4 py-3">
+    <div class="text-xs text-gray-500 mb-0.5">Whale Activity</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-whale">—</div>
+    <div class="text-xs text-gray-600" id="st-wallets-active">— wallets active</div>
+  </div>
+</div>
+
+<!-- ── Main two-column layout ─────────────────────────────────────────────── -->
+<div class="flex flex-col md:flex-row min-h-screen">
+
+  <!-- Left: Alert Feed (65%) -->
+  <div class="flex-1 md:w-[65%] border-r border-gray-800 px-4 py-4">
+    <div class="flex items-center gap-2 mb-3">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Alert Feed</h2>
+      <span class="text-gray-700 text-xs">grouped by market · 10s refresh</span>
+    </div>
+    <div id="alert-feed-container">
+      <div id="alert-feed" class="space-y-1.5">
+        <div class="text-gray-600 text-xs py-4 text-center">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Smart Money + Watched Markets (35%) -->
+  <div class="md:w-[35%] flex flex-col">
+
+    <!-- Smart Money Tracker -->
+    <div class="border-b border-gray-800 px-4 py-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Smart Money</h2>
+        <button id="wallet-show-all-btn" class="text-xs text-blue-400 hover:underline hidden" onclick="toggleShowAllWallets()">Show all</button>
+      </div>
+      <div id="wallet-list" class="space-y-2">
+        <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Watched Markets -->
+    <div class="px-4 py-4">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3">Watched Markets</h2>
+      <div id="markets-list" class="space-y-2">
+        <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Signal Quality (collapsible, bottom) ───────────────────────────────── -->
+<div class="border-t border-gray-800">
+  <button class="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-gray-900 transition-colors"
+          onclick="toggleSignalQuality()">
+    <span id="sq-chevron" class="text-gray-600 text-xs">▸</span>
+    <span class="text-xs text-gray-500">Signal Quality:</span>
+    <span id="sq-summary" class="text-xs text-gray-600">loading…</span>
+  </button>
+  <div id="sq-panel" class="hidden px-4 pb-4">
+    <table class="w-full text-xs border-collapse mt-2">
       <thead>
         <tr class="text-gray-500 border-b border-gray-800">
           <th class="text-left py-1 pr-4">Detector</th>
@@ -57,54 +141,12 @@
       </tbody>
     </table>
   </div>
-</section>
+</div>
 
-<!-- ── Live Alert Feed ───────────────────────────────────────────────────── -->
-<section>
-  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
-    Live Alert Feed
-    <span class="text-gray-600 font-normal normal-case">(signal-strength sorted, refreshed every 10s)</span>
-    <span id="alert-badge-legend" class="ml-2 text-yellow-500 text-[10px]">★ = 3+ detector types</span>
-  </h2>
-  <div id="alert-feed" class="space-y-1" style="max-height:500px;overflow-y:auto">
-    <div class="text-gray-600 text-xs">Loading…</div>
-  </div>
-</section>
-
-<!-- ── Watched Markets Grid ─────────────────────────────────────────────── -->
-<section>
-  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Watched Markets</h2>
-  <div id="markets-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-    <div class="text-gray-600 text-xs">Loading…</div>
-  </div>
-</section>
-
-<!-- ── Smart Money Tracker ───────────────────────────────────────────────── -->
-<section>
-  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Smart Money Tracker</h2>
-  <div class="overflow-x-auto">
-    <table class="w-full text-xs border-collapse">
-      <thead>
-        <tr class="text-gray-500 border-b border-gray-800">
-          <th class="text-left py-1 pr-4">Alias</th>
-          <th class="text-left py-1 pr-4">Address</th>
-          <th class="text-left py-1 pr-4">Category</th>
-          <th class="text-left py-1 pr-4">Last Trade</th>
-          <th class="text-center py-1 px-4">Trades</th>
-          <th class="text-center py-1 px-4">Direction</th>
-        </tr>
-      </thead>
-      <tbody id="wallet-body">
-        <tr><td colspan="6" class="text-gray-600 py-2">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-</main>
+</div><!-- /pt-10 -->
 
 <script>
-// ── Utility ──────────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 function fmt(n, digits = 0) {
   if (n == null) return '—';
@@ -120,35 +162,18 @@ function fmtPct(v) {
 
 function precisionColor(v) {
   if (v == null)  return 'text-gray-500';
-  if (v >= 0.60)  return 'text-green-400';
-  if (v >= 0.50)  return 'text-yellow-400';
+  if (v >= 0.60)  return 'text-emerald-400';
+  if (v >= 0.50)  return 'text-amber-400';
   return 'text-red-400';
 }
 
-function severityBg(sev) {
-  return sev === 'critical' ? 'bg-red-950' : sev === 'warning' ? 'bg-yellow-950' : 'bg-gray-900';
-}
-
-function typeLabel(type) {
-  const m = {
-    price_movement:      'Price',
-    statistical_anomaly: 'Anomaly',
-    consensus:           'Consensus',
-    news_correlation:    'News',
-    wallet_activity:     'Whale',
-  };
-  return m[type] || type;
-}
-
-function typeBadgeColor(type) {
-  const m = {
-    price_movement:      'bg-blue-900 text-blue-300',
-    statistical_anomaly: 'bg-purple-900 text-purple-300',
-    consensus:           'bg-green-900 text-green-300',
-    news_correlation:    'bg-orange-900 text-orange-300',
-    wallet_activity:     'bg-pink-900 text-pink-300',
-  };
-  return m[type] || 'bg-gray-800 text-gray-400';
+function relativeTime(iso) {
+  if (!iso) return '—';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 60)    return diff + 's ago';
+  if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
 }
 
 function truncate(s, n) {
@@ -156,71 +181,362 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-function relativeTime(iso) {
-  if (!iso) return '—';
-  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
-  if (diff < 60)   return diff + 's ago';
-  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-  return Math.floor(diff / 86400) + 'd ago';
-}
-
-function scoreBorderClass(score) {
-  if (score == null) return 'border-l-gray-600';
-  if (score >= 0.7) return 'border-l-green-500';
-  if (score >= 0.5) return 'border-l-yellow-500';
-  return 'border-l-gray-600';
+function priceColor(p) {
+  if (p == null) return 'text-gray-100';
+  if (p > 0.65) return 'text-emerald-400';
+  if (p < 0.35) return 'text-red-400';
+  return 'text-gray-100';
 }
 
 function copyTopic() {
-  const t = document.getElementById('s-topic').textContent;
+  const t = document.getElementById('h-topic').textContent;
   navigator.clipboard.writeText(t).catch(() => {});
 }
 
-// ── Web Audio API ping ────────────────────────────────────────────────────────
+// ── Alert rendering ───────────────────────────────────────────────────────────
 
-let audioCtx = null;
-
-function ensureAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return audioCtx;
+function typeLabel(type) {
+  return { price_movement:'PRICE', statistical_anomaly:'ANOMALY', consensus:'CONSENSUS',
+           news_correlation:'NEWS', wallet_activity:'WHALE' }[type] || type.toUpperCase();
 }
 
-function softPing() {
+function typeColor(type) {
+  return { price_movement:'text-blue-400', statistical_anomaly:'text-purple-400',
+           consensus:'text-emerald-400', news_correlation:'text-amber-400',
+           wallet_activity:'text-pink-400' }[type] || 'text-gray-400';
+}
+
+function renderAlertDetail(a) {
+  const m = a.metadata || {};
+  if (a.type === 'price_movement') {
+    const from = m.fromPrice, to = m.toPrice, pct = m.movePct, dir = m.direction;
+    if (!from || !to || !pct) return a.title || '';
+    const arrow = dir === 'up' ? '↑' : '↓';
+    const col   = dir === 'up' ? 'text-emerald-400' : 'text-red-400';
+    const zt    = m.zoneTransition;
+    let zoneTag = '';
+    if (zt === 'ENTERED_BULLISH') zoneTag = ' <span class="text-emerald-600">▲ resolution zone</span>';
+    else if (zt === 'ENTERED_BEARISH') zoneTag = ' <span class="text-red-500">▼ resolution zone</span>';
+    else if (zt === 'MID_RANGE') zoneTag = ' <span class="text-gray-600">mid-range</span>';
+    let bookTag = '';
+    const spread = parseFloat(m.spreadBps || 0), depth = parseFloat(m.depthAtMid || 0);
+    if (spread > 0 || depth > 0) {
+      const parts = [];
+      if (spread > 0) parts.push('spd ' + spread.toFixed(0) + 'bps');
+      if (depth  > 0) parts.push('dep $' + depth.toFixed(0));
+      bookTag = ' <span class="text-gray-700">' + parts.join(' · ') + '</span>';
+    }
+    return `<span class="text-gray-400">${(parseFloat(from)*100).toFixed(1)}¢ → ${(parseFloat(to)*100).toFixed(1)}¢</span> <span class="${col}">(${parseFloat(pct).toFixed(1)}% ${arrow})</span>${zoneTag}${bookTag}`;
+  }
+  if (a.type === 'statistical_anomaly') {
+    const z = m.zScore, mean = m.mean, std = m.stddev;
+    if (!z) return a.title || '';
+    return `<span class="text-purple-400">z=${parseFloat(z).toFixed(1)}</span>` +
+           (mean && std ? ` <span class="text-gray-600">(σ ${parseFloat(std).toFixed(3)}, μ ${parseFloat(mean).toFixed(3)})</span>` : '');
+  }
+  if (a.type === 'news_correlation') {
+    const title = m.articleTitle || m.title || '';
+    if (m.scoringMethod === 'claude') {
+      const dir = m.sentimentDirection === 'YES' ? 'bullish' : 'bearish';
+      const pct = Math.abs(Math.round(parseFloat(m.sentimentScore || 0) * 100));
+      const col = m.sentimentDirection === 'YES' ? 'text-emerald-400' : 'text-red-400';
+      return (title ? `<span class="text-gray-400">${truncate(title, 50)}</span> ` : '') +
+             `<span class="${col}">${dir} ${pct}%</span>` +
+             (m.source ? ` <span class="text-gray-600">${m.source}</span>` : '');
+    }
+    const score = m.score || m.keywordScore;
+    return (title ? `<span class="text-gray-400">${truncate(title, 55)}</span> ` : '') +
+           (score ? `<span class="text-gray-600">match: ${Math.round(parseFloat(score)*100)}%</span>` : '');
+  }
+  if (a.type === 'consensus') {
+    const wc  = m.walletCount, dir = m.direction || m.consensusDirection || '';
+    const out = m.consensusOutcome || '';
+    const tot = m.totalSizeUsdc ? '$' + fmt(parseFloat(m.totalSizeUsdc)) : '';
+    const col = out === 'bullish' ? 'text-emerald-400' : 'text-red-400';
+    return `<span class="${col}">${wc || '?'} wallets ${dir} ${(m.outcome||'').toUpperCase()}</span>` +
+           (tot ? ` <span class="text-gray-500">${tot} total</span>` : '') +
+           (out ? ` <span class="${col}">(${out})</span>` : '');
+  }
+  if (a.type === 'wallet_activity') {
+    const alias = m.alias || m.walletAlias || '';
+    const dir   = m.direction || m.side || '';
+    const out   = m.outcome || '';
+    const sz    = m.sizeUsdc ? '$' + fmt(parseFloat(m.sizeUsdc)) : '';
+    const col   = (dir === 'BUY' && out === 'YES') || (dir === 'SELL' && out === 'NO')
+                  ? 'text-emerald-400' : 'text-red-400';
+    return `<span class="${col}">${alias || '?'} ${dir} ${out}</span>` +
+           (sz ? ` <span class="text-gray-400">${sz}</span>` : '');
+  }
+  return a.title || '';
+}
+
+function renderAlertCard(a) {
+  const typeCol = typeColor(a.type);
+  const detail  = renderAlertDetail(a);
+  const link    = a.link ? `<a href="${a.link}" target="_blank" rel="noopener" class="text-blue-400 hover:underline text-[10px]">↗</a>` : '';
+  return `<div class="rounded bg-gray-900/80 border border-gray-800 px-3 py-2">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      <span class="text-[10px] font-bold ${typeCol}">${typeLabel(a.type)}</span>
+      <span class="text-gray-300 text-xs">${detail}</span>
+      ${link}
+      <span class="ml-auto text-gray-600 text-[10px] shrink-0">${relativeTime(a.createdAt)}</span>
+    </div>
+  </div>`;
+}
+
+// ── Alert Feed ────────────────────────────────────────────────────────────────
+
+const expandedMarkets = new Set();
+
+function toggleMarket(safeId) {
+  const el = document.getElementById('mgrp-' + safeId);
+  if (!el) return;
+  if (expandedMarkets.has(safeId)) {
+    expandedMarkets.delete(safeId);
+    el.classList.add('hidden');
+    document.getElementById('mchev-' + safeId).textContent = '▸';
+  } else {
+    expandedMarkets.add(safeId);
+    el.classList.remove('hidden');
+    document.getElementById('mchev-' + safeId).textContent = '▾';
+  }
+}
+
+let lastAlertHtml = '';
+
+async function loadAlerts() {
   try {
-    const ctx = ensureAudio();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.4);
+    const r = await fetch('/api/alerts/by-signal-strength');
+    if (!r.ok) return;
+    let alerts = await r.json();
+    alerts = alerts.filter(a => (a.score ?? 1) >= 0.4);
+
+    if (alerts.length === 0) {
+      const empty = '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-2">◎</div>No alerts in the last 60 minutes</div>';
+      if (lastAlertHtml !== empty) {
+        document.getElementById('alert-feed').innerHTML = empty;
+        lastAlertHtml = empty;
+      }
+      return;
+    }
+
+    // Group by marketId
+    const groups = new Map();
+    for (const a of alerts) {
+      const key = a.marketId || '_unknown';
+      if (!groups.has(key)) {
+        groups.set(key, { marketId: key, alerts: [], question: a.marketQuestion, link: a.link, price: a.currentYesPrice });
+      }
+      groups.get(key).alerts.push(a);
+    }
+
+    // Sort: most alerts first, then most recent
+    const sorted = [...groups.values()].sort((a, b) => {
+      if (b.alerts.length !== a.alerts.length) return b.alerts.length - a.alerts.length;
+      return new Date(b.alerts[0].createdAt) - new Date(a.alerts[0].createdAt);
+    });
+
+    const html = sorted.map(g => {
+      const first = g.alerts[0];
+      const safeId = (g.marketId || '_').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const pmLink = g.link || (g.question
+        ? `https://polymarket.com/search?query=${encodeURIComponent(g.question)}` : 'https://polymarket.com');
+      const isExpanded = expandedMarkets.has(safeId);
+      const priceNum = g.price != null ? g.price : null;
+      const priceStr = priceNum != null ? `<span class="font-bold text-base ml-2 ${priceColor(priceNum)}">${(priceNum*100).toFixed(1)}¢</span>` : '';
+      const countBadge = g.alerts.length > 1
+        ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">${g.alerts.length} alerts</span>` : '';
+      const latestType = `<span class="text-[10px] ${typeColor(first.type)}">${typeLabel(first.type)}</span>`;
+      const recentTime = `<span class="text-gray-600 text-[10px]">${relativeTime(first.createdAt)}</span>`;
+      const detail = isExpanded ? g.alerts.map(a => renderAlertCard(a)).join('') : '';
+      return `<div class="rounded border border-gray-800 bg-gray-900/40 overflow-hidden">
+        <div class="flex flex-wrap items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-gray-800/40 select-none"
+             onclick="toggleMarket('${safeId}')">
+          <span id="mchev-${safeId}" class="text-gray-600 text-[10px]">${isExpanded ? '▾' : '▸'}</span>
+          <a href="${pmLink}" target="_blank" rel="noopener"
+             class="text-gray-200 hover:text-blue-400 hover:underline flex-1 leading-tight"
+             onclick="event.stopPropagation()">${truncate(g.question || g.marketId, 90)}</a>
+          ${priceStr}
+          <span class="ml-auto flex items-center gap-1.5 shrink-0">
+            ${countBadge}${latestType}${recentTime}
+          </span>
+        </div>
+        <div id="mgrp-${safeId}" class="${isExpanded ? '' : 'hidden'} border-t border-gray-800/50 space-y-1 p-1.5">
+          ${detail}
+        </div>
+      </div>`;
+    }).join('');
+
+    if (html !== lastAlertHtml) {
+      // Rebuild expanded groups without disturbing collapsed ones
+      const feed = document.getElementById('alert-feed');
+      feed.innerHTML = html;
+      lastAlertHtml = html;
+    }
   } catch (_) {}
 }
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
+// ── Smart Money Tracker ───────────────────────────────────────────────────────
+
+let showAllWallets = false;
+const MAX_WALLETS_DEFAULT = 10;
+
+function toggleShowAllWallets() {
+  showAllWallets = !showAllWallets;
+  renderWallets(lastWalletData);
+}
+
+let lastWalletData = [];
+
+async function loadWallets() {
+  try {
+    const r = await fetch('/api/wallets');
+    if (!r.ok) return;
+    lastWalletData = await r.json();
+    renderWallets(lastWalletData);
+  } catch (_) {}
+}
+
+function renderWallets(wallets) {
+  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+  const filtered = wallets
+    .filter(w => w.address && !w.address.startsWith('0x0000')
+              && w.address !== '_comment'
+              && !(w.alias || '').startsWith('PLACEHOLDER')
+              && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h)
+    .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
+
+  const totalActive = filtered.length;
+  document.getElementById('st-wallets-active').textContent = totalActive + ' wallets active';
+
+  if (filtered.length === 0) {
+    document.getElementById('wallet-list').innerHTML =
+      '<div class="text-gray-600 text-xs py-3 text-center">No trades in the last 24h</div>';
+    document.getElementById('wallet-show-all-btn').classList.add('hidden');
+    return;
+  }
+
+  const shown = showAllWallets ? filtered : filtered.slice(0, MAX_WALLETS_DEFAULT);
+  const btn = document.getElementById('wallet-show-all-btn');
+  if (filtered.length > MAX_WALLETS_DEFAULT) {
+    btn.classList.remove('hidden');
+    btn.textContent = showAllWallets ? 'Show less' : `Show all (${filtered.length})`;
+  } else {
+    btn.classList.add('hidden');
+  }
+
+  const html = shown.map(w => {
+    const dir = (w.recentDirection || '').toUpperCase();
+    const outcome = (w.lastOutcome || '').toUpperCase();
+    const isBullish = (dir === 'BUY' && outcome === 'YES') || (dir === 'SELL' && outcome === 'NO');
+    const borderCol = isBullish ? 'border-l-emerald-600' : 'border-l-red-700';
+    const dirCol    = isBullish ? 'text-emerald-400'     : 'text-red-400';
+    const size      = w.lastSizeUsdc ? '$' + fmt(parseFloat(w.lastSizeUsdc)) : '';
+    const question  = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 40) : '—';
+    const tradeInfo = dir
+      ? `${dir}${outcome ? ' ' + outcome : ''} on "${question}"`
+      : '—';
+    return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
+      <div class="flex items-center justify-between gap-2">
+        <a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener"
+           class="font-bold text-gray-200 hover:text-blue-400 hover:underline text-xs">🐋 ${w.alias || w.address.slice(0,10)}</a>
+        <span class="text-gray-600 text-[10px] shrink-0">${relativeTime(w.lastTradeAt)}</span>
+      </div>
+      <div class="text-xs ${dirCol} mt-0.5 leading-tight">${tradeInfo}</div>
+      <div class="flex items-center justify-between mt-0.5">
+        <span class="text-gray-400 text-xs">${size}</span>
+        <span class="text-gray-600 text-[10px]">${w.tradeCount != null ? w.tradeCount + ' trades' : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('wallet-list').innerHTML = html;
+}
+
+// ── Watched Markets ───────────────────────────────────────────────────────────
+
+async function loadWatchedMarkets() {
+  try {
+    const r = await fetch('/api/markets?watchedOnly=true&limit=50');
+    if (!r.ok) return;
+    const markets = await r.json();
+
+    const sorted = [...markets].sort((a, b) => {
+      const va = parseFloat(a.volume24h || a.volume24Hr || 0);
+      const vb = parseFloat(b.volume24h || b.volume24Hr || 0);
+      return vb - va;
+    });
+
+    if (sorted.length === 0) {
+      document.getElementById('markets-list').innerHTML =
+        '<div class="text-gray-600 text-xs py-3 text-center">Auto-watch populates within 2 min</div>';
+      document.getElementById('st-watched').textContent = '— watched';
+      return;
+    }
+
+    document.getElementById('st-watched').textContent = sorted.length + ' watched';
+
+    const html = sorted.map(m => {
+      const p = m.currentYesPrice != null ? m.currentYesPrice : null;
+      const pct = p != null ? Math.round(p * 100) : null;
+      const pStr = p != null ? `<span class="font-bold ${priceColor(p)}">${(p*100).toFixed(1)}¢</span>` : '<span class="text-gray-600">—</span>';
+      const vol = parseFloat(m.volume24h || m.volume24Hr || 0);
+      const barWidth = pct != null ? pct : 0;
+      const pmLink = m.slug
+        ? 'https://polymarket.com/event/' + m.slug
+        : (m.question ? `https://polymarket.com/search?query=${encodeURIComponent(m.question)}` : 'https://polymarket.com');
+      return `<div class="rounded border border-gray-800 bg-gray-900/50 px-3 py-2.5 space-y-1.5">
+        <div class="text-xs text-gray-200 leading-tight font-medium">${truncate(m.question || m.marketId, 70)}</div>
+        <div class="flex items-center gap-3">
+          ${pStr}
+          <div class="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-600 progress-bar-fill rounded-full" style="width:${barWidth}%"></div>
+          </div>
+          <span class="text-gray-500 text-[10px] shrink-0">Vol: ${fmt(vol)}</span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-gray-600">Updated ${relativeTime(m.updatedAt)}</span>
+          <a href="${pmLink}" target="_blank" rel="noopener" class="text-blue-400 hover:underline">Polymarket ↗</a>
+        </div>
+      </div>`;
+    }).join('');
+
+    document.getElementById('markets-list').innerHTML = html;
+  } catch (_) {}
+}
+
+// ── Stats row ─────────────────────────────────────────────────────────────────
+
+let lastPollTime = null;
 
 async function loadStats() {
   try {
     const r = await fetch('/api/stats');
     if (!r.ok) return;
     const d = await r.json();
-    document.getElementById('s-markets').textContent = d.marketsTracked ?? '—';
-    document.getElementById('s-alerts').textContent  = d.alertsFiredToday ?? '—';
-    document.getElementById('s-wallets').textContent = d.watchedWallets ?? '—';
-    const pollEl = document.getElementById('s-poll');
-    pollEl.textContent = d.lastPollTime ? relativeTime(d.lastPollTime) : '—';
-    const pollAge = d.lastPollTime ? Math.floor((Date.now() - new Date(d.lastPollTime)) / 1000) : 9999;
-    pollEl.className = pollAge < 120 ? 'font-semibold text-green-400' : 'font-semibold text-red-400';
-    document.getElementById('s-topic').textContent   = d.ntfyTopic ?? '—';
+    document.getElementById('st-markets').textContent  = d.marketsTracked ?? '—';
+    document.getElementById('st-alerts').textContent   = d.alertsFiredToday ?? '—';
+    document.getElementById('h-markets').textContent   = d.marketsTracked ?? '—';
+    document.getElementById('h-topic').textContent     = d.ntfyTopic ?? '—';
+    lastPollTime = d.lastPollTime || null;
+    const pollEl = document.getElementById('h-poll');
+    pollEl.textContent = lastPollTime ? relativeTime(lastPollTime) : '—';
+    const pollAge = lastPollTime ? Math.floor((Date.now() - new Date(lastPollTime)) / 1000) : 9999;
+    const dot   = document.getElementById('conn-dot');
+    const label = document.getElementById('conn-label');
+    if (pollAge < 120) {
+      dot.className   = 'w-2 h-2 rounded-full bg-emerald-400 live-pulse';
+      label.textContent = 'Live';
+      label.className = 'text-emerald-400 text-xs';
+    } else {
+      dot.className   = 'w-2 h-2 rounded-full bg-red-400';
+      label.textContent = 'Stale';
+      label.className = 'text-red-400 text-xs';
+    }
   } catch (_) {}
 }
 
-// ── Signal Quality Panel ──────────────────────────────────────────────────────
+// ── Signal Quality ────────────────────────────────────────────────────────────
 
 const DETECTOR_LABELS = {
   price_movement:      'price_movement',
@@ -228,6 +544,16 @@ const DETECTOR_LABELS = {
   consensus:           'consensus',
   news_correlation:    'news_correlation',
 };
+
+let sqLoaded = false;
+
+function toggleSignalQuality() {
+  const panel = document.getElementById('sq-panel');
+  const chev  = document.getElementById('sq-chevron');
+  const hidden = panel.classList.toggle('hidden');
+  chev.textContent = hidden ? '▸' : '▾';
+  if (!sqLoaded) { loadSignalQuality(); sqLoaded = true; }
+}
 
 async function loadSignalQuality() {
   try {
@@ -237,304 +563,56 @@ async function loadSignalQuality() {
     ]);
     const d1h  = r1h.ok  ? await r1h.json()  : null;
     const d24h = r24h.ok ? await r24h.json() : null;
-
-    // index by type
-    const idx1h  = {};
-    const idx24h = {};
+    const idx1h = {}, idx24h = {};
     (d1h?.detectors  || []).forEach(d => { idx1h[d.type]  = d; });
     (d24h?.detectors || []).forEach(d => { idx24h[d.type] = d; });
 
+    const parts = [];
     const rows = Object.keys(DETECTOR_LABELS).map(type => {
       const p1  = idx1h[type]?.precision  ?? null;
       const p24 = idx24h[type]?.precision ?? null;
-      const cnt = idx1h[type]?.count      ?? idx24h[type]?.count ?? null;
-      return `<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
-        <td class="py-1 pr-4 text-gray-300">${DETECTOR_LABELS[type]}</td>
+      const cnt = idx1h[type]?.count ?? idx24h[type]?.count ?? null;
+      parts.push(`${type.replace('_','')} ${fmtPct(p1)}`);
+      return `<tr class="border-b border-gray-800/50">
+        <td class="py-1 pr-4 text-gray-400">${DETECTOR_LABELS[type]}</td>
         <td class="text-center py-1 px-4 font-semibold ${precisionColor(p1)}">${fmtPct(p1)}</td>
         <td class="text-center py-1 px-4 font-semibold ${precisionColor(p24)}">${fmtPct(p24)}</td>
-        <td class="text-center py-1 px-4">
-          <a href="#alert-feed" onclick="filterByType('${type}')"
-             class="text-gray-400 hover:text-white underline underline-offset-2">${cnt != null ? cnt : '—'}</a>
-        </td>
+        <td class="text-center py-1 px-4 text-gray-500">${cnt != null ? cnt : '—'}</td>
       </tr>`;
     });
 
     document.getElementById('sq-body').innerHTML = rows.join('');
-  } catch (e) {
-    console.error('loadSignalQuality failed:', e);
-    const emptyRows = Object.keys(DETECTOR_LABELS).map(type =>
-      `<tr class="border-b border-gray-800/50">
-        <td class="py-1 pr-4 text-gray-300">${DETECTOR_LABELS[type]}</td>
-        <td class="text-center py-1 px-4 text-gray-600">—</td>
-        <td class="text-center py-1 px-4 text-gray-600">—</td>
-        <td class="text-center py-1 px-4 text-gray-600">—</td>
-      </tr>`
-    );
-    document.getElementById('sq-body').innerHTML = emptyRows.join('');
+    document.getElementById('sq-summary').textContent =
+      `price ${fmtPct(idx1h.price_movement?.precision)} · anomaly ${fmtPct(idx1h.statistical_anomaly?.precision)} · consensus ${fmtPct(idx1h.consensus?.precision)} · news ${fmtPct(idx1h.news_correlation?.precision)}`;
+  } catch (_) {
+    document.getElementById('sq-summary').textContent = '(unavailable)';
   }
 }
 
-// ── Alert Feed ────────────────────────────────────────────────────────────────
-
-let lastAlertIds = new Set();
-let alertTypeFilter = null;
-
-function filterByType(type) {
-  alertTypeFilter = alertTypeFilter === type ? null : type;
-  loadAlerts();
-}
-
-function renderMetaHighlight(alert) {
-  const m = alert.metadataHighlight;
-  if (!m) return '';
-  const icons = {
-    movePct:     '↕',
-    zScore:      'σ',
-    walletCount: '👥',
-    score:       '📰',
-    sizeUsdc:    '$',
-  };
-  const [k, v] = m.split('=');
-  const display = !isNaN(v) ? parseFloat(v).toFixed(2) : (v || '');
-  return `<span class="ml-1 text-gray-500">${icons[k] || ''}${display}</span>`;
-}
-
-async function loadAlerts() {
+// Load summary inline on page load (for the collapsed header line)
+(async function loadSqSummary() {
   try {
-    let url = '/api/alerts/by-signal-strength';
-    const r = await fetch(url);
+    const r = await fetch('/api/signals/performance?horizon=t1h');
     if (!r.ok) return;
-    let alerts = await r.json();
-
-    // client-side type filter (from signal quality panel click)
-    if (alertTypeFilter) {
-      alerts = alerts.filter(a => a.type === alertTypeFilter);
-    }
-
-    // drop low-score news alerts (single-keyword false positives)
-    alerts = alerts.filter(a => (a.score ?? 1) >= 0.6);
-
-    // detect new critical alerts
-    const currentIds = new Set(alerts.map(a => a.alertId));
-    const hasNewCritical = alerts.some(a =>
-      a.severity === 'critical' && !lastAlertIds.has(a.alertId)
-    );
-    if (hasNewCritical && lastAlertIds.size > 0) softPing();
-    lastAlertIds = currentIds;
-
-    if (alerts.length === 0) {
-      document.getElementById('alert-feed').innerHTML =
-        '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-1">◎</div>No alerts in the last 60 minutes</div>';
-      return;
-    }
-
-    const rows = alerts.map(a => {
-      const badge    = a.badge ? '<span class="text-yellow-400 mr-1" title="3+ detector types">★</span>' : '';
-      const strength = a.signalStrength > 1
-        ? `<span class="text-xs text-gray-500">S${a.signalStrength}</span>` : '';
-      const meta = renderMetaHighlight(a);
-      const price = a.currentYesPrice != null ? `<span class="text-gray-500">${(a.currentYesPrice * 100).toFixed(1)}¢</span>` : '';
-      const pmLink = a.marketQuestion ? `https://polymarket.com/search?query=${encodeURIComponent(a.marketQuestion)}` : 'https://polymarket.com';
-      const question = a.marketQuestion
-        ? `<a href="${pmLink}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${truncate(a.marketQuestion, 80)}</a>` : '';
-
-      return `<div class="rounded px-3 py-2 ${severityBg(a.severity)} severity-${a.severity} border-l-2 ${scoreBorderClass(a.score)} ${a.badge ? 'ping-anim' : ''}" data-id="${a.alertId}">
-        <div class="flex flex-wrap items-center gap-2">
-          ${badge}
-          <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${typeBadgeColor(a.type)}">${typeLabel(a.type)}</span>
-          <span class="font-semibold text-xs ${a.severity === 'critical' ? 'text-red-300' : a.severity === 'warning' ? 'text-yellow-300' : 'text-blue-300'}">${a.title || ''}</span>
-          ${meta}
-          ${price}
-          ${strength}
-          <span class="ml-auto text-gray-600 text-[10px]">${relativeTime(a.createdAt)}</span>
-          ${!a.reviewed ? `<button onclick="markReviewed('${a.alertId}', this)" class="text-[10px] text-gray-600 hover:text-gray-300 border border-gray-700 rounded px-1">✓</button>` : '<span class="text-[10px] text-gray-700">reviewed</span>'}
-        </div>
-        ${question ? `<div class="mt-0.5 text-[10px] truncate">${question}</div>` : ''}
-      </div>`;
-    });
-
-    document.getElementById('alert-feed').innerHTML = rows.join('');
+    const d = await r.json();
+    const idx = {};
+    (d.detectors || []).forEach(x => { idx[x.type] = x; });
+    document.getElementById('sq-summary').textContent =
+      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · consensus ${fmtPct(idx.consensus?.precision)} · news ${fmtPct(idx.news_correlation?.precision)}`;
   } catch (_) {}
-}
-
-async function markReviewed(alertId, btn) {
-  try {
-    await fetch(`/api/alerts/${alertId}/mark-reviewed`, { method: 'POST' });
-    btn.textContent = 'reviewed';
-    btn.disabled = true;
-    btn.className = 'text-[10px] text-gray-700';
-  } catch (_) {}
-}
-
-// ── Watched Markets Grid + sparklines ─────────────────────────────────────────
-
-const sparkCharts = {}; // marketId → Chart instance
-
-async function loadWatchedMarkets() {
-  try {
-    const r = await fetch('/api/markets?watched=true&limit=50');
-    if (!r.ok) return;
-    const markets = await r.json();
-
-    // Only show markets with meaningful probability (5-95%); skip resolved/near-certain
-    const meaningful = markets.filter(m => {
-      const p = m.currentYesPrice;
-      return p != null && p > 0.01 && p < 0.90;
-    });
-
-    if (meaningful.length === 0) {
-      document.getElementById('markets-grid').innerHTML =
-        '<div class="text-center py-8 text-gray-600 text-xs col-span-3"><div class="text-2xl mb-1">◇</div>No watched markets — POST /api/markets/{id}/watch to add one</div>';
-      return;
-    }
-
-    const grid = document.getElementById('markets-grid');
-    grid.innerHTML = '';
-
-    for (const m of meaningful) {
-      const card = document.createElement('div');
-      card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2 hover:border-gray-700 transition-colors duration-200';
-      card.innerHTML = `
-        <div class="font-semibold text-gray-200 leading-tight">${m.question ? `<a href="https://polymarket.com/search?query=${encodeURIComponent(m.question || m.marketId)}" target="_blank" rel="noopener" class="hover:text-blue-400 hover:underline">${truncate(m.question || m.marketId, 100)}</a>` : truncate(m.question || m.marketId, 100)}</div>
-        <div class="flex items-center gap-3 text-gray-400">
-          <span>Yes: <span class="text-green-400 font-semibold">${m.currentYesPrice != null ? (m.currentYesPrice * 100).toFixed(1) + '¢' : '—'}</span></span>
-          <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24h ?? m.volume24Hr)}</span></span>
-          <span class="ml-auto text-gray-600">${m.category || ''}</span>
-        </div>
-        <div class="text-[10px] text-gray-600 mt-1">Updated ${relativeTime(m.updatedAt)}</div>
-      `;
-      grid.appendChild(card);
-    }
-  } catch (_) {}
-}
-
-async function loadSparkline(marketId) {
-  try {
-    const since = new Date(Date.now() - 3600_000).toISOString();
-    const r = await fetch(`/api/markets/${encodeURIComponent(marketId)}/price-history?since=${since}&limit=60`);
-    if (!r.ok) return;
-    const points = await r.json();
-    if (points.length < 2) return;
-
-    const canvas = document.getElementById(`spark-${marketId}`);
-    if (!canvas) return;
-
-    if (sparkCharts[marketId]) {
-      sparkCharts[marketId].destroy();
-      delete sparkCharts[marketId];
-    }
-
-    sparkCharts[marketId] = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels: points.map(p => p.timestamp),
-        datasets: [{
-          data: points.map(p => p.midpoint != null ? (p.midpoint * 100) : null),
-          borderColor: '#22c55e',
-          borderWidth: 1.5,
-          fill: true,
-          backgroundColor: 'rgba(34, 197, 94, 0.08)',
-          tension: 0.3,
-          pointRadius: 0,
-        }],
-      },
-      options: {
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            enabled: true,
-            callbacks: { label: function(ctx) { return ctx.parsed.y.toFixed(1) + '¢'; } },
-            backgroundColor: '#1f2937',
-            titleFont: { size: 10 },
-            bodyFont: { size: 10 },
-          },
-        },
-        scales: {
-          x: {
-            display: true,
-            ticks: {
-              font: { size: 8 },
-              color: '#4b5563',
-              maxTicksLimit: 4,
-              callback: function(val, idx) {
-                const d = new Date(this.getLabelForValue(val));
-                return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
-              }
-            },
-            grid: { display: false },
-          },
-          y: {
-            display: true,
-            grace: '10%',
-            ticks: {
-              font: { size: 9 },
-              color: '#4b5563',
-              callback: function(v) { return v.toFixed(0) + '¢'; },
-              maxTicksLimit: 3,
-            },
-            grid: { color: 'rgba(75, 85, 99, 0.15)' },
-          },
-        },
-        responsive: true,
-        maintainAspectRatio: false,
-      },
-    });
-  } catch (_) {}
-}
-
-// ── Smart Money Tracker ───────────────────────────────────────────────────────
-
-async function loadWallets() {
-  try {
-    const r = await fetch('/api/wallets');
-    if (!r.ok) return;
-    const wallets = await r.json();
-
-    const filtered = wallets.filter(w => w.address && !w.address.startsWith('0x0000') && w.address !== '_comment' && !(w.alias || '').startsWith('PLACEHOLDER'));
-
-    if (filtered.length === 0) {
-      document.getElementById('wallet-body').innerHTML =
-        '<tr><td colspan="6" class="text-center text-gray-600 py-6"><div class="text-2xl mb-1">◈</div>No watched wallets configured</td></tr>';
-      return;
-    }
-
-    const rows = filtered.map(w => {
-      const addr = w.address ? w.address.slice(0, 6) + '…' + w.address.slice(-4) : '—';
-      const dirColor = w.recentDirection === 'BUY'  ? 'text-green-400'
-                     : w.recentDirection === 'SELL' ? 'text-red-400'
-                     : 'text-gray-500';
-      return `<tr class="border-b border-gray-800/40 hover:bg-gray-800/30">
-        <td class="py-1 pr-4"><a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline">${w.alias || w.address.slice(0,10)}</a></td>
-        <td class="py-1 pr-4 font-mono"><a href="https://polygonscan.com/address/${w.address}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${addr}</a></td>
-        <td class="py-1 pr-4 text-gray-500">${w.category || '—'}</td>
-        <td class="py-1 pr-4 text-gray-500">${relativeTime(w.lastTradeAt)}</td>
-        <td class="text-center py-1 px-4 text-gray-400">${w.tradeCount ?? '—'}</td>
-        <td class="text-center py-1 px-4 font-bold ${dirColor}">${w.recentDirection || '—'}</td>
-      </tr>`;
-    });
-
-    document.getElementById('wallet-body').innerHTML = rows.join('');
-  } catch (_) {}
-}
+})();
 
 // ── Bootstrap & polling ───────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadStats(), loadSignalQuality(), loadAlerts(), loadWatchedMarkets(), loadWallets()]);
+  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadWallets()]);
 }
 
 init();
-
-// Refresh intervals
-setInterval(loadAlerts,        10_000);   // alert feed: 10s
-setInterval(loadSignalQuality, 60_000);   // signal quality: 60s
-setInterval(loadStats,         30_000);   // stats bar: 30s
-setInterval(loadWatchedMarkets, 120_000); // markets grid: 2min
-setInterval(loadWallets,        60_000);  // wallets: 60s
-
-// Unlock Web Audio on first user gesture
-document.addEventListener('click', () => ensureAudio(), { once: true });
+setInterval(loadAlerts,         10_000);
+setInterval(loadStats,          30_000);
+setInterval(loadWatchedMarkets, 60_000);
+setInterval(loadWallets,        60_000);
 </script>
 </body>
 </html>

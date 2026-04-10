@@ -29,8 +29,7 @@ import java.util.Set;
 public class KeywordExtractor {
 
     /**
-     * Standard English stop words (~150 words).
-     * Source: Correction 3 from Phase 7 plan review — verbatim list.
+     * Standard English stop words + domain-specific news noise words.
      */
     private static final Set<String> STOP_WORDS = Set.of(
         "a","an","the","and","or","but","not","no","if","then","than",
@@ -50,7 +49,10 @@ public class KeywordExtractor {
         "these","those","said","says","say","get","got","make","made",
         "go","went","gone","come","came","see","saw","seen","know","knew",
         "one","two","three","first","last","new","year","years","day",
-        "days","time","times","today","yesterday","tomorrow","ago","back"
+        "days","time","times","today","yesterday","tomorrow","ago","back",
+        // domain-specific news noise words
+        "announces","reports","according","sources","officials","people",
+        "reuters","bloomberg","associated","press","news","update","latest"
     );
 
     /**
@@ -63,7 +65,7 @@ public class KeywordExtractor {
         if (text == null || text.isBlank()) return Set.of();
         Set<String> keywords = new HashSet<>();
         for (String token : text.toLowerCase().split("[^a-z0-9]+")) {
-            if (token.length() >= 3 && !STOP_WORDS.contains(token)) {
+            if (token.length() >= 4 && !STOP_WORDS.contains(token)) {
                 keywords.add(token);
             }
         }

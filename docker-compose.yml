@@ -16,6 +16,7 @@
 services:
   localstack:
     image: localstack/localstack:3.8   # DO NOT change to :latest — see comment above
+    restart: unless-stopped
     ports:
       - "4566:4566"
     environment:
@@ -36,6 +37,7 @@ services:
 
   polysign:
     build: .
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:

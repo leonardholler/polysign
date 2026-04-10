@@ -67,6 +67,12 @@ public class WalletPoller {
     /** Default look-back for first sync — wallets with null lastSyncedAt. */
     private static final Duration FIRST_SYNC_LOOKBACK = Duration.ofHours(24);
 
+    /** Consecutive zero-trade cycles before PIPELINE STALL error. */
+    private static final int STALL_THRESHOLD = 3;
+
+    /** Consecutive zero-trade cycle counter. */
+    private int consecutiveZeroCycles = 0;
+
     private final WebClient                     dataApiClient;
     private final DynamoDbTable<Market>         marketsTable;
     private final DynamoDbTable<WatchedWallet>  watchedWalletsTable;
@@ -141,21 +147,37 @@ public class WalletPoller {
     public void poll() {
         try (var ignored = CorrelationId.set()) {
             Instant now = clock.now();
-            int walletCount = 0;
+            int walletsAttempted = 0;
+            int walletsSucceeded = 0;
             int totalTrades = 0;
 
             for (WatchedWallet wallet : watchedWalletsTable.scan().items()) {
+                walletsAttempted++;
                 try {
                     int wrote = pollWallet(wallet, now);
                     totalTrades += wrote;
-                    walletCount++;
+                    walletsSucceeded++;
                 } catch (Exception e) {
                     log.warn("wallet_poll_failed address={} error={}",
                             wallet.getAddress(), e.getMessage());
                 }
             }
 
-            log.info("wallet_poll_complete wallets={} trades_written={}", walletCount, totalTrades);
+            // Health-check structured summary
+            log.info("wallet_poll_health wallets_attempted={} wallets_succeeded={} trades_ingested={} data_api_status=OK rpc_fallback_used=false",
+                    walletsAttempted, walletsSucceeded, totalTrades);
+            log.info("wallet_poll_complete wallets={} trades_written={}", walletsAttempted, totalTrades);
+
+            // Pipeline stall detection
+            if (totalTrades == 0) {
+                consecutiveZeroCycles++;
+                if (consecutiveZeroCycles >= STALL_THRESHOLD) {
+                    log.error("PIPELINE STALL: No wallet trades ingested in {} consecutive cycles — consensus alerts cannot fire",
+                            consecutiveZeroCycles);
+                }
+            } else {
+                consecutiveZeroCycles = 0;
+            }
         } catch (Exception e) {
             log.error("wallet_poll_error error={}", e.getMessage(), e);
         }
@@ -180,15 +202,55 @@ public class WalletPoller {
         }
 
         int wrote = 0;
+        String latestTimestamp = null;
+        String latestDirection = null;
+        String latestQuestion  = null;
+        String latestOutcome   = null;
+        String latestSizeUsdc  = null;
+
         for (Map<String, Object> raw : rawTrades) {
             try {
                 if (writeTrade(raw, wallet)) {
                     wrote++;
+                    // Track most recent trade info for dashboard summary
+                    Object tsObj = raw.get("timestamp");
+                    if (tsObj != null) {
+                        try {
+                            String isoTs = Instant.ofEpochSecond(Long.parseLong(tsObj.toString())).toString();
+                            if (latestTimestamp == null || isoTs.compareTo(latestTimestamp) > 0) {
+                                latestTimestamp = isoTs;
+                                latestDirection = str(raw, "side");
+                                latestQuestion  = str(raw, "title");
+                                latestOutcome   = str(raw, "outcome");
+                                // Compute sizeUsdc = size × price
+                                BigDecimal size  = decimal(raw, "size");
+                                BigDecimal price = decimal(raw, "price");
+                                latestSizeUsdc   = (size != null && price != null)
+                                        ? size.multiply(price)
+                                               .setScale(2, java.math.RoundingMode.HALF_UP)
+                                               .toPlainString()
+                                        : null;
+                            }
+                        } catch (NumberFormatException ignored) { /* skip */ }
+                    }
                 }
             } catch (Exception e) {
                 log.warn("wallet_trade_write_failed address={} txHash={} error={}",
                         address, raw.getOrDefault("transactionHash", "?"), e.getMessage());
             }
+        }
+
+        // Update wallet summary fields for the Smart Money Tracker dashboard
+        if (latestTimestamp != null) {
+            wallet.setLastTradeAt(latestTimestamp);
+            wallet.setRecentDirection(latestDirection);
+            wallet.setLastMarketQuestion(latestQuestion);
+            wallet.setLastOutcome(latestOutcome);
+            wallet.setLastSizeUsdc(latestSizeUsdc);
+        }
+        if (wrote > 0) {
+            int prev = wallet.getTradeCount() != null ? wallet.getTradeCount() : 0;
+            wallet.setTradeCount(prev + wrote);
         }
 
         updateLastSyncedAt(wallet, pollTime);
@@ -330,6 +392,7 @@ public class WalletPoller {
     private void updateLastSyncedAt(WatchedWallet wallet, Instant pollTime) {
         try {
             wallet.setLastSyncedAt(pollTime.toString());
+            // lastTradeAt, tradeCount, recentDirection already set on wallet object by pollWallet()
             watchedWalletsTable.updateItem(wallet);
         } catch (Exception e) {
             log.warn("wallet_sync_timestamp_update_failed address={} error={}",

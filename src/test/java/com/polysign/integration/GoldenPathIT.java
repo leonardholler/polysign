@@ -146,19 +146,19 @@ class GoldenPathIT extends AbstractIntegrationIT {
         market.setIsWatched(false);
         marketsTable.putItem(market);
 
-        // ── Step 2: Seed 20 flat snapshots at 0.50 ───────────────────────────
-        // Placed at T0−20min … T0−1min (one per minute).
+        // ── Step 2: Seed 20 flat snapshots at 0.70 ───────────────────────────
+        // Prices in the bullish resolution zone (> 0.65). Placed at T0−20min … T0−1min.
         for (int i = 20; i >= 1; i--) {
             seedSnapshot(TEST_MARKET_ID,
                     T0.minus(Duration.ofMinutes(i)),
-                    new BigDecimal("0.50"));
+                    new BigDecimal("0.70"));
         }
 
-        // ── Step 3: Seed spike snapshot at 0.60 at exactly T0 ───────────────
-        // Move = (0.60 − 0.50) / 0.50 × 100 = 20% > 8% threshold.
-        // 20% ≥ 16% (2× threshold) → bypassDedupe = true → effectiveWindow = Duration.ZERO.
-        // createdAt = bucketedInstant(T0, Duration.ZERO) = T0 (raw epoch second).
-        seedSnapshot(TEST_MARKET_ID, T0, new BigDecimal("0.60"));
+        // ── Step 3: Seed spike snapshot at 0.84 at exactly T0 ───────────────
+        // Move = (0.84 − 0.70) / 0.70 × 100 = 20%, DEEPENING_BULLISH, T2 ($100k).
+        // T2 effectiveThreshold = 14% (resolution zone, no T1 fallback). 20% > 14% → fires.
+        // bypassDedupe: 20% >= 2×14%=28%? No → bypassDedupe=false, effectiveWindow=30min.
+        seedSnapshot(TEST_MARKET_ID, T0, new BigDecimal("0.84"));
 
         // ── Step 4: Call detect() with clock fixed to T0 ─────────────────────
         appClock.setClock(Clock.fixed(T0, ZoneOffset.UTC));
@@ -191,14 +191,14 @@ class GoldenPathIT extends AbstractIntegrationIT {
                 .as("Re-running detect() must NOT enqueue a second SQS message")
                 .isEqualTo(1);
 
-        // ── Step 9: Seed snapshot at T0 + 15min with price 0.62 ─────────────
-        // priceAtAlert = 0.60 (spike at T0).
-        // priceAtHorizon = 0.62.
-        // rawDelta = 0.62 − 0.60 = 0.02 > 0.005 → directionRealized = "up".
+        // ── Step 9: Seed snapshot at T0 + 15min with price 0.86 ─────────────
+        // priceAtAlert = 0.84 (spike at T0).
+        // priceAtHorizon = 0.86.
+        // rawDelta = 0.86 − 0.84 = 0.02 > 0.005 → directionRealized = "up".
         // directionPredicted = "up" (from alert metadata).
         // wasCorrect = true.
         Instant horizonInstant = T0.plus(Duration.ofMinutes(15));
-        seedSnapshot(TEST_MARKET_ID, horizonInstant, new BigDecimal("0.62"));
+        seedSnapshot(TEST_MARKET_ID, horizonInstant, new BigDecimal("0.86"));
 
         // ── Step 10: Advance clock to T1, call evaluate() ────────────────────
         appClock.setClock(Clock.fixed(T1, ZoneOffset.UTC));

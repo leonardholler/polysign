@@ -327,11 +327,34 @@ polysign:
 
 ---
 
-## Running on Real AWS
+## AWS Deployment
 
-> *Deployment scripts in `deployment/`. See [aws-setup.md](deployment/aws-setup.md) for step-by-step instructions.*
+### Quick start (single EC2 instance)
 
-> *Live URL, monthly cost breakdown, CloudWatch alarm screenshots, and lessons learned — added after deployment.*
+1. **Launch EC2**: Amazon Linux 2023, `t3.small`, security group allowing TCP 8080 + SSH 22
+2. **SSH in**: `ssh -i key.pem ec2-user@YOUR_IP`
+3. **Clone and setup**:
+   ```bash
+   git clone https://github.com/YOUR_USER/polysign.git
+   cd polysign
+   bash deploy/setup-ec2.sh
+   ```
+4. **Log out and back in** (for docker group)
+5. **Configure and launch**:
+   ```bash
+   cd polysign
+   printf 'ANTHROPIC_API_KEY=your-key\n' > .env
+   bash deploy/run.sh
+   ```
+6. **Dashboard**: `http://YOUR_EC2_IP:8080`
+
+### Cost
+- EC2 t3.small: ~$15/month
+- Claude API (Sonnet, 5 calls/min cap): ~$5-10/month
+- Total: ~$20-25/month
+
+### Architecture note
+This runs LocalStack for DynamoDB/SQS/S3 locally on the EC2 instance. For a production deployment, replace LocalStack with real AWS services using the `aws` Spring profile. See DESIGN.md for the full architecture.
 
 ---
 
