@@ -260,9 +260,17 @@ async function loadSignalQuality() {
     });
 
     document.getElementById('sq-body').innerHTML = rows.join('');
-  } catch (_) {
-    document.getElementById('sq-body').innerHTML =
-      '<tr><td colspan="4" class="text-red-500 py-2">Failed to load signal quality data.</td></tr>';
+  } catch (e) {
+    console.error('loadSignalQuality failed:', e);
+    const emptyRows = Object.keys(DETECTOR_LABELS).map(type =>
+      `<tr class="border-b border-gray-800/50">
+        <td class="py-1 pr-4 text-gray-300">${DETECTOR_LABELS[type]}</td>
+        <td class="text-center py-1 px-4 text-gray-600">—</td>
+        <td class="text-center py-1 px-4 text-gray-600">—</td>
+        <td class="text-center py-1 px-4 text-gray-600">—</td>
+      </tr>`
+    );
+    document.getElementById('sq-body').innerHTML = emptyRows.join('');
   }
 }
 
@@ -368,19 +376,22 @@ async function loadWatchedMarkets() {
     if (!r.ok) return;
     const markets = await r.json();
 
-    if (markets.length === 0) {
+    // Only show markets with meaningful probability (5-95%); skip resolved/near-certain
+    const meaningful = markets.filter(m => {
+      const p = m.currentYesPrice;
+      return p != null && p >= 0.05 && p <= 0.95;
+    });
+
+    if (meaningful.length === 0) {
       document.getElementById('markets-grid').innerHTML =
         '<div class="text-center py-8 text-gray-600 text-xs col-span-3"><div class="text-2xl mb-1">◇</div>No watched markets — POST /api/markets/{id}/watch to add one</div>';
       return;
     }
 
-    Object.values(sparkCharts).forEach(c => c.destroy());
-    Object.keys(sparkCharts).forEach(k => delete sparkCharts[k]);
-
     const grid = document.getElementById('markets-grid');
     grid.innerHTML = '';
 
-    for (const m of markets) {
+    for (const m of meaningful) {
       const card = document.createElement('div');
       card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2 hover:border-gray-700 transition-colors duration-200';
       card.innerHTML = `
@@ -390,12 +401,9 @@ async function loadWatchedMarkets() {
           <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24h ?? m.volume24Hr)}</span></span>
           <span class="ml-auto text-gray-600">${m.category || ''}</span>
         </div>
-        <div style="height:80px;overflow:hidden;position:relative"><canvas id="spark-${m.marketId}"></canvas></div>
+        <div class="text-[10px] text-gray-600 mt-1">Updated ${relativeTime(m.updatedAt)}</div>
       `;
       grid.appendChild(card);
-
-      // load sparkline
-      loadSparkline(m.marketId);
     }
   } catch (_) {}
 }

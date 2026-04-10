@@ -24,10 +24,10 @@ import java.util.Map;
  * <p>Called synchronously by {@link com.polysign.poller.WalletPoller} after each
  * successful trade write. No scheduler — driven by the polling cycle.
  *
- * <p>Alert deduplication: {@link Duration#ZERO} is passed to {@link AlertIdFactory},
- * making the txHash the disambiguator (one-second granularity × unique txHash →
- * unique alertId per trade). Reprocessing the same trade from the Data API
- * produces the same alertId and the DynamoDB condition rejects the duplicate.
+ * <p>Alert deduplication: a 5-minute window is applied, keyed on
+ * (address + marketId + direction). All fills for the same wallet/market/direction
+ * within the same 5-minute bucket collapse into a single alert, preventing
+ * multi-level orderbook fills from generating dozens of separate alerts for one trade.
  */
 @Component
 public class WalletActivityDetector {
@@ -63,15 +63,17 @@ public class WalletActivityDetector {
 
         Instant now = clock.now();
 
-        // txHash as canonical payload hash — one unique alertId per on-chain trade.
-        // Duration.ZERO disables bucketing: same txHash + same second = same alertId.
-        String alertId    = AlertIdFactory.generate(
-                ALERT_TYPE, trade.getMarketId(), now, Duration.ZERO, trade.getTxHash());
-        Instant createdAt = AlertIdFactory.bucketedInstant(now, Duration.ZERO);
-
         String walletLabel = alias != null ? alias : trade.getAddress();
         String direction   = trade.getSide() != null ? trade.getSide().toLowerCase() : "?";
         String outcome     = trade.getOutcome() != null ? trade.getOutcome() : "?";
+
+        // Bucket by (address + marketId + direction) within a 5-minute window.
+        // All fills for the same wallet/market/direction within the window share
+        // one alertId — orderbook multi-level fills collapse into a single alert.
+        String dedupeKey = trade.getAddress() + "|" + trade.getMarketId() + "|" + direction;
+        String alertId    = AlertIdFactory.generate(
+                ALERT_TYPE, trade.getMarketId(), now, Duration.ofMinutes(5), dedupeKey);
+        Instant createdAt = AlertIdFactory.bucketedInstant(now, Duration.ofMinutes(5));
 
         Map<String, String> metadata = new HashMap<>();
         metadata.put("address",    trade.getAddress());
