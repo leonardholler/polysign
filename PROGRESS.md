@@ -1877,3 +1877,74 @@ Date: 2026-04-10
 - `claude_sentiment_ok` logs will appear once the news cache warms up (markets=0 at startup, fills after first market poll cycle ~60s).
 - The `logback-spring.xml` hardcodes `com.polysign` at INFO; `logging.level.*` in application.yml creates more specific child loggers that override it per Logback hierarchy rules.
 - Future improvement: capture per-snapshot volume in `PriceSnapshot` to replace the volume24h delta approximation for `computeVolumeInWindow`.
+
+---
+
+## Phase 20 — Final Polish + Dashboard Redesign + AWS Deploy Scripts
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**Phase A — Bug fixes:**
+- **A1 (triple duplicate alerts)**: `PriceMovementDetector` now always uses the 30-minute dedupe window for alertId generation — removed the `bypassDedupe ? Duration.ZERO : dedupeWindow` branch that caused the same directional move to fire 2-3x per poll cycle. `StatisticalAnomalyDetector` now includes `direction` in the alertId hash so UP and DOWN anomalies in the same bucket are distinct (applying the same fix pattern).
+- **A2 (Polymarket links broken)**: Added `cleanSlug(String)` static helper to all 5 detectors (`PriceMovementDetector`, `StatisticalAnomalyDetector`, `NewsCorrelationDetector`, `WalletActivityDetector`, `ConsensusDetector`). Strips trailing numeric outcome ID segments (3+ digits, not years 2020–2030) from market-level slugs to produce event-level URLs.
+- **A3 (auto-watch)**: Added Phase 6 to `MarketPoller.pollMarkets()` — after upserting the capped set, scans all markets and resets `isWatched=false` for any market not in the current top-25 `autoWatch` set. Also fixed the dashboard API call from `?watched=true` to `?watchedOnly=true` (correct Spring parameter name).
+- **A4 (Smart Money detail fields)**: Added `lastMarketQuestion`, `lastOutcome`, `lastSizeUsdc` to `WatchedWallet` model. `WalletPoller.pollWallet()` now tracks these alongside `latestTimestamp` and persists them after each sync.
+- **A5 (Claude sentiment threshold)**: Lowered `keyword-prefilter-threshold` from `0.3` to `0.15` in `application.yml` so more articles reach Claude for sentiment scoring.
+- **A6 (dep $0 hiding)**: Handled in the Phase B dashboard rewrite — orderbook data is only shown when spread > 0 or depth > 0.
+
+**Phase B — Dashboard redesign (complete rewrite of index.html):**
+- Fixed top header: PolySign logo + pulsing live/stale dot + market count + last poll time + ntfy topic
+- Four-column stats row: Markets Tracked (with watched subtitle), Alerts Today, Signal Precision (7-day 1h), Whale Activity (wallets active)
+- Two-column layout: Alert Feed 65% left, Smart Money + Watched Markets 35% right; single column on mobile
+- Alert Feed: grouped by market, collapse/expand, type-colored labels (`PRICE`/`ANOMALY`/`NEWS`/`CONSENSUS`/`WHALE`), per-type rich detail (price arrows + zone tags + orderbook, z-score + σ/μ, sentiment %, consensus wallet counts, whale alias+direction+size); hides zero orderbook fields
+- Smart Money: compact wallet cards with left-side bullish/bearish border, shows "BUY YES on 'Market question…' — $2,450", 24h filter, sort by most-recent, show-all toggle
+- Watched Markets: compact cards with YES probability progress bar, volume, polymarket links, sorted by volume24h
+- Signal Quality: collapsible section at bottom with inline summary line
+- Anti-flicker: only replaces alert feed DOM when HTML actually changed
+- Removed Chart.js and all audio code
+- Fixed `watchedOnly=true` API param (was broken `watched=true`)
+
+**Phase C — AWS deployment:**
+- `deploy/setup-ec2.sh`: Amazon Linux 2023 one-shot EC2 bootstrap (docker, java-25-amazon-corretto, docker compose plugin)
+- `deploy/run.sh`: checks `.env` exists, runs `docker compose up --build -d`, echoes dashboard URL using EC2 metadata
+- `docker-compose.yml`: added `restart: unless-stopped` to both `localstack` and `polysign` services
+- `README.md`: replaced stub "Running on Real AWS" section with full "AWS Deployment" section (quick-start steps, cost breakdown, architecture note)
+
+### Files touched
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java`
+- `src/main/java/com/polysign/detector/StatisticalAnomalyDetector.java`
+- `src/main/java/com/polysign/detector/NewsCorrelationDetector.java`
+- `src/main/java/com/polysign/detector/WalletActivityDetector.java`
+- `src/main/java/com/polysign/detector/ConsensusDetector.java`
+- `src/main/java/com/polysign/model/WatchedWallet.java`
+- `src/main/java/com/polysign/poller/MarketPoller.java`
+- `src/main/java/com/polysign/poller/WalletPoller.java`
+- `src/main/resources/application.yml`
+- `src/main/resources/static/index.html` (complete rewrite)
+- `docker-compose.yml`
+- `README.md`
+- `deploy/setup-ec2.sh` (new)
+- `deploy/run.sh` (new)
+
+### Verification
+- `mvn test` — all tests pass after Phase A (before B); all tests pass after Phase B
+- `docker compose down && docker compose up --build -d` — build succeeded, both containers started
+- `curl http://localhost:8080/actuator/health` — `{"status":"UP"}`
+- `curl http://localhost:8080/api/stats` — 400 markets tracked, lastPollTime current
+- `curl "http://localhost:8080/api/markets?watchedOnly=true&limit=10"` — returns watched markets
+- Docker logs confirm: `auto_watch updated=25 markets by volume24h`
+- `git push` — pushed to main (commit 04ba9c3)
+
+### Deviations from spec
+- A3: The spec said "unwatch markets that fell out of top 25." Since MarketPoller only upserts markets in the capped-400 set (not all 50k+), the Phase 6 scan covers all markets currently in DynamoDB. This is correct: only markets that were previously polled can have stale isWatched=true.
+- A2: Spec's "correct URL" example (`israel-x-hezbollah-ceasefire-by`) appears to be abbreviated; the `cleanSlug` helper strips only trailing purely-numeric outcome IDs (e.g., `-989-656`), preserving dates like `-april-30-2026`. This is more conservative and matches the described algorithm.
+- B: Removed severity badges (S2/S3/S4) as per spec. Kept `★` multi-detector badge logic in spirit but simplified (not shown in new design — alert count badge is used instead). Alert "mark reviewed" button removed to keep cards clean (database still tracks reviewed state via API).
+- B7: Anti-flicker implemented by diffing the full HTML string and only replacing when content changed (simpler than shadow DOM swap, achieves same result for the feed).
+
+### Notes for next phase
+- The system is now shippable. Deploy to EC2 with `bash deploy/run.sh` after cloning and adding `.env`.
+- `keyword-prefilter-threshold: 0.15` — monitor Claude API costs; if too many spurious calls increase back to 0.25.
+- Future: add `ANTHROPIC_API_KEY` check to `deploy/run.sh` (currently only checks `.env` file exists, not key validity).
+- Future: add HTTPS termination via nginx/Caddy in front of the Spring Boot container for the EC2 deployment.
