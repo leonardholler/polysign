@@ -118,6 +118,8 @@ public class BootstrapRunner implements ApplicationRunner {
         );
 
         // ── market_news_matches ───────────────────────────────────────────────
+        // GSI articleId-index (PK=articleId) — enables reverse lookup "which
+        // markets matched this article?", used by Phase 7.5 backtesting.
         createTable(
             "market_news_matches",
             List.of(
@@ -128,7 +130,9 @@ public class BootstrapRunner implements ApplicationRunner {
                 key("marketId",  KeyType.HASH),
                 key("articleId", KeyType.RANGE)
             ),
-            List.of()
+            List.of(
+                gsi("articleId-index", key("articleId", KeyType.HASH))
+            )
         );
 
         // ── watched_wallets ───────────────────────────────────────────────────

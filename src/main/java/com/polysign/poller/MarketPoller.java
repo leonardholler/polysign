@@ -6,6 +6,7 @@ import com.polysign.common.AppClock;
 import com.polysign.common.CategoryClassifier;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Market;
+import com.polysign.processing.KeywordExtractor;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.Retry;
@@ -82,6 +83,7 @@ public class MarketPoller {
     private final ObjectMapper          mapper;
     private final CircuitBreaker        circuitBreaker;
     private final Retry                 retry;
+    private final KeywordExtractor      keywordExtractor;
     private final AtomicLong            trackedCount = new AtomicLong(0);
 
     public MarketPoller(
@@ -92,6 +94,7 @@ public class MarketPoller {
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
             MeterRegistry meterRegistry,
+            KeywordExtractor keywordExtractor,
             @Value("${polysign.pollers.market.min-volume-usdc:10000}")    double minVolumeUsdc,
             @Value("${polysign.pollers.market.min-volume-24h-usdc:10000}") double minVolume24hUsdc,
             @Value("${polysign.pollers.market.min-hours-to-end:12}")      long   minHoursToEnd,
@@ -105,6 +108,7 @@ public class MarketPoller {
         this.marketsTable     = marketsTable;
         this.clock            = clock;
         this.mapper           = mapper;
+        this.keywordExtractor = keywordExtractor;
         this.circuitBreaker   = cbRegistry.circuitBreaker(CB_NAME);
         this.retry            = retryRegistry.retry(CB_NAME);
 
@@ -265,7 +269,8 @@ public class MarketPoller {
      * Preserves the {@code isWatched} flag via a read-before-write get.
      * Called only for markets that survived both filter phases.
      */
-    private void doUpsert(Map<String, Object> item) {
+    // Package-private so MarketPollerKeywordTest can call it directly without a live HTTP server.
+    void doUpsert(Map<String, Object> item) {
         String marketId = stringOrNull(item, "id");
 
         List<String> outcomeList   = parseJsonStringList(item, "outcomes");
@@ -279,7 +284,7 @@ public class MarketPoller {
             log.info("market_category_other marketId={} question={}", marketId, question);
         }
 
-        Set<String> keywords = extractKeywords(question);
+        Set<String> keywords = keywordExtractor.extract(question);
 
         Key key = Key.builder().partitionValue(marketId).build();
         Market existing  = marketsTable.getItem(key);
@@ -338,23 +343,4 @@ public class MarketPoller {
         return v == null ? null : v.toString();
     }
 
-    private static final Set<String> STOP_WORDS = Set.of(
-        "a","an","the","and","or","but","in","on","at","to","for","of","with","by",
-        "from","is","are","will","would","could","should","who","what","when","where",
-        "which","that","this","be","been","being","have","has","had","do","does","did",
-        "not","no","if","as","it","its","we","you","he","she","they","their","there",
-        "than","then","was","were","more","most","any","all","just","over","before",
-        "after","between","during","up","down","into","out","how","many","much","per"
-    );
-
-    private static Set<String> extractKeywords(String question) {
-        if (question == null || question.isBlank()) return Set.of();
-        Set<String> keywords = new HashSet<>();
-        for (String token : question.toLowerCase().split("[^a-z0-9]+")) {
-            if (token.length() >= 3 && !STOP_WORDS.contains(token)) {
-                keywords.add(token);
-            }
-        }
-        return keywords;
-    }
 }

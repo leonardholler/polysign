@@ -85,8 +85,19 @@ polysign:
     wallet:
       interval-ms: 60000
       initial-delay-ms: 90000
+    rss:
+      interval-ms: 300000       # every 5 minutes
+      initial-delay-ms: 15000   # 15s after startup (markets table may still be populating)
+      feeds:
+        - https://feeds.bloomberg.com/markets/news.rss        # Bloomberg Markets — financial/market-moving news
+        - https://feeds.bbci.co.uk/news/world/rss.xml         # BBC World — geopolitical world news
+        - https://rss.politico.com/politics-news.xml          # Politico — political intelligence for election markets
+        - https://www.theguardian.com/world/rss               # The Guardian World — broad world coverage
+        - https://feeds.npr.org/1001/rss.xml                  # NPR News — US news (Reuters/AP are no longer public)
   consumer:
     notification:
+      poll-interval-ms: 1000
+    news:
       poll-interval-ms: 1000
 
 
@@ -128,6 +139,18 @@ resilience4j:
         wait-duration-in-open-state: 60s
         permitted-number-of-calls-in-half-open-state: 2
         automatic-transition-from-open-to-half-open-enabled: true
+
+      rss-news:
+        # Circuit breaker per feed host — opens if a feed is persistently down.
+        # A WARN log is emitted per failure; opening the breaker suppresses retries
+        # until the feed recovers (30s half-open probe).
+        register-health-indicator: false
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 5
+        failure-rate-threshold: 60
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 1
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       polymarket-gamma:
@@ -156,6 +179,13 @@ resilience4j:
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2.0
         exponential-max-wait-duration: 15s
+
+      rss-news:
+        max-attempts: 3
+        wait-duration: 2s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 10s
   ratelimiter:
     instances:
       polymarket-clob:
