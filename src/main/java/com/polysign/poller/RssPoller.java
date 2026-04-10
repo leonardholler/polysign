@@ -2,6 +2,7 @@ package com.polysign.poller;
 
 import com.polysign.common.AppClock;
 import com.polysign.common.CorrelationId;
+import com.polysign.config.RssProperties;
 import com.polysign.model.Article;
 import com.polysign.processing.KeywordExtractor;
 import com.polysign.processing.UrlCanonicalizer;
@@ -15,7 +16,6 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -91,7 +91,7 @@ public class RssPoller {
     private volatile String newsQueueUrl;
 
     public RssPoller(
-            @Value("${polysign.pollers.rss.feeds}") List<String> feedUrls,
+            RssProperties rssProperties,
             DynamoDbTable<Article> articlesTable,
             S3Client s3Client,
             SqsClient sqsClient,
@@ -102,7 +102,7 @@ public class RssPoller {
             @Value("${polysign.s3.archives-bucket:polysign-archives}") String archivesBucket,
             @Value("${polysign.sqs.queues.news-to-process:news-to-process}") String newsQueueName) {
 
-        this.feedUrls         = feedUrls;
+        this.feedUrls         = rssProperties.feeds();
         this.articlesTable    = articlesTable;
         this.s3Client         = s3Client;
         this.sqsClient        = sqsClient;

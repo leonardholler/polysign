@@ -1357,4 +1357,93 @@ Date: 2026-04-10
   PriceMovementDetector causes assertions at steps 5, 6, 8, and 9 to all fail red.
 - Spring Test context caching: ConsensusDetectorIT and NewsCorrelationDetectorIT share one
   ApplicationContext (same @MockBean set); GoldenPathIT gets its own (different @MockBean set).
+
+---
+
+## Phase 11 — README + DESIGN.md + RssPoller Feed Binding Fix
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**README.md** — interview-ready project README (9 sections):
+1. One-paragraph pitch with monitoring disclaimer
+2. Mermaid architecture diagram (write path + feedback loop)
+3. Signal quality table (5 detector types, placeholder for live numbers)
+4. Engineering decisions (5 subsections): idempotency (Phase 3 bug story + alertId
+   `845f165c...` proof), resilience (6 CBs, RssPoller exception), signal quality tuning
+   (Phase 4.5 tail-zone 0.0045→0.0055 story), observability (14 metrics), PhoneWorthinessFilter
+   (3 rules, fail-closed, target 10-30/day)
+5. "What I Would Do Differently on Real AWS" — specific Lambda names, EventBridge rules,
+   Step Functions Wait states, Kinesis partitioning, X-Ray sampling, DynamoDB auto-scaling,
+   precision-based alarms
+6. Signal strategy — 4 tiers (noise → volatility → information → convergence), why 4
+   detectors > 1 (signal overlap + measured precision)
+7. Tech stack + project structure + running locally (docker compose, phone setup, thresholds)
+8. Limitations (honest: keyword matching, stat detector history, wallet curation, sample size,
+   no auth, no dashboard tests, ResolutionSweeper stub)
+9. Future work (embeddings, Kalshi, orderbook time series, Lambda rewrite)
+
+**DESIGN.md** — deep technical document (~2,700 words, 12 sections):
+1. Problem framing
+2. Data model — per-table access pattern table (PK/SK/pattern/why) + Why DynamoDB over RDS
+   (TTL, per-table capacity, conditional writes; tradeoffs: no ad-hoc queries, GSI consistency,
+   400KB limit)
+3. Write path — Gamma → MarketPoller → PricePoller → PriceMovementDetector → AlertService →
+   SQS → NotificationConsumer → ntfy.sh, one paragraph per hop
+4. Alert ID design — SHA-256 bucketing, composite-key bug, worked example with epoch math,
+   why not UUIDs, bypass mode for 2x threshold
+5. SQS architecture — NotificationConsumer reference pattern (lazy URL, long poll,
+   delete-on-success, DLQ), why SQS over in-process, why not Kafka
+6. Resilience4j strategy — table of all 6 call sites with config
+7. Failure modes — table: what breaks, system behavior, user impact, recovery
+8. Signal quality methodology — precision (not accuracy, not recall), 0.5pp dead zone,
+   horizon vs resolution evaluation, 3 known biases (survivor, lookback, clustering),
+   delta-p floor story
+9. Detector architecture — testable subclass pattern, two-constructor pattern, AppClock
+   deterministic testing
+10. Scaling story — 4 bottlenecks in order (rate limits → write throughput → detector fan-out
+    → wallet polling) with fixes
+11. What I Would Do Differently (brief, references README)
+12. Operational Runbook (Phase 12 placeholder)
+
+**RssPoller feed binding fix** — startup bug fix:
+- `@Value("${polysign.pollers.rss.feeds}") List<String>` cannot bind a YAML list.
+  Spring's `@Value` resolves scalars; YAML lists use indexed keys (`feeds[0]`, `feeds[1]`)
+  which `@Value` doesn't match.
+- Fix: `RssProperties.java` — `@ConfigurationProperties(prefix = "polysign.pollers.rss")`
+  record with `List<String> feeds`. Constructor binding handles YAML lists correctly.
+- `PolySignApplication.java` — added `@EnableConfigurationProperties(RssProperties.class)`
+- `RssPoller.java` — constructor changed from `@Value List<String>` to `RssProperties`
+  injection; `this.feedUrls = rssProperties.feeds()`
+
+### Files touched
+**New**
+- `README.md`
+- `DESIGN.md`
+- `src/main/java/com/polysign/config/RssProperties.java`
+
+**Modified**
+- `src/main/java/com/polysign/PolySignApplication.java` — `@EnableConfigurationProperties`
+- `src/main/java/com/polysign/poller/RssPoller.java` — `RssProperties` injection
+- `PROGRESS.md` — Phase 11 entry
+
+### Verification
+- `mvn test` → **121 unit tests, 0 failures**
+- `mvn compile` → exit 0
+- Docker build + startup verified (see below)
+
+### Deviations from spec
+1. **`deployment/aws-setup.md` deferred to Phase 12**: The REMAINING_PHASES prompt mentions
+   creating a prose deployment guide in Phase 11. Deferred because Phase 12 creates the actual
+   numbered deployment scripts, and the guide should reference them. Writing it now would
+   produce stale content.
+
+### Notes for next phase
+- Phase 12: Real AWS deployment. All documentation is in place. Placeholders in README.md
+  for live URL, screenshots, and cost breakdown will be filled after deployment.
+- CI badge URL needs GitHub username — uncomment the badge line in README.md after first
+  push to GitHub.
+- RssProperties fix means the app now starts cleanly with the YAML list config. Previously
+  this would have failed at Spring bean wiring time on a clean container start.
   3 IT classes → 2 Spring context startups (one shared, one for GoldenPathIT).
