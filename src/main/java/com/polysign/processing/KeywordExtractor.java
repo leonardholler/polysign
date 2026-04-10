@@ -11,7 +11,7 @@ import java.util.Set;
  * <p>Extraction algorithm (deliberately simple — Phase 7 spec, Decision F):
  * <ol>
  *   <li>Lowercase the input</li>
- *   <li>Split on any non-alphabetic character sequence</li>
+ *   <li>Split on any non-alphanumeric character sequence</li>
  *   <li>Drop tokens shorter than 3 characters</li>
  *   <li>Drop tokens that appear in the stop-word list</li>
  *   <li>Return the remaining unique tokens as a {@code Set<String>}</li>

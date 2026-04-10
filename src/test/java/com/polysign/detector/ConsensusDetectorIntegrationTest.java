@@ -5,7 +5,9 @@ import com.polysign.model.Alert;
 import com.polysign.model.WalletTrade;
 import com.polysign.poller.MarketPoller;
 import com.polysign.poller.PricePoller;
+import com.polysign.poller.RssPoller;
 import com.polysign.poller.WalletPoller;
+import com.polysign.processing.NewsConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,7 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = "aws.endpoint-override=http://localhost:4566")
 @MockBean({MarketPoller.class, PricePoller.class, WalletPoller.class,
            PriceMovementDetector.class, StatisticalAnomalyDetector.class,
-           com.polysign.notification.NotificationConsumer.class})
+           com.polysign.notification.NotificationConsumer.class,
+           RssPoller.class, NewsConsumer.class})
 class ConsensusDetectorIntegrationTest {
 
     /**

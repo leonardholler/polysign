@@ -852,3 +852,79 @@ regression suite. Phase 7 integration test will cover the end-to-end write → d
 - Integration tests are gated behind -Dintegration-tests=true. Default `mvn test` runs 65 unit
   tests (+ 2 skipped). To run the 2 new integration tests: `mvn test -Dintegration-tests=true`
   with LocalStack up.
+
+## Phase 7 — News Ingestion + Correlation
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `UrlCanonicalizer.java` — strips UTM/tracking params, lowercases host, stable SHA-256 `articleId`
+- `KeywordExtractor.java` — alphanumeric token extraction (`[^a-z0-9]+` split), ~148-word stop list,
+  shared between MarketPoller (at upsert time) and RssPoller (at ingest time)
+- `NewsMatcher.java` — asymmetric containment / market-side coverage scoring:
+  `matches / marketKw.size()`, NOT Jaccard; returns 0.0 if either set is empty
+- `RssPoller.java` — `@Scheduled` every 5 min; 5 feeds (Bloomberg, BBC, Politico, Guardian, NPR);
+  feed-level + item-level catch; archives article HTML to S3; writes `Article` to DynamoDB;
+  enqueues `articleId` to `news-to-process` SQS; Resilience4j `rss-news` CB + retry
+- `NewsConsumer.java` — SQS long-poll consumer (mirrors NotificationConsumer shape);
+  fetches Article from DynamoDB; calls `NewsCorrelationDetector.checkMarkets()`; deletes message on
+  success; leaves message on failure (SQS requeues after visibility timeout)
+- `NewsCorrelationDetector.java` — 5-min TTL cache of active markets (volatile + synchronized);
+  `NewsMatcher` score ≥ 0.5 AND volume24h ≥ $100 k → writes `MarketNewsMatch` then fires alert;
+  alert type `news_correlation`, severity `warning`; alertId via `AlertIdFactory(Duration.ZERO,
+  articleId)` — one article × one market = one alert forever; `clearCache()` package-private for
+  integration tests
+- `MarketNewsMatch.java` — updated: added `articleTitle`, `articleUrl` denormalized fields;
+  `@DynamoDbSecondaryPartitionKey(indexNames = "articleId-index")` stacked on `getArticleId()`
+- `BootstrapRunner.java` — `market_news_matches` table updated: `articleId` attribute declared,
+  `articleId-index` GSI added
+- `MarketPoller.java` — refactored: private `extractKeywords()` and `STOP_WORDS` removed;
+  delegates to injected `KeywordExtractor`
+- `HttpConfig.java` — `rssArticleClient` WebClient bean added (no base URL, 4 MB buffer)
+- `application.yml` — `polysign.pollers.rss.*` config, `rss-news` Resilience4j CB + retry
+
+### Files touched
+**New**
+- `src/main/java/com/polysign/processing/UrlCanonicalizer.java`
+- `src/main/java/com/polysign/processing/KeywordExtractor.java`
+- `src/main/java/com/polysign/processing/NewsMatcher.java`
+- `src/main/java/com/polysign/processing/NewsConsumer.java`
+- `src/main/java/com/polysign/poller/RssPoller.java`
+- `src/main/java/com/polysign/detector/NewsCorrelationDetector.java`
+- `src/test/java/com/polysign/processing/UrlCanonicalizerTest.java`
+- `src/test/java/com/polysign/processing/KeywordExtractorTest.java`
+- `src/test/java/com/polysign/processing/NewsMatcherTest.java`
+- `src/test/java/com/polysign/poller/MarketPollerKeywordTest.java`
+- `src/test/java/com/polysign/detector/NewsCorrelationDetectorIntegrationTest.java`
+
+**Modified**
+- `src/main/java/com/polysign/model/MarketNewsMatch.java`
+- `src/main/java/com/polysign/config/BootstrapRunner.java`
+- `src/main/java/com/polysign/config/HttpConfig.java`
+- `src/main/java/com/polysign/poller/MarketPoller.java`
+- `src/main/resources/application.yml`
+
+### Verification
+- `mvn test` → **71 unit tests, 0 failures** (65 Phase 6 + 6 NewsMatcherTest)
+- `mvn test -Dintegration-tests=true` → **2 news integration tests green** (Test A + Test B)
+- All Resilience4j `rss-news` CB + retry instances configured and wired
+
+### Deviations from spec
+1. **`news_correlation` alertId uses `Duration.ZERO` + `articleId` as payload** (not time-bucketed):
+   one article × one market = one alert forever. Consistent with `wallet_activity` pattern
+   (WalletActivityDetector uses `Duration.ZERO` + `txHash`). A market crossing the score +
+   volume threshold for the same article a second time is a no-op (AlertIdFactory dedupe).
+2. **`KeywordExtractor` uses `[^a-z0-9]+` (alphanumeric)**, not `[^a-z]+` (alphabetic). Digit
+   tokens like "2026" are kept — this is intentional and matches the original MarketPoller
+   behaviour. Javadoc corrected from "non-alphabetic" to "non-alphanumeric" in Phase 7 Commit 2.
+
+### Notes for next phase
+- Phase 7.5: backtesting via `articleId-index` GSI on `market_news_matches` to correlate alerts
+  with subsequent price movements. Foundation is in place (matchedKeywords stored per row).
+- Phase 8: REST API `GET /api/markets/{marketId}/news` can read `market_news_matches` by PK
+  without N+1 reads (articleTitle + articleUrl denormalized).
+- RSS feeds are unverified live (Bloomberg may require a subscription; others return public XML).
+  Replace any dead feeds with alternatives if `rss_feed_failed` WARNs appear consistently.
+- `NewsConsumer` polls `news-to-process` every 1 s (long-poll 20 s). Article-level deduplication
+  is handled by the `attribute_not_exists(alertId)` DynamoDB condition — re-processing the same
+  article is safe.
