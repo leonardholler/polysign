@@ -326,7 +326,7 @@ async function loadAlerts() {
         ? `<span class="text-xs text-gray-500">S${a.signalStrength}</span>` : '';
       const meta = renderMetaHighlight(a);
       const price = a.currentYesPrice != null ? `<span class="text-gray-500">${(a.currentYesPrice * 100).toFixed(1)}¢</span>` : '';
-      const pmLink = a.marketSlug ? `https://polymarket.com/event/${a.marketSlug}` : 'https://polymarket.com';
+      const pmLink = a.marketQuestion ? `https://polymarket.com/search?query=${encodeURIComponent(a.marketQuestion)}` : 'https://polymarket.com';
       const question = a.marketQuestion
         ? `<a href="${pmLink}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${truncate(a.marketQuestion, 80)}</a>` : '';
 
@@ -384,13 +384,13 @@ async function loadWatchedMarkets() {
       const card = document.createElement('div');
       card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2 hover:border-gray-700 transition-colors duration-200';
       card.innerHTML = `
-        <div class="font-semibold text-gray-200 leading-tight">${m.slug ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" class="hover:text-blue-400 hover:underline">${truncate(m.question || m.marketId, 100)}</a>` : truncate(m.question || m.marketId, 100)}</div>
+        <div class="font-semibold text-gray-200 leading-tight">${m.question ? `<a href="https://polymarket.com/search?query=${encodeURIComponent(m.question || m.marketId)}" target="_blank" rel="noopener" class="hover:text-blue-400 hover:underline">${truncate(m.question || m.marketId, 100)}</a>` : truncate(m.question || m.marketId, 100)}</div>
         <div class="flex items-center gap-3 text-gray-400">
           <span>Yes: <span class="text-green-400 font-semibold">${m.currentYesPrice != null ? (m.currentYesPrice * 100).toFixed(1) + '¢' : '—'}</span></span>
           <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24h ?? m.volume24Hr)}</span></span>
           <span class="ml-auto text-gray-600">${m.category || ''}</span>
         </div>
-        <div style="height:50px;overflow:hidden;position:relative"><canvas id="spark-${m.marketId}"></canvas></div>
+        <div style="height:80px;overflow:hidden;position:relative"><canvas id="spark-${m.marketId}"></canvas></div>
       `;
       grid.appendChild(card);
 
@@ -424,17 +424,49 @@ async function loadSparkline(marketId) {
           data: points.map(p => p.midpoint != null ? (p.midpoint * 100) : null),
           borderColor: '#22c55e',
           borderWidth: 1.5,
-          fill: false,
+          fill: true,
+          backgroundColor: 'rgba(34, 197, 94, 0.08)',
           tension: 0.3,
           pointRadius: 0,
         }],
       },
       options: {
         animation: false,
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            enabled: true,
+            callbacks: { label: function(ctx) { return ctx.parsed.y.toFixed(1) + '¢'; } },
+            backgroundColor: '#1f2937',
+            titleFont: { size: 10 },
+            bodyFont: { size: 10 },
+          },
+        },
         scales: {
-          x: { display: false },
-          y: { display: false, grace: '5%' },
+          x: {
+            display: true,
+            ticks: {
+              font: { size: 8 },
+              color: '#4b5563',
+              maxTicksLimit: 4,
+              callback: function(val, idx) {
+                const d = new Date(this.getLabelForValue(val));
+                return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+              }
+            },
+            grid: { display: false },
+          },
+          y: {
+            display: true,
+            grace: '10%',
+            ticks: {
+              font: { size: 9 },
+              color: '#4b5563',
+              callback: function(v) { return v.toFixed(0) + '¢'; },
+              maxTicksLimit: 3,
+            },
+            grid: { color: 'rgba(75, 85, 99, 0.15)' },
+          },
         },
         responsive: true,
         maintainAspectRatio: false,
