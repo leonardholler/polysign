@@ -58,6 +58,7 @@ polysign:
       watched-wallets: watched_wallets
       wallet-trades: wallet_trades
       alerts: alerts
+      alert-outcomes: alert_outcomes
   sqs:
     queues:
       news-to-process: news-to-process

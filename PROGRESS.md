@@ -928,3 +928,95 @@ Date: 2026-04-09
 - `NewsConsumer` polls `news-to-process` every 1 s (long-poll 20 s). Article-level deduplication
   is handled by the `attribute_not_exists(alertId)` DynamoDB condition — re-processing the same
   article is safe.
+
+## Phase 7.5 — Signal Quality Infrastructure
+Status: complete
+Date: 2026-04-09
+
+### What was built
+- `AlertOutcome.java` — DynamoDB model (PK: `alertId`, SK: `horizon`); GSI `type-firedAt-index`
+  (PK: `type`, SK: `firedAt`); nullable fields: `directionPredicted`, `directionRealized`,
+  `wasCorrect` (Boolean), `priceAtAlert`, `priceAtHorizon`, `magnitudePp`, `spreadBpsAtAlert`,
+  `depthAtMidAtAlert` (last two preserved from pre-Phase-5 orderbook; informational only)
+- `AlertOutcomeEvaluator.java` — `@Scheduled` every 5 min; scans alerts between now-25h and
+  now-15min; evaluates 3 horizons (t15m, t1h, t24h); per-detector `directionPredicted` extraction:
+  - `price_movement`, `statistical_anomaly`: `metadata["direction"]` → "up"/"down"
+  - `consensus`: `metadata["direction"]` → "BUY"/"SELL" → normalised to "up"/"down"
+  - `wallet_activity`: `metadata["side"]` → "BUY"/"SELL" → normalised to "up"/"down"
+  - `news_correlation`: always `null` (measures volatility only, not direction)
+  - `firedAt` = `metadata["detectedAt"]`; fallback to `createdAt` with WARN log when absent
+    (news_correlation alerts always fall back; all Phase 5+ alerts have detectedAt)
+  - `priceAtAlert`/`priceAtHorizon` from `price_snapshots` with ±2 min window, closest match
+  - Dead zone: `|rawDelta| < 0.005` → `directionRealized="flat"`, `wasCorrect=null` (excluded
+    from precision denominator)
+  - `magnitudePp`: "up" → rawDelta, "down" → -rawDelta, null direction → abs(rawDelta)
+  - `attribute_not_exists(horizon)` conditional write for idempotency; checks `outcomeExists`
+    before computing to skip already-evaluated alert×horizon pairs
+- `ResolutionSweeper.java` — `@Scheduled` every 6 hours; resolution-horizon outcome writer;
+  reuses `evaluator.computeOutcome()` (package-private); **STUBBED**: `findClosedMarkets()`
+  returns empty list + WARN log — `Market.java` has no `closed` or `resolvedOutcomePrice` field;
+  cannot fully implement until Market model is extended (Phase 8 or later)
+- `SnapshotArchiver.java` — `@Scheduled` 04:00 UTC daily; scans all markets, queries last 24h
+  snapshots, writes gzipped JSONL to S3 (`snapshots/{yyyy}/{MM}/{dd}/{marketId}.jsonl.gz`);
+  S3 PutObject is naturally idempotent on the same key; package-private method seams for tests
+- `SignalPerformanceService.java` — aggregates `alert_outcomes` via `type-firedAt-index` GSI;
+  precision = `correctCount / (correctCount + wrongCount)`, null when denominator = 0; computes
+  `avgMagnitudePp`, `medianMagnitudePp`, `meanAbsMagnitudePp` per detector type
+- `SignalPerformanceController.java` — `GET /api/signals/performance?type=&horizon=&since=`;
+  manual validation with `Set<String>` for valid types/horizons; throws `ResponseStatusException`
+  for bad params; defaults: horizon=t1h, since=now-7d
+- `GlobalExceptionHandler.java` — `@RestControllerAdvice`; RFC 7807 `application/problem+json`
+  for `ResponseStatusException`, `MethodArgumentNotValidException`, and generic `Exception`
+- `BootstrapRunner.java` — `alert_outcomes` table + `type-firedAt-index` GSI provisioned
+- `DynamoConfig.java` — `alertOutcomesTable` bean added
+- `PricePoller.java` — TTL extended: 7d → 30d (required by AlertOutcomeEvaluator look-back)
+
+### Files touched
+**New**
+- `src/main/java/com/polysign/model/AlertOutcome.java`
+- `src/main/java/com/polysign/backtest/AlertOutcomeEvaluator.java`
+- `src/main/java/com/polysign/backtest/ResolutionSweeper.java`
+- `src/main/java/com/polysign/backtest/SnapshotArchiver.java`
+- `src/main/java/com/polysign/backtest/SignalPerformanceService.java`
+- `src/main/java/com/polysign/api/SignalPerformanceController.java`
+- `src/main/java/com/polysign/api/GlobalExceptionHandler.java`
+- `src/test/java/com/polysign/backtest/AlertOutcomeEvaluatorTest.java`
+- `src/test/java/com/polysign/backtest/ResolutionSweeperTest.java`
+- `src/test/java/com/polysign/backtest/SnapshotArchiverTest.java`
+- `src/test/java/com/polysign/backtest/SignalPerformanceServiceTest.java`
+- `src/test/java/com/polysign/api/SignalPerformanceControllerTest.java`
+
+**Modified**
+- `src/main/java/com/polysign/config/BootstrapRunner.java`
+- `src/main/java/com/polysign/config/DynamoConfig.java`
+- `src/main/java/com/polysign/poller/PricePoller.java`
+- `src/main/resources/application.yml`
+
+### Verification
+- `mvn test` → **119 unit tests, 0 failures** (71 Phase 7 + 48 Phase 7.5)
+- `mvn test -Dintegration-tests=true` → **119 tests, 0 failures** (LocalStack up, DynamoDB + S3 + SQS)
+- TDD discipline: AlertOutcomeEvaluator tests written first, confirmed RED (class not found),
+  then implementation written, confirmed GREEN
+
+### Deviations from spec
+1. **`ResolutionSweeper.findClosedMarkets()` is stubbed** — `Market.java` lacks a `closed`
+   boolean and `resolvedOutcomePrice`/`resolvedPrice` field. The sweeper logs a WARN on every
+   run and returns an empty list. Requires a Market model extension before it can go live.
+2. **`news_correlation` always falls back to `createdAt` for `firedAt`** — `NewsCorrelationDetector`
+   does not write `detectedAt` to metadata. Fallback WARN is expected and acceptable; createdAt
+   is within 1 second of detection time for news alerts.
+3. **Pre-Phase-5 orderbook fields** (`spreadBpsAtAlert`, `depthAtMidAtAlert`) are preserved in
+   the `AlertOutcome` model as informational fields. They are written as `null` for all current
+   alerts (orderbook capture was removed in Phase 5); they are NOT included in the precision
+   formula or any aggregation.
+
+### Notes for next phase
+- **BLOCKER for ResolutionSweeper**: `Market.java` needs a `closed: Boolean` field and a
+  `resolvedOutcomePrice: BigDecimal` field before `findClosedMarkets()` can be implemented.
+  Add them early in Phase 8 or as a prerequisite to any resolution-driven back-test.
+- Precision formula: `correct/(correct+wrong)`, flat (|rawDelta| < 0.005) excluded from both
+  numerator and denominator; returns null when denominator is zero.
+- `GET /api/signals/performance` is live but unauthenticated — add auth (JWT or API key)
+  when the auth layer is implemented.
+- `price_snapshots` TTL is now 30 days (extended from 7 days in this phase) — this is the
+  minimum needed for the t24h horizon look-back with adequate history.

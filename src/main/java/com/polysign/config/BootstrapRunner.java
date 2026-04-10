@@ -186,6 +186,28 @@ public class BootstrapRunner implements ApplicationRunner {
             )
         );
         enableTtl("alerts", "expiresAt");
+
+        // ── alert_outcomes ────────────────────────────────────────────────────
+        // No TTL — outcomes are cheap and the whole point is long-term measurement.
+        // GSI type-firedAt-index enables per-detector aggregation queries.
+        createTable(
+            "alert_outcomes",
+            List.of(
+                attr("alertId", ScalarAttributeType.S),
+                attr("horizon", ScalarAttributeType.S),
+                attr("type",    ScalarAttributeType.S),
+                attr("firedAt", ScalarAttributeType.S)
+            ),
+            List.of(
+                key("alertId", KeyType.HASH),
+                key("horizon", KeyType.RANGE)
+            ),
+            List.of(
+                gsi("type-firedAt-index",
+                    key("type",    KeyType.HASH),
+                    key("firedAt", KeyType.RANGE))
+            )
+        );
     }
 
     private void createTable(String tableName,

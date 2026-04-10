@@ -1,6 +1,7 @@
 package com.polysign.config;
 
 import com.polysign.model.*;
+import com.polysign.model.AlertOutcome;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,6 +41,9 @@ public class DynamoConfig {
     @Value("${polysign.dynamodb.tables.alerts:alerts}")
     private String alertsTable;
 
+    @Value("${polysign.dynamodb.tables.alert-outcomes:alert_outcomes}")
+    private String alertOutcomesTable;
+
     @Bean
     public DynamoDbTable<Market> marketsTable(DynamoDbEnhancedClient client) {
         return client.table(marketsTable, TableSchema.fromBean(Market.class));
@@ -73,5 +77,10 @@ public class DynamoConfig {
     @Bean
     public DynamoDbTable<Alert> alertsTable(DynamoDbEnhancedClient client) {
         return client.table(alertsTable, TableSchema.fromBean(Alert.class));
+    }
+
+    @Bean
+    public DynamoDbTable<AlertOutcome> alertOutcomesTable(DynamoDbEnhancedClient client) {
+        return client.table(alertOutcomesTable, TableSchema.fromBean(AlertOutcome.class));
     }
 }

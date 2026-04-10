@@ -48,7 +48,7 @@ public class PricePoller {
     private static final Logger log = LoggerFactory.getLogger(PricePoller.class);
 
     private static final String  CLOB_CB_NAME   = "polymarket-clob";
-    private static final long    TTL_SECONDS     = 7L * 24 * 60 * 60; // 7 days
+    private static final long    TTL_SECONDS     = 30L * 24 * 60 * 60; // 30 days (extended for backtesting)
     private static final int     DEDUPE_SCALE    = 4;
 
     private final WebClient               clobClient;
