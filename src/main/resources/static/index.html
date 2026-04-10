@@ -155,6 +155,13 @@ function fmt(n, digits = 0) {
   return Number(n).toFixed(digits);
 }
 
+function fmtUsd(n) {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1) + 'K';
+  return '$' + Number(n).toFixed(0);
+}
+
 function fmtPct(v) {
   if (v == null) return '—';
   return (v * 100).toFixed(0) + '%';
@@ -222,8 +229,8 @@ function renderAlertDetail(a) {
     const spread = parseFloat(m.spreadBps || 0), depth = parseFloat(m.depthAtMid || 0);
     if (spread > 0 || depth > 0) {
       const parts = [];
-      if (spread > 0) parts.push('spd ' + spread.toFixed(0) + 'bps');
-      if (depth  > 0) parts.push('dep $' + depth.toFixed(0));
+      if (spread > 0) parts.push('spread ' + spread.toFixed(0) + 'bps');
+      if (depth  > 0) parts.push('depth ' + fmtUsd(depth));
       bookTag = ' <span class="text-gray-700">' + parts.join(' · ') + '</span>';
     }
     return `<span class="text-gray-400">${(parseFloat(from)*100).toFixed(1)}¢ → ${(parseFloat(to)*100).toFixed(1)}¢</span> <span class="${col}">(${parseFloat(pct).toFixed(1)}% ${arrow})</span>${zoneTag}${bookTag}`;
@@ -250,31 +257,28 @@ function renderAlertDetail(a) {
            (score ? `<span class="text-gray-600">match: ${Math.round(parseFloat(score)*100)}%</span>` : '');
   }
   if (a.type === 'consensus') {
-    const wc        = m.walletCount || '?';
-    const dir       = m.direction || '';
-    const out       = (m.outcome || '').toUpperCase();
-    const sentiment = m.consensusOutcome || '';
-    const tot       = m.totalSizeUsdc ? '$' + fmt(parseFloat(m.totalSizeUsdc)) : '';
-    const col       = sentiment === 'bullish' ? 'text-emerald-400' : 'text-red-400';
+    const wc  = m.walletCount || '?';
+    const dir = (m.direction || '').toUpperCase();
+    const out = (m.outcome || '').toUpperCase();
+    const tot = m.totalSizeUsdc ? fmtUsd(parseFloat(m.totalSizeUsdc)) : '';
+    const col = dir === 'BUY' ? 'text-emerald-400' : 'text-red-400';
     let walletBreakdown = '';
     if (m.walletDetails) {
       const parts = m.walletDetails.split('|').map(p => {
         const segs = p.split(':');
-        return segs[0] + ' $' + fmt(parseFloat(segs[2] || 0));
+        return segs[0] + ' ' + fmtUsd(parseFloat(segs[2] || 0));
       });
       walletBreakdown = `<br><span class="text-gray-500 text-[10px]">${parts.join(' · ')}</span>`;
     }
     return `<span class="${col}">${wc} wallets ${dir} ${out}${tot ? ' — ' + tot + ' total' : ''}</span>` +
-           (sentiment ? ` <span class="${col}">(${sentiment})</span>` : '') +
            walletBreakdown;
   }
   if (a.type === 'wallet_activity') {
     const alias = m.alias || m.walletAlias || '';
     const dir   = m.direction || m.side || '';
     const out   = m.outcome || '';
-    const sz    = m.sizeUsdc ? '$' + fmt(parseFloat(m.sizeUsdc)) : '';
-    const col   = (dir === 'BUY' && out === 'YES') || (dir === 'SELL' && out === 'NO')
-                  ? 'text-emerald-400' : 'text-red-400';
+    const sz    = m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '';
+    const col   = dir === 'BUY' ? 'text-emerald-400' : 'text-red-400';
     return `<span class="${col}">${alias || '?'} ${dir} ${out}</span>` +
            (sz ? ` <span class="text-gray-400">${sz}</span>` : '');
   }
@@ -348,10 +352,16 @@ async function loadAlerts() {
     });
 
     const html = sorted.map(g => {
-      const first = g.alerts[0];
+      const first  = g.alerts[0];
       const safeId = (g.marketId || '_').replace(/[^a-zA-Z0-9_-]/g, '_');
       const pmLink = g.link || (g.question
         ? `https://polymarket.com/search?query=${encodeURIComponent(g.question)}` : 'https://polymarket.com');
+
+      // Auto-expand groups with any consensus or critical alert
+      const hasCritical  = g.alerts.some(a => a.severity === 'critical');
+      const hasConsensus = g.alerts.some(a => a.type === 'consensus');
+      if (hasCritical || hasConsensus) expandedMarkets.add(safeId);
+
       const isExpanded = expandedMarkets.has(safeId);
       const priceNum = g.price != null ? g.price : null;
       const priceStr = priceNum != null ? `<span class="font-bold text-base ml-2 ${priceColor(priceNum)}">${(priceNum*100).toFixed(1)}¢</span>` : '';
@@ -359,11 +369,16 @@ async function loadAlerts() {
         ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">${g.alerts.length} alerts</span>` : '';
       const latestType = `<span class="text-[10px] ${typeColor(first.type)}">${typeLabel(first.type)}</span>`;
       const recentTime = `<span class="text-gray-600 text-[10px]">${relativeTime(first.createdAt)}</span>`;
-      const detail = isExpanded ? g.alerts.map(a => renderAlertCard(a)).join('') : '';
+
+      // First alert always visible; additional alerts collapsed behind expand
+      const firstCard  = renderAlertCard(g.alerts[0]);
+      const hasExtra   = g.alerts.length > 1;
+      const extraCards = hasExtra ? g.alerts.slice(1).map(a => renderAlertCard(a)).join('') : '';
+
       return `<div class="rounded border border-gray-800 bg-gray-900/40 overflow-hidden">
-        <div class="flex flex-wrap items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-gray-800/40 select-none"
-             onclick="toggleMarket('${safeId}')">
-          <span id="mchev-${safeId}" class="text-gray-600 text-[10px]">${isExpanded ? '▾' : '▸'}</span>
+        <div class="flex flex-wrap items-center gap-2 px-3 py-2.5 ${hasExtra ? 'cursor-pointer hover:bg-gray-800/40' : ''} select-none"
+             ${hasExtra ? `onclick="toggleMarket('${safeId}')"` : ''}>
+          <span id="mchev-${safeId}" class="text-gray-600 text-[10px]">${hasExtra ? (isExpanded ? '▾' : '▸') : ''}</span>
           <a href="${pmLink}" target="_blank" rel="noopener"
              class="text-gray-200 hover:text-blue-400 hover:underline flex-1 leading-tight"
              onclick="event.stopPropagation()">${truncate(g.question || g.marketId, 90)}</a>
@@ -372,8 +387,9 @@ async function loadAlerts() {
             ${countBadge}${latestType}${recentTime}
           </span>
         </div>
-        <div id="mgrp-${safeId}" class="${isExpanded ? '' : 'hidden'} border-t border-gray-800/50 space-y-1 p-1.5">
-          ${detail}
+        <div class="border-t border-gray-800/50 space-y-1 p-1.5">
+          ${firstCard}
+          ${hasExtra ? `<div id="mgrp-${safeId}" class="${isExpanded ? '' : 'hidden'} space-y-1 mt-1">${extraCards}</div>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -415,7 +431,6 @@ function renderWallets(wallets) {
               && w.address !== '_comment'
               && !(w.alias || '').startsWith('PLACEHOLDER')
               && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h)
-    .filter(w => w.recentDirection || w.lastMarketQuestion)
     .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
 
   document.getElementById('st-wallets-active').textContent = filtered.length + ' active in 24h';
@@ -437,16 +452,23 @@ function renderWallets(wallets) {
   }
 
   const html = shown.map(w => {
-    const dir = (w.recentDirection || '').toUpperCase();
+    const dir     = (w.recentDirection || '').toUpperCase();
     const outcome = (w.lastOutcome || '').toUpperCase();
-    const isBullish = (dir === 'BUY' && outcome === 'YES') || (dir === 'SELL' && outcome === 'NO');
-    const borderCol = isBullish ? 'border-l-emerald-600' : 'border-l-red-700';
-    const dirCol    = isBullish ? 'text-emerald-400'     : 'text-red-400';
-    const size      = w.lastSizeUsdc ? '$' + fmt(parseFloat(w.lastSizeUsdc)) : '';
-    const question  = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
-    const tradeInfo = dir
-      ? `${dir}${outcome ? ' ' + outcome : ''} on "${question}"`
-      : '—';
+    const isBuy     = dir === 'BUY';
+    const borderCol = isBuy ? 'border-l-emerald-600' : 'border-l-red-700';
+    const dirCol    = isBuy ? 'text-emerald-400'     : 'text-red-400';
+    const sizeStr   = w.lastSizeUsdc ? ' — ' + fmtUsd(parseFloat(w.lastSizeUsdc)) : '';
+    let tradeInfo;
+    if (!dir) {
+      tradeInfo = '—';
+    } else if (outcome && outcome !== 'YES' && outcome !== 'NO') {
+      // Named outcome (e.g. "ARIZONA DIAMONDBACKS") — outcome IS the useful info, skip question
+      tradeInfo = `${dir} ${outcome}${sizeStr}`;
+    } else {
+      // YES/NO binary market — show market question for context
+      const q = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
+      tradeInfo = `${dir}${outcome ? ' ' + outcome : ''} on "${q}"${sizeStr}`;
+    }
     return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
       <div class="flex items-center justify-between gap-2">
         <a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener"
@@ -454,8 +476,7 @@ function renderWallets(wallets) {
         <span class="text-gray-600 text-[10px] shrink-0">${relativeTime(w.lastTradeAt)}</span>
       </div>
       <div class="text-xs ${dirCol} mt-0.5 leading-tight">${tradeInfo}</div>
-      <div class="flex items-center justify-between mt-0.5">
-        <span class="text-gray-400 text-xs">${size}</span>
+      <div class="flex items-center justify-end mt-0.5">
         <span class="text-gray-600 text-[10px]">${w.tradeCount != null ? w.tradeCount + ' trades' : ''}</span>
       </div>
     </div>`;

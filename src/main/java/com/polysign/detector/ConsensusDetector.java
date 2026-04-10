@@ -163,14 +163,17 @@ public class ConsensusDetector {
                 .collect(Collectors.joining("|"));
 
         // Compute implied market sentiment from direction + outcome.
-        // BUY YES → bullish, SELL NO → bullish, SELL YES → bearish, BUY NO → bearish.
+        // For YES/NO binary markets: BUY YES / SELL NO = bullish; BUY NO / SELL YES = bearish.
+        // For named-outcome markets (e.g. "ARIZONA DIAMONDBACKS"): BUY = bullish, SELL = bearish.
         String sentiment;
-        if ("?".equals(outcome)) {
-            sentiment = "BUY".equalsIgnoreCase(direction) ? "bullish" : "bearish";
-        } else {
+        boolean isYesNo = "YES".equalsIgnoreCase(outcome) || "NO".equalsIgnoreCase(outcome);
+        if (isYesNo) {
             boolean bullish = ("BUY".equalsIgnoreCase(direction) && "YES".equalsIgnoreCase(outcome))
                            || ("SELL".equalsIgnoreCase(direction) && "NO".equalsIgnoreCase(outcome));
             sentiment = bullish ? "bullish" : "bearish";
+        } else {
+            // Named outcome or unknown — BUY = bullish, SELL = bearish
+            sentiment = "BUY".equalsIgnoreCase(direction) ? "bullish" : "bearish";
         }
         String verb = "BUY".equalsIgnoreCase(direction) ? "buying" : "selling";
 

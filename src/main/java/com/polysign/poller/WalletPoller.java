@@ -202,14 +202,12 @@ public class WalletPoller {
         }
 
         int wrote = 0;
-        // Latest trade timestamp (all trades) — used to update lastTradeAt for polling state.
+        // Track the most recent trade for all display fields — no size gate.
         String latestTimestamp = null;
-        // Latest *display-worthy* trade (>= $1000) — used to update Smart Money Tracker fields.
-        String latestDisplayTimestamp = null;
-        String latestDirection        = null;
-        String latestQuestion         = null;
-        String latestOutcome          = null;
-        String latestSizeUsdc         = null;
+        String latestDirection = null;
+        String latestQuestion  = null;
+        String latestOutcome   = null;
+        String latestSizeUsdc  = null;
 
         for (Map<String, Object> raw : rawTrades) {
             try {
@@ -219,24 +217,19 @@ public class WalletPoller {
                     if (tsObj != null) {
                         try {
                             String isoTs = Instant.ofEpochSecond(Long.parseLong(tsObj.toString())).toString();
-                            // Always track the newest timestamp (for lastTradeAt / polling state).
-                            if (latestTimestamp == null || isoTs.compareTo(latestTimestamp) > 0) {
-                                latestTimestamp = isoTs;
-                            }
-                            // Gate display fields: only update if trade is >= $1000 USDC.
                             BigDecimal size  = decimal(raw, "size");
                             BigDecimal price = decimal(raw, "price");
                             BigDecimal tradeUsdc = (size != null && price != null)
                                     ? size.multiply(price).setScale(2, java.math.RoundingMode.HALF_UP)
                                     : BigDecimal.ZERO;
-                            if (tradeUsdc.compareTo(BigDecimal.valueOf(1000)) >= 0
-                                    && (latestDisplayTimestamp == null
-                                        || isoTs.compareTo(latestDisplayTimestamp) > 0)) {
-                                latestDisplayTimestamp = isoTs;
-                                latestDirection        = str(raw, "side");
-                                latestQuestion         = str(raw, "title");
-                                latestOutcome          = str(raw, "outcome");
-                                latestSizeUsdc         = tradeUsdc.toPlainString();
+                            // Always update display fields for the most recent trade, regardless of size.
+                            // The $1000 threshold only governs WalletActivityDetector alert firing.
+                            if (latestTimestamp == null || isoTs.compareTo(latestTimestamp) > 0) {
+                                latestTimestamp = isoTs;
+                                latestDirection = str(raw, "side");
+                                latestQuestion  = str(raw, "title");
+                                latestOutcome   = str(raw, "outcome");
+                                latestSizeUsdc  = tradeUsdc.toPlainString();
                             }
                         } catch (NumberFormatException ignored) { /* skip */ }
                     }
@@ -248,12 +241,8 @@ public class WalletPoller {
         }
 
         // Update wallet summary fields for the Smart Money Tracker dashboard.
-        // lastTradeAt tracks any trade (needed for 24h active count and polling state).
-        // Display fields only update when a meaningful trade (>= $1000) was seen.
         if (latestTimestamp != null) {
             wallet.setLastTradeAt(latestTimestamp);
-        }
-        if (latestDisplayTimestamp != null) {
             wallet.setRecentDirection(latestDirection);
             wallet.setLastMarketQuestion(latestQuestion);
             wallet.setLastOutcome(latestOutcome);
