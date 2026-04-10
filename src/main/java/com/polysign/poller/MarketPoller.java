@@ -30,6 +30,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
  * Polls the Polymarket Gamma API for active markets and upserts them into DynamoDB.
@@ -222,11 +223,18 @@ public class MarketPoller {
                 capped = candidates;
             }
 
-            // ── Phase 4: Upsert the capped set ───────────────────────────────
+            // ── Phase 4: Auto-watch top 25 by volume ─────────────────────────
+            Set<String> autoWatch = capped.stream()
+                    .limit(25)
+                    .map(c -> stringOrNull(c.raw(), "id"))
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+
+            // ── Phase 5: Upsert the capped set ───────────────────────────────
             int kept = 0;
             for (Candidate c : capped) {
                 try {
-                    doUpsert(c.raw());
+                    doUpsert(c.raw(), autoWatch.contains(stringOrNull(c.raw(), "id")));
                     kept++;
                 } catch (Exception e) {
                     log.warn("market_item_error marketId={} error={}",
@@ -275,7 +283,7 @@ public class MarketPoller {
      * Called only for markets that survived both filter phases.
      */
     // Package-private so MarketPollerKeywordTest can call it directly without a live HTTP server.
-    void doUpsert(Map<String, Object> item) {
+    void doUpsert(Map<String, Object> item, boolean shouldWatch) {
         String marketId = stringOrNull(item, "id");
 
         List<String> outcomeList   = parseJsonStringList(item, "outcomes");
@@ -293,7 +301,8 @@ public class MarketPoller {
 
         Key key = Key.builder().partitionValue(marketId).build();
         Market existing  = marketsTable.getItem(key);
-        Boolean isWatched = (existing != null && existing.getIsWatched() != null)
+        Boolean isWatched = shouldWatch ? Boolean.TRUE
+                            : (existing != null && existing.getIsWatched() != null)
                             ? existing.getIsWatched() : Boolean.FALSE;
 
         Market market = new Market();

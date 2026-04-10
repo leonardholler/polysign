@@ -60,7 +60,7 @@ public class WalletBootstrap implements ApplicationRunner {
 
             for (Map<String, Object> seed : seeds) {
                 String address = ((String) seed.getOrDefault("address", "")).toLowerCase();
-                if (address.isBlank()) continue;
+                if (address.isBlank() || address.startsWith("0x0000") || address.equals("_comment")) continue;
 
                 WatchedWallet wallet = new WatchedWallet();
                 wallet.setAddress(address);

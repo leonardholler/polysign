@@ -57,7 +57,7 @@ class MarketPollerKeywordTest {
         );
 
         // ── Act ───────────────────────────────────────────────────────────────
-        poller.doUpsert(fakeItem);
+        poller.doUpsert(fakeItem, false);
 
         // ── Assert ────────────────────────────────────────────────────────────
         // 1. KeywordExtractor.extract() was called with the market question
