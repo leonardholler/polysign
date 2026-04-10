@@ -379,7 +379,7 @@ async function loadWatchedMarkets() {
     // Only show markets with meaningful probability (5-95%); skip resolved/near-certain
     const meaningful = markets.filter(m => {
       const p = m.currentYesPrice;
-      return p != null && p >= 0.05 && p <= 0.95;
+      return p != null && p > 0.01 && p < 0.90;
     });
 
     if (meaningful.length === 0) {
