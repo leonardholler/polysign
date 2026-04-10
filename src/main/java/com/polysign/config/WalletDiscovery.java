@@ -174,7 +174,7 @@ public class WalletDiscovery implements ApplicationRunner {
             List<Map<String, Object>> seeds = mapper.readValue(is, new TypeReference<>() {});
             for (Map<String, Object> seed : seeds) {
                 String address = ((String) seed.getOrDefault("address", "")).toLowerCase();
-                if (address.isBlank()) continue;
+                if (address.isBlank() || address.equals("_comment") || address.startsWith("0x0000")) continue;
                 WatchedWallet wallet = new WatchedWallet();
                 wallet.setAddress(address);
                 wallet.setAlias((String) seed.get("alias"));
