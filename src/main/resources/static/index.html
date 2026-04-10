@@ -74,7 +74,7 @@
   <div class="bg-gray-900 px-4 py-3">
     <div class="text-xs text-gray-500 mb-0.5">Whale Activity</div>
     <div class="text-2xl font-bold text-gray-100" id="st-whale">—</div>
-    <div class="text-xs text-gray-600" id="st-wallets-active">— wallets active</div>
+    <div class="text-xs text-gray-600" id="st-wallets-active">— active in 24h</div>
   </div>
 </div>
 
@@ -406,8 +406,7 @@ function renderWallets(wallets) {
               && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h)
     .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
 
-  const totalActive = filtered.length;
-  document.getElementById('st-wallets-active').textContent = totalActive + ' wallets active';
+  document.getElementById('st-wallets-active').textContent = filtered.length + ' active in 24h';
 
   if (filtered.length === 0) {
     document.getElementById('wallet-list').innerHTML =
@@ -516,6 +515,7 @@ async function loadStats() {
     const d = await r.json();
     document.getElementById('st-markets').textContent  = d.marketsTracked ?? '—';
     document.getElementById('st-alerts').textContent   = d.alertsFiredToday ?? '—';
+    document.getElementById('st-whale').textContent    = d.watchedWallets ?? '—';
     document.getElementById('h-markets').textContent   = d.marketsTracked ?? '—';
     document.getElementById('h-topic').textContent     = d.ntfyTopic ?? '—';
     lastPollTime = d.lastPollTime || null;
