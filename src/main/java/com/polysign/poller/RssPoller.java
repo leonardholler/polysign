@@ -19,7 +19,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -65,9 +64,11 @@ import java.util.function.Supplier;
  *       to the next item. One bad item never kills a feed's processing.</li>
  * </ul>
  *
- * <p>All outbound HTTP calls (feed fetch, article HTML fetch) are wrapped in
- * Resilience4j circuit breaker + retry ({@code rss-news} instance). No naked
- * HTTP calls — see CONVENTIONS.md.
+ * <p>All outbound HTTP calls (feed fetch, article HTML fetch) use {@code java.net.http.HttpClient}
+ * wrapped in Resilience4j CB + retry ({@code rss-news} instance). WebClient is intentionally
+ * NOT used here: Rome's {@link com.rometools.rome.io.SyndFeedInput} requires a blocking
+ * {@link java.io.InputStream} and does not compose with reactive WebClient. This is the one
+ * documented exception to the WebClient convention in CONVENTIONS.md.
  */
 @Component
 public class RssPoller {

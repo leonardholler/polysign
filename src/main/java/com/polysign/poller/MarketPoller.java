@@ -310,6 +310,12 @@ public class MarketPoller {
         market.setYesTokenId(yesTokenId);
         market.setClobTokenIds(stringOrNull(item, "clobTokenIds"));
         market.setConditionId(stringOrNull(item, "conditionId"));
+        // "closed" is present in Gamma API responses but always false here because we filter
+        // closed=false. Set it from the response anyway so re-polling a market that closes
+        // between cycles will eventually flip the flag. resolvedOutcomePrice is not in the
+        // Gamma /markets endpoint — ResolutionSweeper must use a separate closed-markets poll.
+        Object closedVal = item.get("closed");
+        market.setClosed(closedVal != null ? Boolean.parseBoolean(closedVal.toString()) : null);
 
         marketsTable.putItem(market);
         log.debug("market_upserted marketId={} category={}", marketId, category);

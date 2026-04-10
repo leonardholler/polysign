@@ -33,7 +33,7 @@ public class SignalPerformanceService {
 
     private static final Logger log = LoggerFactory.getLogger(SignalPerformanceService.class);
 
-    static final List<String> KNOWN_TYPES = List.of(
+    public static final List<String> KNOWN_TYPES = List.of(
             "price_movement", "statistical_anomaly", "consensus",
             "wallet_activity", "news_correlation");
 

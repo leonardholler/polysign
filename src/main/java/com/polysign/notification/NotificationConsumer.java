@@ -125,6 +125,10 @@ public class NotificationConsumer {
                 boolean posted = doPost(alert);
                 if (!posted) {
                     // Leave message in queue — visibility timeout will requeue it.
+                    Counter.builder("polysign.notifications.failed")
+                            .tag("type", alert.getType() != null ? alert.getType() : "unknown")
+                            .register(meterRegistry)
+                            .increment();
                     return;
                 }
                 markNotified(alert);

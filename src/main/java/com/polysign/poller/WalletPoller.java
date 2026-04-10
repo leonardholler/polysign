@@ -15,7 +15,8 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import jakarta.annotation.PostConstruct;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -112,15 +113,14 @@ public class WalletPoller {
 
     /**
      * Build the conditionId → marketId lookup cache by scanning the markets table.
-     * Runs once at startup after DynamoDB tables are ready (WalletBootstrap is Order=2,
-     * WalletPoller is a regular @Component so Spring initialises it after runners complete).
+     * Runs after all ApplicationRunner beans complete (including BootstrapRunner which
+     * creates the DynamoDB tables), so the table is guaranteed to exist.
      */
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
     void buildCache() {
-        // Runs before ApplicationRunner beans (BootstrapRunner), so the markets table
-        // may not exist yet on a fresh LocalStack or first-ever deployment. Treat a
-        // missing table as an empty cache — the on-miss GSI query path handles all
-        // lookups at runtime until MarketPoller populates the table.
+        // ApplicationReadyEvent fires after BootstrapRunner (Order=1) and WalletBootstrap
+        // (Order=2) have both completed, so the markets table and watched_wallets table
+        // exist on a fresh LocalStack or first-ever deployment.
         try {
             int count = 0;
             for (Market m : marketsTable.scan().items()) {

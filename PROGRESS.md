@@ -1113,7 +1113,141 @@ per spec. DECISION 7 (live market context in AlertDto + per-type metadataHighlig
 
 ### Notes for next phase
 - `ResolutionSweeper` BLOCKER from Phase 7.5 still open: `Market.java` needs `closed` + 
-  `resolvedOutcomePrice` fields.
+  `resolvedOutcomePrice` fields. Addressed in Phase 9 — see notes there.
 - `currentYesPrice` denormalization means the Market row is updated on every non-duplicate
   price snapshot. If write throughput becomes a concern, batch or TTL the update.
 - The dashboard is unauthenticated. Add auth (API key or JWT) when the auth layer is added.
+
+## Phase 9 — DLQs, Metrics, Resilience4j Polish, Lifecycle Cleanup
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**AREA 1 — DLQ verification and wiring**
+- DLQs confirmed: all 3 exist and are correctly wired in `BootstrapRunner.bootstrapSqs()`.
+  `maxReceiveCount=5` set via JSON redrive policy on each main queue. No changes needed.
+- `SqsQueueMetrics.java` (new) — `@Scheduled(fixedDelay=60s)` refreshes 6 queue depths
+  into a `ConcurrentHashMap`, Micrometer gauges read from the map:
+  - `polysign.sqs.queue.depth` (gauge, tag: queue) — 3 main queues
+  - `polysign.dlq.depth` (gauge, tag: queue) — 3 DLQs
+  Initial delay 35s (after BootstrapRunner creates queues at ~5–10s).
+
+**AREA 2 — Custom Micrometer metrics**
+- `polysign.alerts.deduplicated` (counter, tag: type) — added in `AlertService.tryCreate()`
+  on `ConditionalCheckFailedException` (the normal dedupe path).
+- `polysign.notifications.failed` (counter, tag: type) — added in `NotificationConsumer.process()`
+  when `doPost()` returns false (ntfy call failed; message left in queue for SQS retry).
+- `SignalQualityMetrics.java` (new) — `@Scheduled(cron="0 1/5 * * * *")` calls
+  `SignalPerformanceService.getPerformance()` for horizons t1h + t24h and updates:
+  - `polysign.signals.precision` (gauge, tags: type, horizon) — null precision → NaN
+  - `polysign.signals.magnitude.mean` (gauge, tags: type, horizon)
+  - `polysign.signals.sample.count` (gauge, tags: type, horizon)
+  Gauges cover all 5 KNOWN_TYPES × 2 horizons = 10 gauge series each (30 total).
+- `SignalPerformanceService.KNOWN_TYPES` visibility changed from package-private to `public`
+  so `SignalQualityMetrics` (different package) can reference it.
+
+Full metric inventory (all `polysign.*` now emitted):
+| Metric | Type | Where | Notes |
+|--------|------|-------|-------|
+| polysign.markets.tracked | gauge | MarketPoller | ✅ pre-existing |
+| polysign.prices.polled | counter | PricePoller | ✅ pre-existing |
+| polysign.alerts.fired | counter (type,severity) | AlertService | ✅ pre-existing |
+| polysign.alerts.deduplicated | counter (type) | AlertService | ➕ Phase 9 |
+| polysign.notifications.sent | counter (type,severity) | NotificationConsumer | ✅ pre-existing |
+| polysign.notifications.failed | counter (type) | NotificationConsumer | ➕ Phase 9 |
+| polysign.sqs.queue.depth | gauge (queue) | SqsQueueMetrics | ➕ Phase 9 |
+| polysign.dlq.depth | gauge (queue) | SqsQueueMetrics | ➕ Phase 9 |
+| polysign.wallet.trades.ingested | counter | WalletPoller | ✅ pre-existing |
+| polysign.archive.snapshots.written | counter | SnapshotArchiver | ✅ pre-existing |
+| polysign.outcomes.evaluated | counter (type,horizon) | AlertOutcomeEvaluator | ✅ pre-existing |
+| polysign.signals.precision | gauge (type,horizon) | SignalQualityMetrics | ➕ Phase 9 |
+| polysign.signals.magnitude.mean | gauge (type,horizon) | SignalQualityMetrics | ➕ Phase 9 |
+| polysign.signals.sample.count | gauge (type,horizon) | SignalQualityMetrics | ➕ Phase 9 |
+
+Note: spec also lists `polysign.alerts.notified` (tag: status) and `polysign.http.outbound.latency`
+(timer, tag: target). `alerts.notified` is covered by `notifications.sent` (different name, broader
+tags). `http.outbound.latency` deferred — adding it to all R4j call sites is Phase 10+ polish.
+
+**AREA 3 — Resilience4j audit**
+All outbound HTTP call sites are correctly wrapped:
+- `MarketPoller` — gammaApiClient → Retry + CB (polymarket-gamma) ✅
+- `PricePoller` — clobApiClient → RateLimiter + Retry + CB (polymarket-clob) ✅
+- `WalletPoller` — dataApiClient → Retry + CB (polymarket-data) ✅
+- `OrderbookService` — clobApiClient → RateLimiter + CB (polymarket-clob, no retry — 500ms budget) ✅
+- `NotificationConsumer` — ntfyClient → Retry + CB (ntfy) ✅
+- `RssPoller` — java.net.http.HttpClient (NOT WebClient) → Retry + CB (rss-news) ✅
+
+**INTENTIONAL EXCEPTION**: RssPoller uses `java.net.http.HttpClient` instead of WebClient.
+Rationale: Rome's `SyndFeedInput` requires a blocking `InputStream`; reactive WebClient
+does not compose with it. All calls are still wrapped in rss-news CB + retry. Documented
+in `HttpConfig.java` comment and `RssPoller` Javadoc.
+
+Dead code removal: `rssArticleClient` WebClient bean deleted from `HttpConfig.java`
+(was never injected anywhere — pure dead code since Phase 7).
+Unused `WebClient` import removed from `RssPoller.java`.
+
+**AREA 4 — @PostConstruct lifecycle cleanup**
+- `WalletPoller.buildCache()` moved from `@PostConstruct` to `@EventListener(ApplicationReadyEvent)`.
+  Root cause: `@PostConstruct` fires during bean initialization, BEFORE `BootstrapRunner`
+  (ApplicationRunner Order=1) creates DynamoDB tables. Moving to `ApplicationReadyEvent` guarantees
+  the markets table exists on a fresh LocalStack or first-ever deployment.
+  The catch-and-continue guard remains (defensive, now truly unreachable on clean startup).
+
+**Market.closed / resolvedOutcomePrice — ResolutionSweeper blocker**
+- `Market.java` — added `closed` (Boolean) and `resolvedOutcomePrice` (BigDecimal) with
+  explicit getters/setters (no Lombok — DynamoDB Enhanced Client annotation constraint).
+- `MarketPoller.doUpsert()` — reads `closed` from Gamma response and sets it on the Market.
+  Note: the current poll uses `?active=true&closed=false` which means markets in the table
+  will always have `closed=false` from this path. The `closed` flag will flip if Polymarket
+  ever returns a market with `closed=true` in a future response.
+- `resolvedOutcomePrice` is NOT populated by MarketPoller — it is not present in the
+  Gamma `/markets` endpoint. **ResolutionSweeper requires a separate closed-markets poll**
+  (e.g. `?active=false&closed=true` + parse `outcomePrices`) before it can be fully
+  un-stubbed. Deferred to Phase 12+ deployment validation.
+
+### Files touched
+**New**
+- `src/main/java/com/polysign/metrics/SqsQueueMetrics.java`
+- `src/main/java//com/polysign/metrics/SignalQualityMetrics.java`
+
+**Modified**
+- `src/main/java/com/polysign/model/Market.java` — added closed, resolvedOutcomePrice
+- `src/main/java/com/polysign/poller/MarketPoller.java` — reads closed from Gamma response
+- `src/main/java/com/polysign/poller/WalletPoller.java` — @PostConstruct → @EventListener
+- `src/main/java/com/polysign/alert/AlertService.java` — polysign.alerts.deduplicated counter
+- `src/main/java/com/polysign/notification/NotificationConsumer.java` — polysign.notifications.failed counter
+- `src/main/java/com/polysign/config/HttpConfig.java` — deleted rssArticleClient bean, added clarifying comment
+- `src/main/java/com/polysign/poller/RssPoller.java` — removed dead WebClient import, expanded HttpClient rationale Javadoc
+- `src/main/java/com/polysign/backtest/SignalPerformanceService.java` — KNOWN_TYPES made public
+
+### Verification
+- `mvn compile` → exit 0
+- `mvn test` → **125 unit tests, 0 failures, 4 skipped** (integration tests gated behind flag)
+- `mvn test -Dintegration-tests=true` → TBD (LocalStack not running at commit time)
+
+### Deviations from spec
+1. **`polysign.notifications.sent` (not `polysign.alerts.notified`)**: spec names this
+   `polysign.alerts.notified` tagged by `status`. Code emits `polysign.notifications.sent`
+   tagged by type+severity (richer tags). Name diverges from spec; kept to avoid breaking
+   existing Prometheus queries. Noted here for the AWS deployment phase.
+2. **`polysign.http.outbound.latency` not implemented**: spec defines a timer tagged by
+   `target`. Adding timers to all R4j call sites requires wrapping every decorated supplier
+   in a Micrometer Timer.record(). Deferred to Phase 10+ as it's operational polish, not a
+   correctness issue.
+3. **`rssArticleClient` was dead code**: defined in Phase 7, never injected. Deleted Phase 9.
+   RssPoller always used java.net.http.HttpClient (the intentional exception).
+4. **ResolutionSweeper remains partially stubbed**: `closed` and `resolvedOutcomePrice` fields
+   are now in the model, but `resolvedOutcomePrice` cannot be populated without a dedicated
+   closed-market Gamma poll. ResolutionSweeper.findClosedMarkets() still returns empty list.
+
+### Notes for next phase
+- Phase 10: Testcontainers integration test (the most valuable test in the project per spec).
+  Sequence: spin up LocalStack, insert fake snapshots with 10% move, run PriceMovementDetector,
+  assert exactly one alert row + one SQS message, re-run and assert no new rows (idempotency),
+  seed T+15min snapshot, run AlertOutcomeEvaluator, assert one alert_outcomes row with wasCorrect=true.
+- SqsQueueMetrics and SignalQualityMetrics are not covered by unit tests (they are thin
+  scheduling/gauge-registration wrappers). The Testcontainers integration test can optionally
+  verify gauge values via the Prometheus endpoint.
+- The `polysign.dlq.depth` gauge will read 0 until a message enters a DLQ. The chaos
+  experiments in Phase 12 will exercise this path live.

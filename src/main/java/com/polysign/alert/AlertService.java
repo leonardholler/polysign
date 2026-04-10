@@ -87,6 +87,10 @@ public class AlertService {
             // Normal path — this alert was already emitted within the dedupe window.
             log.debug("alert_already_exists alertId={} type={} marketId={}",
                     alert.getAlertId(), alert.getType(), alert.getMarketId());
+            Counter.builder("polysign.alerts.deduplicated")
+                    .tag("type", alert.getType() != null ? alert.getType() : "unknown")
+                    .register(meterRegistry)
+                    .increment();
             return false;
         }
 

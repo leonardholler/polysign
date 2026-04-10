@@ -76,18 +76,8 @@ public class HttpConfig {
                 .build();
     }
 
-    /**
-     * General-purpose HTTP client for fetching article HTML during RSS ingestion.
-     * No fixed base URL — article URLs are full absolute URLs provided per-request.
-     * Buffer raised to 4 MB to handle large article pages.
-     * Wrapped in Resilience4j retry by RssPoller.
-     */
-    @Bean("rssArticleClient")
-    public WebClient rssArticleClient() {
-        return WebClient.builder()
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.TEXT_HTML_VALUE + ",*/*")
-                .defaultHeader(HttpHeaders.USER_AGENT, "polysign/0.1 (monitoring-bot; not-a-trading-bot)")
-                .codecs(c -> c.defaultCodecs().maxInMemorySize(4 * 1024 * 1024))
-                .build();
-    }
+    // NOTE: RssPoller intentionally uses java.net.http.HttpClient (not WebClient) for both
+    // feed XML fetching and article HTML archiving. Rome's SyndFeedInput requires a blocking
+    // InputStream, which does not compose cleanly with reactive WebClient. All calls are still
+    // wrapped in the rss-news Resilience4j CB + retry — see CONVENTIONS.md for the exception.
 }
