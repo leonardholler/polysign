@@ -164,6 +164,16 @@ public class PricePoller {
         snap.setExpiresAt(clock.nowEpochSeconds() + TTL_SECONDS);
 
         snapshotsTable.putItem(snap);
+
+        // Denormalize current price onto the Market row so the API can batch-load
+        // market context (question, price, volume) without querying price_snapshots.
+        try {
+            market.setCurrentYesPrice(yesPrice);
+            marketsTable.updateItem(market);
+        } catch (Exception e) {
+            log.warn("price_market_update_failed marketId={} error={}", market.getMarketId(), e.getMessage());
+        }
+
         log.debug("price_snapshot_written marketId={} yes={} no={}",
                   market.getMarketId(), yesPrice, noPrice);
         return true;

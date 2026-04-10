@@ -3,6 +3,7 @@ package com.polysign.poller;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.polysign.common.AppClock;
+import com.polysign.common.AppStats;
 import com.polysign.common.CategoryClassifier;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Market;
@@ -84,6 +85,7 @@ public class MarketPoller {
     private final CircuitBreaker        circuitBreaker;
     private final Retry                 retry;
     private final KeywordExtractor      keywordExtractor;
+    private final AppStats               appStats;
     private final AtomicLong            trackedCount = new AtomicLong(0);
 
     public MarketPoller(
@@ -95,6 +97,7 @@ public class MarketPoller {
             RetryRegistry retryRegistry,
             MeterRegistry meterRegistry,
             KeywordExtractor keywordExtractor,
+            AppStats appStats,
             @Value("${polysign.pollers.market.min-volume-usdc:10000}")    double minVolumeUsdc,
             @Value("${polysign.pollers.market.min-volume-24h-usdc:10000}") double minVolume24hUsdc,
             @Value("${polysign.pollers.market.min-hours-to-end:12}")      long   minHoursToEnd,
@@ -109,6 +112,7 @@ public class MarketPoller {
         this.clock            = clock;
         this.mapper           = mapper;
         this.keywordExtractor = keywordExtractor;
+        this.appStats         = appStats;
         this.circuitBreaker   = cbRegistry.circuitBreaker(CB_NAME);
         this.retry            = retryRegistry.retry(CB_NAME);
 
@@ -231,6 +235,7 @@ public class MarketPoller {
             }
 
             trackedCount.set(kept);
+            appStats.setLastMarketPollAt(clock.now());
             log.info("market_poll_complete of={} kept_after_filters={} kept_after_cap={} "
                      + "cutoff_volume24hr={} skip_lifetime={} skip_24h={} skip_eol={}",
                      total, afterFilters, kept, cutoffVol24hStr, skipLifetime, skip24h, skipEol);

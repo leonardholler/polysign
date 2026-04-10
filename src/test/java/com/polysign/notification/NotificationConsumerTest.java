@@ -1,5 +1,7 @@
 package com.polysign.notification;
 
+import com.polysign.backtest.SignalPerformanceService;
+import com.polysign.common.AppClock;
 import com.polysign.model.Alert;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.RetryRegistry;
@@ -180,8 +182,26 @@ class NotificationConsumerTest {
     }
 
     /**
-     * Testable subclass: overrides {@code fetchAlert} and {@code doPost} so no
-     * live DynamoDB or HTTP calls are made. Captures the alert passed to doPost.
+     * PhoneWorthinessFilter stub — always phone-worthy.
+     * Injected into TestableConsumer so existing delivery tests are unaffected
+     * by the worthiness gate (no DynamoDB or SignalPerformanceService needed).
+     */
+    @SuppressWarnings("unchecked")
+    private static class AlwaysWorthyFilter extends PhoneWorthinessFilter {
+        AlwaysWorthyFilter() {
+            super(mock(DynamoDbTable.class),
+                  mock(SignalPerformanceService.class),
+                  new AppClock());
+        }
+
+        @Override
+        public boolean isPhoneWorthy(Alert alert) { return true; }
+    }
+
+    /**
+     * Testable subclass: overrides {@code fetchAlert}, {@code doPost}, and
+     * {@code updatePhoneWorthy} so no live DynamoDB or HTTP calls are made.
+     * Captures the alert passed to doPost.
      */
     private static class TestableConsumer extends NotificationConsumer {
         Alert cannedAlert;
@@ -193,6 +213,7 @@ class NotificationConsumerTest {
                   alertsTable,
                   null, // ntfyClient — not used (doPost overridden)
                   new SimpleMeterRegistry(),
+                  new AlwaysWorthyFilter(),
                   "alerts-to-notify",
                   "polysign-test",
                   CircuitBreakerRegistry.ofDefaults(),
@@ -211,5 +232,9 @@ class NotificationConsumerTest {
             postCalledWith = alert;
             return ntfySuccess;
         }
+
+        // Override to no-op — keeps existing updateItem call counts unchanged.
+        @Override
+        void updatePhoneWorthy(Alert alert) { }
     }
 }

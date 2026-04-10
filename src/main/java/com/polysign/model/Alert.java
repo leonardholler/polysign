@@ -26,6 +26,8 @@ public class Alert {
     private String description;
     private Map<String, String> metadata;
     private Boolean wasNotified;
+    private Boolean phoneWorthy; // set by NotificationConsumer via PhoneWorthinessFilter
+    private Boolean reviewed;    // set by POST /api/alerts/{alertId}/mark-reviewed
     private String link;
     private Long expiresAt;     // TTL — Unix epoch seconds (30 days out)
 
@@ -45,9 +47,11 @@ public class Alert {
     public String              getTitle()       { return title;       }
     public String              getDescription() { return description; }
     public Map<String, String> getMetadata()    { return metadata;    }
-    public Boolean             getWasNotified() { return wasNotified; }
-    public String              getLink()        { return link;        }
-    public Long                getExpiresAt()   { return expiresAt;   }
+    public Boolean             getWasNotified()  { return wasNotified;  }
+    public Boolean             getPhoneWorthy()  { return phoneWorthy;  }
+    public Boolean             getReviewed()     { return reviewed;     }
+    public String              getLink()         { return link;         }
+    public Long                getExpiresAt()    { return expiresAt;    }
 
     public void setAlertId(String alertId)                { this.alertId     = alertId;     }
     public void setCreatedAt(String createdAt)            { this.createdAt   = createdAt;   }
@@ -57,7 +61,9 @@ public class Alert {
     public void setTitle(String title)                    { this.title       = title;       }
     public void setDescription(String description)        { this.description = description; }
     public void setMetadata(Map<String, String> metadata) { this.metadata    = metadata;    }
-    public void setWasNotified(Boolean wasNotified)       { this.wasNotified = wasNotified; }
-    public void setLink(String link)                      { this.link        = link;        }
-    public void setExpiresAt(Long expiresAt)              { this.expiresAt   = expiresAt;   }
+    public void setWasNotified(Boolean wasNotified)        { this.wasNotified  = wasNotified;  }
+    public void setPhoneWorthy(Boolean phoneWorthy)        { this.phoneWorthy  = phoneWorthy;  }
+    public void setReviewed(Boolean reviewed)              { this.reviewed     = reviewed;     }
+    public void setLink(String link)                       { this.link         = link;         }
+    public void setExpiresAt(Long expiresAt)               { this.expiresAt    = expiresAt;    }
 }

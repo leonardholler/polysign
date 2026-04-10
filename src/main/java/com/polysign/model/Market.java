@@ -2,6 +2,7 @@ package com.polysign.model;
 
 import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 
@@ -32,7 +33,8 @@ public class Market {
     private String  updatedAt;
     private String  yesTokenId;   // clobTokenIds[0] — YES outcome token for CLOB calls
     private String  clobTokenIds; // raw JSON string: "["<yes_id>","<no_id>"]"
-    private String  conditionId;  // Gamma "conditionId" hex hash — matches Data API trade.conditionId
+    private String     conditionId;    // Gamma "conditionId" hex hash — matches Data API trade.conditionId
+    private BigDecimal currentYesPrice; // denormalized from latest price_snapshot (updated by PricePoller)
 
     // ── Key / index getters (annotated) ───────────────────────────────────────
 
@@ -57,7 +59,8 @@ public class Market {
     public String       getYesTokenId()    { return yesTokenId;    }
     public String       getClobTokenIds()  { return clobTokenIds;  }
     @DynamoDbSecondaryPartitionKey(indexNames = "conditionId-index")
-    public String       getConditionId()   { return conditionId;   }
+    public String       getConditionId()      { return conditionId;      }
+    public BigDecimal   getCurrentYesPrice()  { return currentYesPrice;  }
 
     // ── Setters ───────────────────────────────────────────────────────────────
 
@@ -73,5 +76,6 @@ public class Market {
     public void setUpdatedAt(String updatedAt)        { this.updatedAt    = updatedAt;    }
     public void setYesTokenId(String yesTokenId)      { this.yesTokenId   = yesTokenId;   }
     public void setClobTokenIds(String clobTokenIds)  { this.clobTokenIds = clobTokenIds; }
-    public void setConditionId(String conditionId)    { this.conditionId  = conditionId;  }
+    public void setConditionId(String conditionId)          { this.conditionId      = conditionId;      }
+    public void setCurrentYesPrice(BigDecimal currentYesPrice) { this.currentYesPrice  = currentYesPrice;  }
 }

@@ -1,6 +1,7 @@
 package com.polysign.poller;
 
 import com.polysign.common.AppClock;
+import com.polysign.common.AppStats;
 import com.polysign.model.Market;
 import com.polysign.processing.KeywordExtractor;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -44,6 +45,7 @@ class MarketPollerKeywordTest {
                 RetryRegistry.ofDefaults(),
                 new SimpleMeterRegistry(),
                 keywordExtractor,
+                new AppStats(),
                 10_000, 10_000, 12, 400
         );
 

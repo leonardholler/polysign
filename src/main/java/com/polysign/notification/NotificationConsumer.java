@@ -56,6 +56,7 @@ public class NotificationConsumer {
     private final DynamoDbTable<Alert> alertsTable;
     private final WebClient ntfyClient;
     private final MeterRegistry meterRegistry;
+    private final PhoneWorthinessFilter phoneWorthinessFilter;
     private final String alertsQueueName;
     private final String ntfyTopic;
     private final CircuitBreaker ntfyCb;
@@ -70,6 +71,7 @@ public class NotificationConsumer {
             DynamoDbTable<Alert> alertsTable,
             @Qualifier("ntfyClient") WebClient ntfyClient,
             MeterRegistry meterRegistry,
+            PhoneWorthinessFilter phoneWorthinessFilter,
             @Value("${polysign.sqs.queues.alerts-to-notify:alerts-to-notify}") String alertsQueueName,
             @Value("${polysign.ntfy.topic}") String ntfyTopic,
             CircuitBreakerRegistry cbRegistry,
@@ -78,6 +80,7 @@ public class NotificationConsumer {
         this.alertsTable = alertsTable;
         this.ntfyClient = ntfyClient;
         this.meterRegistry = meterRegistry;
+        this.phoneWorthinessFilter = phoneWorthinessFilter;
         this.alertsQueueName = alertsQueueName;
         this.ntfyTopic = ntfyTopic;
         this.ntfyCb = cbRegistry.circuitBreaker(NTFY_CB_NAME);
@@ -113,21 +116,31 @@ public class NotificationConsumer {
                 return;
             }
 
-            boolean posted = doPost(alert);
-            if (!posted) {
-                // Leave message in queue — visibility timeout will requeue it.
-                return;
+            // Evaluate phone-worthiness and persist the result on the alert row.
+            boolean worthy = phoneWorthinessFilter.isPhoneWorthy(alert);
+            alert.setPhoneWorthy(worthy);
+            updatePhoneWorthy(alert);
+
+            if (worthy) {
+                boolean posted = doPost(alert);
+                if (!posted) {
+                    // Leave message in queue — visibility timeout will requeue it.
+                    return;
+                }
+                markNotified(alert);
+                log.info("notification_sent alertId={} type={} severity={}",
+                        alertId, alert.getType(), alert.getSeverity());
+                Counter.builder("polysign.notifications.sent")
+                        .tag("type", alert.getType())
+                        .tag("severity", alert.getSeverity())
+                        .register(meterRegistry)
+                        .increment();
+            } else {
+                log.info("alert_not_phone_worthy alertId={} type={}", alertId, alert.getType());
             }
 
-            markNotified(alert);
+            // Delete from SQS regardless — the alert is persisted either way.
             deleteMessage(msg);
-            log.info("notification_sent alertId={} type={} severity={}",
-                    alertId, alert.getType(), alert.getSeverity());
-            Counter.builder("polysign.notifications.sent")
-                    .tag("type", alert.getType())
-                    .tag("severity", alert.getSeverity())
-                    .register(meterRegistry)
-                    .increment();
         } catch (Exception e) {
             log.warn("notification_process_error alertId={} error={}", alertId, e.getMessage());
         }
@@ -181,6 +194,17 @@ public class NotificationConsumer {
         } catch (Exception e) {
             // wasNotified is best-effort — the alert was delivered regardless.
             log.warn("notification_mark_failed alertId={} error={}",
+                    alert.getAlertId(), e.getMessage());
+        }
+    }
+
+    // Package-private so TestableConsumer in tests can override as a no-op.
+    void updatePhoneWorthy(Alert alert) {
+        try {
+            alertsTable.updateItem(alert);
+        } catch (Exception e) {
+            // phoneWorthy is best-effort metadata — does not affect delivery logic.
+            log.warn("notification_phone_worthy_update_failed alertId={} error={}",
                     alert.getAlertId(), e.getMessage());
         }
     }
