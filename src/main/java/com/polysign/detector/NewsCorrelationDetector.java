@@ -148,7 +148,8 @@ public class NewsCorrelationDetector {
                 "articleTitle",   article.getTitle()   != null ? article.getTitle()   : "",
                 "articleUrl",     article.getUrl()     != null ? article.getUrl()     : "",
                 "score",          String.valueOf(score),
-                "marketQuestion", market.getQuestion() != null ? market.getQuestion() : ""
+                "marketQuestion", market.getQuestion() != null ? market.getQuestion() : "",
+                "detectedAt",     now.toString()
         ));
 
         boolean created = alertService.tryCreate(alert);
