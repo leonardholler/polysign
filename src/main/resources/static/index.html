@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolySign Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    body { background: #0a0e17; }
+    .badge-ring { box-shadow: 0 0 0 2px #f59e0b; }
+    .severity-critical { border-left: 3px solid #ef4444; }
+    .severity-warning  { border-left: 3px solid #f59e0b; }
+    .severity-info     { border-left: 3px solid #3b82f6; }
+    .ping-anim { animation: ping-once 0.6s ease-out; }
+    @keyframes ping-once {
+      0%   { transform: scale(1); opacity: 1; }
+      80%  { transform: scale(1.06); opacity: 0.8; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+<body class="text-gray-100 min-h-screen font-mono">
+
+<!-- ── Header stats bar ─────────────────────────────────────────────────── -->
+<header class="border-b border-gray-800 px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-400 sticky top-0 z-20" style="background:#0a0e17">
+  <span class="text-white font-bold text-base mr-2">PolySign</span>
+  <span>Markets: <span id="s-markets" class="text-green-400 font-semibold">—</span></span>
+  <span>Alerts today: <span id="s-alerts" class="text-yellow-400 font-semibold">—</span></span>
+  <span>Watched wallets: <span id="s-wallets" class="text-blue-400 font-semibold">—</span></span>
+  <span>Last poll: <span id="s-poll" class="font-semibold">—</span></span>
+  <span class="ml-auto flex items-center gap-1">
+    ntfy:
+    <code id="s-topic" class="text-purple-400 cursor-pointer hover:underline" title="Click to copy">—</code>
+    <button onclick="copyTopic()" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-1 rounded text-[10px]">copy</button>
+  </span>
+</header>
+
+<main class="max-w-screen-xl mx-auto px-4 py-4 space-y-6">
+
+<!-- ── Signal Quality Panel ─────────────────────────────────────────────── -->
+<section id="signal-quality-section">
+  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Signal Quality <span class="text-gray-600 font-normal normal-case">(7-day lookback, refreshed every 60s)</span></h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-800">
+          <th class="text-left py-1 pr-4">Detector</th>
+          <th class="text-center py-1 px-4">1h Precision</th>
+          <th class="text-center py-1 px-4">24h Precision</th>
+          <th class="text-center py-1 px-4">Count (7d)</th>
+        </tr>
+      </thead>
+      <tbody id="sq-body">
+        <tr><td colspan="4" class="text-gray-600 py-2">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Live Alert Feed ───────────────────────────────────────────────────── -->
+<section>
+  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
+    Live Alert Feed
+    <span class="text-gray-600 font-normal normal-case">(signal-strength sorted, refreshed every 10s)</span>
+    <span id="alert-badge-legend" class="ml-2 text-yellow-500 text-[10px]">★ = 3+ detector types</span>
+  </h2>
+  <div id="alert-feed" class="space-y-1">
+    <div class="text-gray-600 text-xs">Loading…</div>
+  </div>
+</section>
+
+<!-- ── Watched Markets Grid ─────────────────────────────────────────────── -->
+<section>
+  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Watched Markets</h2>
+  <div id="markets-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+    <div class="text-gray-600 text-xs">Loading…</div>
+  </div>
+</section>
+
+<!-- ── Smart Money Tracker ───────────────────────────────────────────────── -->
+<section>
+  <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Smart Money Tracker</h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-800">
+          <th class="text-left py-1 pr-4">Alias</th>
+          <th class="text-left py-1 pr-4">Address</th>
+          <th class="text-left py-1 pr-4">Category</th>
+          <th class="text-left py-1 pr-4">Last Trade</th>
+          <th class="text-center py-1 px-4">Trades</th>
+          <th class="text-center py-1 px-4">Direction</th>
+        </tr>
+      </thead>
+      <tbody id="wallet-body">
+        <tr><td colspan="6" class="text-gray-600 py-2">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<script>
+// ── Utility ──────────────────────────────────────────────────────────────────
+
+function fmt(n, digits = 0) {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+  return Number(n).toFixed(digits);
+}
+
+function fmtPct(v) {
+  if (v == null) return '—';
+  return (v * 100).toFixed(0) + '%';
+}
+
+function precisionColor(v) {
+  if (v == null)  return 'text-gray-500';
+  if (v >= 0.60)  return 'text-green-400';
+  if (v >= 0.50)  return 'text-yellow-400';
+  return 'text-red-400';
+}
+
+function severityBg(sev) {
+  return sev === 'critical' ? 'bg-red-950' : sev === 'warning' ? 'bg-yellow-950' : 'bg-gray-900';
+}
+
+function typeLabel(type) {
+  const m = {
+    price_movement:      'Price',
+    statistical_anomaly: 'Anomaly',
+    consensus:           'Consensus',
+    news_correlation:    'News',
+    wallet_activity:     'Whale',
+  };
+  return m[type] || type;
+}
+
+function typeBadgeColor(type) {
+  const m = {
+    price_movement:      'bg-blue-900 text-blue-300',
+    statistical_anomaly: 'bg-purple-900 text-purple-300',
+    consensus:           'bg-green-900 text-green-300',
+    news_correlation:    'bg-orange-900 text-orange-300',
+    wallet_activity:     'bg-pink-900 text-pink-300',
+  };
+  return m[type] || 'bg-gray-800 text-gray-400';
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function relativeTime(iso) {
+  if (!iso) return '—';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 60)   return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function copyTopic() {
+  const t = document.getElementById('s-topic').textContent;
+  navigator.clipboard.writeText(t).catch(() => {});
+}
+
+// ── Web Audio API ping ────────────────────────────────────────────────────────
+
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function softPing() {
+  try {
+    const ctx = ensureAudio();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch (_) {}
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('s-markets').textContent = d.marketsTracked ?? '—';
+    document.getElementById('s-alerts').textContent  = d.alertsFiredToday ?? '—';
+    document.getElementById('s-wallets').textContent = d.watchedWallets ?? '—';
+    document.getElementById('s-poll').textContent    = d.lastPollTime ? relativeTime(d.lastPollTime) : '—';
+    document.getElementById('s-topic').textContent   = d.ntfyTopic ?? '—';
+  } catch (_) {}
+}
+
+// ── Signal Quality Panel ──────────────────────────────────────────────────────
+
+const DETECTOR_LABELS = {
+  price_movement:      'price_movement',
+  statistical_anomaly: 'statistical_anomaly',
+  consensus:           'consensus',
+  news_correlation:    'news_correlation',
+};
+
+async function loadSignalQuality() {
+  try {
+    const [r1h, r24h] = await Promise.all([
+      fetch('/api/signals/performance?horizon=t1h'),
+      fetch('/api/signals/performance?horizon=t24h'),
+    ]);
+    const d1h  = r1h.ok  ? await r1h.json()  : null;
+    const d24h = r24h.ok ? await r24h.json() : null;
+
+    // index by type
+    const idx1h  = {};
+    const idx24h = {};
+    (d1h?.detectors  || []).forEach(d => { idx1h[d.type]  = d; });
+    (d24h?.detectors || []).forEach(d => { idx24h[d.type] = d; });
+
+    const rows = Object.keys(DETECTOR_LABELS).map(type => {
+      const p1  = idx1h[type]?.precision  ?? null;
+      const p24 = idx24h[type]?.precision ?? null;
+      const cnt = idx1h[type]?.count      ?? idx24h[type]?.count ?? null;
+      return `<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+        <td class="py-1 pr-4 text-gray-300">${DETECTOR_LABELS[type]}</td>
+        <td class="text-center py-1 px-4 font-semibold ${precisionColor(p1)}">${fmtPct(p1)}</td>
+        <td class="text-center py-1 px-4 font-semibold ${precisionColor(p24)}">${fmtPct(p24)}</td>
+        <td class="text-center py-1 px-4">
+          <a href="#alert-feed" onclick="filterByType('${type}')"
+             class="text-gray-400 hover:text-white underline underline-offset-2">${cnt != null ? cnt : '—'}</a>
+        </td>
+      </tr>`;
+    });
+
+    document.getElementById('sq-body').innerHTML = rows.join('');
+  } catch (_) {
+    document.getElementById('sq-body').innerHTML =
+      '<tr><td colspan="4" class="text-red-500 py-2">Failed to load signal quality data.</td></tr>';
+  }
+}
+
+// ── Alert Feed ────────────────────────────────────────────────────────────────
+
+let lastAlertIds = new Set();
+let alertTypeFilter = null;
+
+function filterByType(type) {
+  alertTypeFilter = alertTypeFilter === type ? null : type;
+  loadAlerts();
+}
+
+function renderMetaHighlight(alert) {
+  const m = alert.metadataHighlight;
+  if (!m) return '';
+  const icons = {
+    movePct:     '↕',
+    zScore:      'σ',
+    walletCount: '👥',
+    score:       '📰',
+    sizeUsdc:    '$',
+  };
+  const [k, v] = m.split('=');
+  return `<span class="ml-1 text-gray-500">${icons[k] || ''}${v || ''}</span>`;
+}
+
+async function loadAlerts() {
+  try {
+    let url = '/api/alerts/by-signal-strength';
+    const r = await fetch(url);
+    if (!r.ok) return;
+    let alerts = await r.json();
+
+    // client-side type filter (from signal quality panel click)
+    if (alertTypeFilter) {
+      alerts = alerts.filter(a => a.type === alertTypeFilter);
+    }
+
+    // detect new critical alerts
+    const currentIds = new Set(alerts.map(a => a.alertId));
+    const hasNewCritical = alerts.some(a =>
+      a.severity === 'critical' && !lastAlertIds.has(a.alertId)
+    );
+    if (hasNewCritical && lastAlertIds.size > 0) softPing();
+    lastAlertIds = currentIds;
+
+    if (alerts.length === 0) {
+      document.getElementById('alert-feed').innerHTML =
+        '<div class="text-gray-600 text-xs">No alerts in the last 60 minutes.</div>';
+      return;
+    }
+
+    const rows = alerts.map(a => {
+      const badge    = a.badge ? '<span class="text-yellow-400 mr-1" title="3+ detector types">★</span>' : '';
+      const strength = a.signalStrength > 1
+        ? `<span class="text-xs text-gray-500">S${a.signalStrength}</span>` : '';
+      const meta = renderMetaHighlight(a);
+      const price = a.currentYesPrice != null ? `<span class="text-gray-500">${(a.currentYesPrice * 100).toFixed(1)}¢</span>` : '';
+      const question = a.marketQuestion
+        ? `<span class="text-gray-400">${truncate(a.marketQuestion, 80)}</span>` : '';
+
+      return `<div class="rounded px-3 py-2 ${severityBg(a.severity)} severity-${a.severity} ${a.badge ? 'ping-anim' : ''}" data-id="${a.alertId}">
+        <div class="flex flex-wrap items-center gap-2">
+          ${badge}
+          <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${typeBadgeColor(a.type)}">${typeLabel(a.type)}</span>
+          <span class="font-semibold text-xs ${a.severity === 'critical' ? 'text-red-300' : a.severity === 'warning' ? 'text-yellow-300' : 'text-blue-300'}">${a.title || ''}</span>
+          ${meta}
+          ${price}
+          ${strength}
+          <span class="ml-auto text-gray-600 text-[10px]">${relativeTime(a.createdAt)}</span>
+          ${!a.reviewed ? `<button onclick="markReviewed('${a.alertId}', this)" class="text-[10px] text-gray-600 hover:text-gray-300 border border-gray-700 rounded px-1">✓</button>` : '<span class="text-[10px] text-gray-700">reviewed</span>'}
+        </div>
+        ${question ? `<div class="mt-0.5 text-[10px] truncate">${question}</div>` : ''}
+      </div>`;
+    });
+
+    document.getElementById('alert-feed').innerHTML = rows.join('');
+  } catch (_) {}
+}
+
+async function markReviewed(alertId, btn) {
+  try {
+    await fetch(`/api/alerts/${alertId}/mark-reviewed`, { method: 'POST' });
+    btn.textContent = 'reviewed';
+    btn.disabled = true;
+    btn.className = 'text-[10px] text-gray-700';
+  } catch (_) {}
+}
+
+// ── Watched Markets Grid + sparklines ─────────────────────────────────────────
+
+const sparkCharts = {}; // marketId → Chart instance
+
+async function loadWatchedMarkets() {
+  try {
+    const r = await fetch('/api/markets?watched=true&limit=50');
+    if (!r.ok) return;
+    const markets = await r.json();
+
+    if (markets.length === 0) {
+      document.getElementById('markets-grid').innerHTML =
+        '<div class="text-gray-600 text-xs col-span-3">No watched markets. Use POST /api/markets/{id}/watch to add one.</div>';
+      return;
+    }
+
+    const grid = document.getElementById('markets-grid');
+    grid.innerHTML = '';
+
+    for (const m of markets) {
+      const card = document.createElement('div');
+      card.className = 'rounded border border-gray-800 bg-gray-900 p-3 text-xs space-y-2';
+      card.innerHTML = `
+        <div class="font-semibold text-gray-200 leading-tight">${truncate(m.question || m.marketId, 100)}</div>
+        <div class="flex items-center gap-3 text-gray-400">
+          <span>Yes: <span class="text-green-400 font-semibold">${m.currentYesPrice != null ? (m.currentYesPrice * 100).toFixed(1) + '¢' : '—'}</span></span>
+          <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24Hr)}</span></span>
+          <span class="ml-auto text-gray-600">${m.category || ''}</span>
+        </div>
+        <canvas id="spark-${m.marketId}" height="50"></canvas>
+      `;
+      grid.appendChild(card);
+
+      // load sparkline
+      loadSparkline(m.marketId);
+    }
+  } catch (_) {}
+}
+
+async function loadSparkline(marketId) {
+  try {
+    const since = new Date(Date.now() - 3600_000).toISOString();
+    const r = await fetch(`/api/markets/${encodeURIComponent(marketId)}/price-history?since=${since}&limit=60`);
+    if (!r.ok) return;
+    const points = await r.json();
+    if (points.length < 2) return;
+
+    const canvas = document.getElementById(`spark-${marketId}`);
+    if (!canvas) return;
+
+    if (sparkCharts[marketId]) sparkCharts[marketId].destroy();
+
+    sparkCharts[marketId] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: points.map(p => p.timestamp),
+        datasets: [{
+          data: points.map(p => p.midpoint != null ? (p.midpoint * 100) : null),
+          borderColor: '#22c55e',
+          borderWidth: 1.5,
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+        }],
+      },
+      options: {
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: {
+          x: { display: false },
+          y: { display: false, grace: '5%' },
+        },
+        responsive: true,
+        maintainAspectRatio: false,
+      },
+    });
+  } catch (_) {}
+}
+
+// ── Smart Money Tracker ───────────────────────────────────────────────────────
+
+async function loadWallets() {
+  try {
+    const r = await fetch('/api/wallets');
+    if (!r.ok) return;
+    const wallets = await r.json();
+
+    if (wallets.length === 0) {
+      document.getElementById('wallet-body').innerHTML =
+        '<tr><td colspan="6" class="text-gray-600 py-2">No watched wallets configured.</td></tr>';
+      return;
+    }
+
+    const rows = wallets.map(w => {
+      const addr = w.address ? w.address.slice(0, 6) + '…' + w.address.slice(-4) : '—';
+      const dirColor = w.recentDirection === 'BUY'  ? 'text-green-400'
+                     : w.recentDirection === 'SELL' ? 'text-red-400'
+                     : 'text-gray-500';
+      return `<tr class="border-b border-gray-800/40 hover:bg-gray-800/30">
+        <td class="py-1 pr-4 text-gray-200">${w.alias || '—'}</td>
+        <td class="py-1 pr-4 font-mono text-gray-400">${addr}</td>
+        <td class="py-1 pr-4 text-gray-500">${w.category || '—'}</td>
+        <td class="py-1 pr-4 text-gray-500">${relativeTime(w.lastTradeAt)}</td>
+        <td class="text-center py-1 px-4 text-gray-400">${w.tradeCount ?? '—'}</td>
+        <td class="text-center py-1 px-4 font-bold ${dirColor}">${w.recentDirection || '—'}</td>
+      </tr>`;
+    });
+
+    document.getElementById('wallet-body').innerHTML = rows.join('');
+  } catch (_) {}
+}
+
+// ── Bootstrap & polling ───────────────────────────────────────────────────────
+
+async function init() {
+  await Promise.all([loadStats(), loadSignalQuality(), loadAlerts(), loadWatchedMarkets(), loadWallets()]);
+}
+
+init();
+
+// Refresh intervals
+setInterval(loadAlerts,        10_000);   // alert feed: 10s
+setInterval(loadSignalQuality, 60_000);   // signal quality: 60s
+setInterval(loadStats,         30_000);   // stats bar: 30s
+setInterval(loadWatchedMarkets, 120_000); // markets grid: 2min
+setInterval(loadWallets,        60_000);  // wallets: 60s
+
+// Unlock Web Audio on first user gesture
+document.addEventListener('click', () => ensureAudio(), { once: true });
+</script>
+</body>
+</html>
