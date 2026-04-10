@@ -1,6 +1,6 @@
 # PolySign
 
-<!-- ![CI](https://github.com/YOUR_USERNAME/polysign/actions/workflows/ci.yml/badge.svg) -->
+<!-- ![CI](https://github.com/leonardholler/polysign/actions/workflows/ci.yml/badge.svg) -->
 
 > **Live demo**: *URL added after AWS deployment*
 
@@ -40,17 +40,9 @@ flowchart TD
 
 ## Signal Quality
 
-| Detector | 1h Precision | 24h Precision | Count (7d) |
-|---|---|---|---|
-| price_movement | — | — | — |
-| statistical_anomaly | — | — | — |
-| wallet_activity | — | — | — |
-| consensus | — | — | — |
-| news_correlation | — | — | — |
+Precision numbers are measured against live data via the backtesting pipeline. Each alert is scored at T+15m, T+1h, and T+24h against the actual forward price movement. Results are visible on the dashboard's Signal Quality panel after the system has been running long enough to accumulate a meaningful sample.
 
-> *Measured after live deployment. Precision = correct / (correct + wrong), excluding dead-zone flat cases where |delta| < 0.5 percentage points. See [DESIGN.md](DESIGN.md#signal-quality-methodology) for the full methodology and known biases.*
-
-*[Screenshot of dashboard with signal quality panel — added after deployment]*
+Precision = correct / (correct + wrong), excluding flat cases where |delta| < 0.5 percentage points. See [DESIGN.md](DESIGN.md#signal-quality-methodology) for methodology and known biases.
 
 ---
 
@@ -282,7 +274,7 @@ polysign/
 ## Running Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/polysign.git
+git clone https://github.com/leonardholler/polysign.git
 cd polysign
 docker compose up --build
 ```

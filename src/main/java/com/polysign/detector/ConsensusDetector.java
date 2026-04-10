@@ -173,7 +173,8 @@ public class ConsensusDetector {
         alert.setDescription(String.format(
                 "%d distinct watched wallets %s %s within the last %d minutes",
                 distinctWallets.size(), verb, outcome.toUpperCase(), consensusWindow.toMinutes()));
-        alert.setLink(slug != null ? "https://polymarket.com/event/" + cleanSlug(slug) : null);
+        // Data API trade slug is already event-level (no outcome-ID suffix).
+        alert.setLink(slug != null ? "https://polymarket.com/event/" + slug : null);
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
@@ -200,19 +201,4 @@ public class ConsensusDetector {
                 .collect(Collectors.toList());
     }
 
-    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
-    private static String cleanSlug(String slug) {
-        if (slug == null) return slug;
-        String s = slug;
-        while (true) {
-            int last = s.lastIndexOf('-');
-            if (last < 0) break;
-            String tail = s.substring(last + 1);
-            if (!tail.matches("\\d+")) break;
-            if (tail.length() < 3) break;
-            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
-            s = s.substring(0, last);
-        }
-        return s;
-    }
 }

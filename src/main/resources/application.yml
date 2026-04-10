@@ -62,7 +62,7 @@ polysign:
       max-spread-bps: 500        # Tier 2/3 alerts dropped if spread exceeds this
       min-depth-at-mid: 100.0    # Tier 2/3 alerts dropped if depth below this (USDC)
     wallet:
-      min-trade-usdc: 5000
+      min-trade-usdc: 1000
       consensus-min-wallets: 3
       consensus-window-minutes: 30
     news:
@@ -70,7 +70,7 @@ polysign:
       min-volume-usdc: 100000
       dedupe-window-minutes: 1440   # 24 hours — same article-market pair fires once per day
       max-matches-per-article: 3    # cap: top 3 markets by score per article
-      keyword-prefilter-threshold: 0.15   # minimum keyword score to send to Claude (lowered from 0.3 to pass more articles)
+      keyword-prefilter-threshold: 0.15   # minimum keyword score to pass to sentiment analysis
       sentiment-relevance-threshold: 0.3  # minimum |sentiment| to fire alert
       sentiment-confidence-threshold: 0.5 # minimum confidence to fire alert
       claude-model: "claude-sonnet-4-6"

@@ -35,7 +35,8 @@ public class Market {
     private String  clobTokenIds; // raw JSON string: "["<yes_id>","<no_id>"]"
     private String     conditionId;          // Gamma "conditionId" hex hash — matches Data API trade.conditionId
     private BigDecimal currentYesPrice;     // denormalized from latest price_snapshot (updated by PricePoller)
-    private String     slug;                // Gamma API "slug" — used to build polymarket.com/event/{slug} links
+    private String     slug;                // Gamma API market-level "slug" (includes outcome ID suffix)
+    private String     eventSlug;           // Gamma API events[0].slug — event-level slug for polymarket.com/event/{eventSlug}
     private Boolean    closed;              // true when market has resolved; populated by closed-market poll (Phase 12+)
     private BigDecimal resolvedOutcomePrice; // final resolved price (0.0 or 1.0); set on resolution
 
@@ -62,6 +63,7 @@ public class Market {
     public String       getYesTokenId()    { return yesTokenId;    }
     public String       getClobTokenIds()  { return clobTokenIds;  }
     public String       getSlug()             { return slug;             }
+    public String       getEventSlug()        { return eventSlug;        }
     @DynamoDbSecondaryPartitionKey(indexNames = "conditionId-index")
     public String       getConditionId()      { return conditionId;      }
     public BigDecimal   getCurrentYesPrice()    { return currentYesPrice;    }
@@ -83,6 +85,7 @@ public class Market {
     public void setYesTokenId(String yesTokenId)      { this.yesTokenId   = yesTokenId;   }
     public void setClobTokenIds(String clobTokenIds)  { this.clobTokenIds = clobTokenIds; }
     public void setSlug(String slug)                                    { this.slug                  = slug;                  }
+    public void setEventSlug(String eventSlug)                         { this.eventSlug             = eventSlug;             }
     public void setConditionId(String conditionId)                      { this.conditionId           = conditionId;           }
     public void setCurrentYesPrice(BigDecimal currentYesPrice)         { this.currentYesPrice        = currentYesPrice;        }
     public void setClosed(Boolean closed)                               { this.closed                = closed;                }

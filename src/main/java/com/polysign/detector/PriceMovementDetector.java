@@ -21,6 +21,8 @@ import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -369,9 +371,16 @@ public class PriceMovementDetector {
                                             ? market.getQuestion() : market.getMarketId(),
                                     movePct, direction, move.spanMinutes,
                                     move.fromPrice, move.toPrice));
-                            String linkSlug = market.getSlug() != null
-                                    ? market.getSlug() : market.getMarketId();
-                            alert.setLink("https://polymarket.com/event/" + cleanSlug(linkSlug));
+                            String link;
+                            if (market.getEventSlug() != null) {
+                                link = "https://polymarket.com/event/" + market.getEventSlug();
+                            } else {
+                                String q = market.getQuestion() != null
+                                        ? market.getQuestion() : market.getMarketId();
+                                link = "https://polymarket.com/search?query="
+                                        + URLEncoder.encode(q, StandardCharsets.UTF_8);
+                            }
+                            alert.setLink(link);
                             alert.setMetadata(metadata);
 
                             fired = alertService.tryCreate(alert);
@@ -640,27 +649,6 @@ public class PriceMovementDetector {
     private static double parseVolume(String raw) {
         if (raw == null || raw.isBlank()) return 0.0;
         try { return Double.parseDouble(raw); } catch (NumberFormatException e) { return 0.0; }
-    }
-
-    /**
-     * Strips trailing numeric outcome IDs from a Polymarket market-level slug to produce
-     * an event-level URL. Market slugs follow the pattern {@code {event-slug}-{outcome-id}}.
-     * Only strips segments that are purely numeric, 3+ digits, and don't look like years (2020–2030).
-     */
-    static String cleanSlug(String slug) {
-        if (slug == null) return slug;
-        String s = slug;
-        while (true) {
-            int last = s.lastIndexOf('-');
-            if (last < 0) break;
-            String tail = s.substring(last + 1);
-            if (!tail.matches("\\d+")) break;                                         // not purely numeric
-            if (tail.length() < 3) break;                                             // 1-2 digit numbers are not outcome IDs
-            if (tail.length() == 4 && tail.compareTo("2020") >= 0
-                    && tail.compareTo("2030") <= 0) break;                            // looks like a year — keep
-            s = s.substring(0, last);
-        }
-        return s;
     }
 
     /** Result of the max-move search — package-private for testability. */

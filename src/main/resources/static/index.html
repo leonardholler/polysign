@@ -482,8 +482,8 @@ async function loadWatchedMarkets() {
       const pStr = p != null ? `<span class="font-bold ${priceColor(p)}">${(p*100).toFixed(1)}¢</span>` : '<span class="text-gray-600">—</span>';
       const vol = parseFloat(m.volume24h || m.volume24Hr || 0);
       const barWidth = pct != null ? pct : 0;
-      const pmLink = m.slug
-        ? 'https://polymarket.com/event/' + m.slug
+      const pmLink = m.eventSlug
+        ? 'https://polymarket.com/event/' + m.eventSlug
         : (m.question ? `https://polymarket.com/search?query=${encodeURIComponent(m.question)}` : 'https://polymarket.com');
       return `<div class="rounded border border-gray-800 bg-gray-900/50 px-3 py-2.5 space-y-1.5">
         <div class="text-xs text-gray-200 leading-tight font-medium">${truncate(m.question || m.marketId, 70)}</div>

@@ -339,9 +339,24 @@ public class MarketPoller {
         List<String> clobTokenList = parseJsonStringList(item, "clobTokenIds");
         String yesTokenId = clobTokenList.isEmpty() ? null : clobTokenList.get(0);
 
-        String question  = stringOrNull(item, "question");
-        String eventSlug = stringOrNull(item, "slug");
-        String category  = CategoryClassifier.classify(question, eventSlug);
+        String question     = stringOrNull(item, "question");
+        String marketSlug   = stringOrNull(item, "slug");
+        String category     = CategoryClassifier.classify(question, marketSlug);
+
+        // Extract event-level slug from events[0].slug.
+        // The market-level "slug" includes an outcome-ID suffix (e.g. "my-market-554");
+        // events[0].slug is the clean event URL slug (e.g. "my-market").
+        String eventSlug = null;
+        Object eventsRaw = item.get("events");
+        if (eventsRaw instanceof List<?> eventsList && !eventsList.isEmpty()) {
+            Object first = eventsList.get(0);
+            if (first instanceof Map<?, ?> eventMap) {
+                Object s = eventMap.get("slug");
+                if (s != null && !s.toString().isBlank()) {
+                    eventSlug = s.toString();
+                }
+            }
+        }
         if (CategoryClassifier.OTHER.equals(category)) {
             log.info("market_category_other marketId={} question={}", marketId, question);
         }
@@ -367,7 +382,8 @@ public class MarketPoller {
         market.setUpdatedAt(clock.nowIso());
         market.setYesTokenId(yesTokenId);
         market.setClobTokenIds(stringOrNull(item, "clobTokenIds"));
-        market.setSlug(eventSlug);
+        market.setSlug(marketSlug);
+        market.setEventSlug(eventSlug);
         market.setConditionId(stringOrNull(item, "conditionId"));
         // "closed" is present in Gamma API responses but always false here because we filter
         // closed=false. Set it from the response anyway so re-polling a market that closes

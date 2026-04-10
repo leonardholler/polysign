@@ -87,13 +87,13 @@ public class ClaudeSentimentService {
     /**
      * Analyze a news article's directional sentiment relative to the given market.
      *
-     * @return {@link SentimentResult} on success, or {@code null} when Claude is
-     *         unavailable — callers MUST fall back to keyword-only scoring.
+     * @return {@link SentimentResult} on success, or {@code null} when the sentiment
+     *         API is unavailable — callers MUST fall back to keyword-only scoring.
      */
     public SentimentResult analyze(String marketQuestion, double currentPrice,
                                    String articleTitle, String articleSummary) {
         if (apiKey == null || apiKey.isBlank()) {
-            log.debug("claude_sentiment_skipped reason=no_api_key");
+            log.debug("sentiment_analysis_skipped reason=no_api_key");
             callsFallback.increment();
             return null;
         }
@@ -101,11 +101,11 @@ public class ClaudeSentimentService {
             SentimentResult result = circuitBreaker.executeCallable(
                     () -> callClaude(marketQuestion, currentPrice, articleTitle, articleSummary));
             callsSuccess.increment();
-            log.debug("claude_sentiment_ok market={} sentiment={} confidence={}",
+            log.debug("sentiment_analysis_ok market={} sentiment={} confidence={}",
                     truncate(marketQuestion, 60), result.sentiment(), result.confidence());
             return result;
         } catch (Exception e) {
-            log.warn("claude_sentiment_unavailable error={} — falling back to keyword scoring",
+            log.warn("sentiment_analysis_unavailable error={} — falling back to keyword scoring",
                     e.getMessage());
             callsError.increment();
             return null;

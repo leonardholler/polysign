@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -101,7 +103,17 @@ public class WalletActivityDetector {
                 walletLabel, direction, outcome, sizeUsdc,
                 trade.getPrice() != null ? trade.getPrice().doubleValue() : 0.0,
                 trade.getMarketQuestion() != null ? trade.getMarketQuestion() : trade.getMarketId()));
-        alert.setLink(slug != null ? "https://polymarket.com/event/" + cleanSlug(slug) : null);
+        String link;
+        if (slug != null) {
+            // Data API trade slug is already event-level (no outcome-ID suffix).
+            link = "https://polymarket.com/event/" + slug;
+        } else if (trade.getMarketQuestion() != null) {
+            link = "https://polymarket.com/search?query="
+                    + URLEncoder.encode(trade.getMarketQuestion(), StandardCharsets.UTF_8);
+        } else {
+            link = null;
+        }
+        alert.setLink(link);
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
@@ -114,19 +126,4 @@ public class WalletActivityDetector {
         }
     }
 
-    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
-    private static String cleanSlug(String slug) {
-        if (slug == null) return slug;
-        String s = slug;
-        while (true) {
-            int last = s.lastIndexOf('-');
-            if (last < 0) break;
-            String tail = s.substring(last + 1);
-            if (!tail.matches("\\d+")) break;
-            if (tail.length() < 3) break;
-            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
-            s = s.substring(0, last);
-        }
-        return s;
-    }
 }

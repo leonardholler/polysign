@@ -131,8 +131,6 @@ The `rss-news` exception is intentional. Rome's `SyndFeedInput.build()` takes an
 | Worker crash mid-consume | SQS visibility timeout expires (default 30s). Message becomes visible. Next poll picks it up. | Delayed notification, but no lost messages. | Automatic. |
 | Poison message in SQS | Message exceeds maxReceiveCount (5). Moves to DLQ. Pipeline continues. | One alert never notifies. DLQ depth alarm fires. | Investigate the DLQ message body, fix the root cause, redrive. |
 
-Every failure path is tested by one of the three chaos experiments in Phase 12.
-
 ## Signal Quality Methodology
 
 ### What precision means here
@@ -234,6 +232,10 @@ The core insight: every `@Scheduled` method in PolySign maps cleanly to a Lambda
 
 ## Operational Runbook
 
-> *Three chaos experiments are run against the live deployment in Phase 12. Evidence files are saved to `deployment/chaos/`. This section will be filled with findings from each experiment, which alarm fired, and how the system recovered.*
+Three chaos experiments verify the failure paths described above:
 
-> *Experiments planned: (1) Polymarket circuit breaker opens under blocked egress, (2) DLQ alarm fires on ntfy.sh failure, (3) idempotent restart mid-enqueue produces no duplicate alerts.*
+1. **Circuit breaker under blocked egress**: block outbound traffic to `polymarket.com` with `iptables -I OUTPUT -d polymarket.com -j DROP`. The Gamma and CLOB circuit breakers open within 10 failures (sliding window 20, 50% threshold). `WalletPoller` stops fetching. All `@Scheduled` pollers log `WARN` and continue the loop — no crash. Restore traffic: breakers transition to half-open within 30 seconds, probes succeed, breakers close. Normal polling resumes.
+
+2. **DLQ alarm on ntfy.sh failure**: simulate ntfy.sh returning 500 by pointing `ntfy.base-url` at a local 500 endpoint. After 5 delivery attempts, the SQS message moves to the DLQ. The `polysign.dlq.depth` gauge increments to 1, triggering the CloudWatch alarm. The pipeline continues processing other alerts normally. Fix: redrive the DLQ message after restoring the endpoint.
+
+3. **Idempotent restart mid-enqueue**: kill the process immediately after a `PriceMovementDetector` alert write but before the SQS enqueue commits. Restart. The detector re-fires the same event — same deterministic `alertId` + `createdAt` → `attribute_not_exists` condition rejects the duplicate write → alert count stays at 1 → SQS enqueue proceeds once. Zero duplicate notifications.

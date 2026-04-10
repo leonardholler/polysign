@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
@@ -27,12 +28,13 @@ import java.util.function.Supplier;
  * upserts them into the {@code watched_wallets} DynamoDB table.
  *
  * <p>Runs at order=2 — after {@link BootstrapRunner} (order=1) creates tables,
- * before {@link WalletBootstrap} (order=3) seeds the JSON fallback.
+ * before {@link WalletBootstrap} (order=3) seeds the JSON fallback. Also
+ * re-runs every 24 hours via {@link #refresh()} to pick up newly profitable traders.
  *
  * <p>Fetches top traders across 5 categories (OVERALL, POLITICS, SPORTS, CRYPTO,
- * FINANCE), deduplicates by proxy wallet address, and upserts each wallet with a
- * read-before-write guard: existing entries with trade data ({@code lastSyncedAt}
- * set by WalletPoller) are never overwritten.
+ * FINANCE) using timePeriod=ALL for all-time rankings, deduplicates by proxy wallet
+ * address, and upserts each wallet with a read-before-write guard: existing entries
+ * with trade data ({@code lastSyncedAt} set by WalletPoller) are never overwritten.
  *
  * <p>If the leaderboard API is unreachable, falls back to
  * {@code watched_wallets.json} on the classpath.
@@ -44,12 +46,16 @@ public class WalletDiscovery implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(WalletDiscovery.class);
     private static final String CB_NAME = "polymarket-data";
 
+    // Leaderboard API max limit is 50 per request.
+    // OVERALL=50 + 6×15=90 fetched across categories; after cross-category dedup ≈ 95-115 unique wallets.
     private static final List<CategorySpec> CATEGORIES = List.of(
-            new CategorySpec("OVERALL",  15),
-            new CategorySpec("POLITICS", 10),
-            new CategorySpec("SPORTS",   10),
-            new CategorySpec("CRYPTO",   10),
-            new CategorySpec("FINANCE",  10)
+            new CategorySpec("OVERALL",   50),
+            new CategorySpec("POLITICS",  15),
+            new CategorySpec("SPORTS",    15),
+            new CategorySpec("CRYPTO",    15),
+            new CategorySpec("FINANCE",   15),
+            new CategorySpec("ECONOMICS", 15),
+            new CategorySpec("TECH",      15)
     );
 
     private record CategorySpec(String name, int limit) {}
@@ -76,6 +82,17 @@ public class WalletDiscovery implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         log.info("WalletDiscovery starting — fetching Polymarket leaderboard");
+        discover();
+    }
+
+    /** Re-runs every 24 hours (after an initial 24h delay) to pick up newly profitable traders. */
+    @Scheduled(fixedDelay = 86_400_000L, initialDelay = 86_400_000L)
+    public void refresh() {
+        log.info("WalletDiscovery scheduled refresh — re-fetching Polymarket leaderboard");
+        discover();
+    }
+
+    private void discover() {
         try {
             Map<String, WatchedWallet> wallets = fetchFromLeaderboard();
             if (wallets.isEmpty()) {
@@ -83,8 +100,8 @@ public class WalletDiscovery implements ApplicationRunner {
                 wallets = loadFromJson();
             }
             int seeded = upsertWallets(wallets.values());
-            log.info("wallet_discovery_complete discovered={} after_dedup={} seeded={} categories={}",
-                    wallets.size(), wallets.size(), seeded,
+            log.info("wallet_discovery_complete discovered={} new={} categories={}",
+                    wallets.size(), seeded,
                     CATEGORIES.stream().map(CategorySpec::name).toList());
         } catch (Exception e) {
             log.warn("wallet_discovery_api_failed error={} — falling back to watched_wallets.json", e.getMessage());
@@ -143,7 +160,7 @@ public class WalletDiscovery implements ApplicationRunner {
         Supplier<List<Map<String, Object>>> call = () -> {
             String body = dataApiClient.get()
                     .uri(u -> u.path("/v1/leaderboard")
-                            .queryParam("timePeriod", "MONTH")
+                            .queryParam("timePeriod", "ALL")
                             .queryParam("orderBy", "PNL")
                             .queryParam("limit", limit)
                             .queryParam("category", category)

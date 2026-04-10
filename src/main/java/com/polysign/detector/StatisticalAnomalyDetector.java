@@ -20,6 +20,8 @@ import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -280,8 +282,15 @@ public class StatisticalAnomalyDetector {
         alert.setDescription(String.format("%s: z-score %.2f (%s) over %d snapshots",
                 market.getQuestion() != null ? market.getQuestion() : market.getMarketId(),
                 absZ, direction, n));
-        String linkSlug = market.getSlug() != null ? market.getSlug() : market.getMarketId();
-        alert.setLink("https://polymarket.com/event/" + cleanSlug(linkSlug));
+        String link;
+        if (market.getEventSlug() != null) {
+            link = "https://polymarket.com/event/" + market.getEventSlug();
+        } else {
+            String q = market.getQuestion() != null ? market.getQuestion() : market.getMarketId();
+            link = "https://polymarket.com/search?query="
+                    + URLEncoder.encode(q, StandardCharsets.UTF_8);
+        }
+        alert.setLink(link);
         alert.setMetadata(metadata);
 
         return alertService.tryCreate(alert);
@@ -336,19 +345,4 @@ public class StatisticalAnomalyDetector {
         try { return Double.parseDouble(raw); } catch (NumberFormatException e) { return 0.0; }
     }
 
-    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
-    static String cleanSlug(String slug) {
-        if (slug == null) return slug;
-        String s = slug;
-        while (true) {
-            int last = s.lastIndexOf('-');
-            if (last < 0) break;
-            String tail = s.substring(last + 1);
-            if (!tail.matches("\\d+")) break;
-            if (tail.length() < 3) break;
-            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
-            s = s.substring(0, last);
-        }
-        return s;
-    }
 }

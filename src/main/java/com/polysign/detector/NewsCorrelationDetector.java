@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -37,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ol>
  *   <li><b>Keyword pre-filter</b> (cheap, no API cost): {@link NewsMatcher} asymmetric
  *       containment score must exceed {@code keyword-prefilter-threshold} (default 0.3).</li>
- *   <li><b>Claude sentiment analysis</b> (only for pre-filter survivors): calls the
+ *   <li><b>LLM sentiment analysis</b> (only for pre-filter survivors): calls the
  *       Anthropic API via {@link ClaudeSentimentService} to score directional sentiment
  *       (−1.0 = strongly NO, +1.0 = strongly YES). An alert fires when
  *       {@code |sentiment| ≥ sentiment-relevance-threshold} and
@@ -81,11 +83,11 @@ public class NewsCorrelationDetector {
     private volatile List<Market> cachedMarkets;
     private volatile Instant      cacheExpiresAt;
 
-    // ── Claude rate-limiting and per-app-lifetime pair caching ─────────────────
-    private static final int MAX_CLAUDE_PER_MINUTE   = 5;
+    // ── Sentiment API rate-limiting and per-app-lifetime pair caching ────────────
+    private static final int MAX_SENTIMENT_PER_MINUTE = 5;
     private final Set<String>   sentimentCallCache      = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger claudeCallsThisMinute   = new AtomicInteger(0);
-    private final AtomicLong    claudeMinuteWindowStart = new AtomicLong(System.currentTimeMillis());
+    private final AtomicInteger sentimentCallsThisMinute = new AtomicInteger(0);
+    private final AtomicLong    sentimentMinuteWindowStart = new AtomicLong(System.currentTimeMillis());
 
     public NewsCorrelationDetector(
             DynamoDbTable<Market>          marketsTable,
@@ -119,7 +121,7 @@ public class NewsCorrelationDetector {
     /** Scored candidate market for an article. */
     record Candidate(
             Market market,
-            double score,           // Claude |sentiment| or keyword score
+            double score,           // LLM |sentiment| or keyword score
             Set<String> matched,
             Double sentimentRaw,    // raw sentiment float (-1.0 to +1.0), null if keyword fallback
             Double sentimentConfidence,
@@ -179,40 +181,40 @@ public class NewsCorrelationDetector {
             return null;
         }
 
-        // Stage 2: Claude sentiment analysis (only for pre-filter survivors)
+        // Stage 2: LLM sentiment analysis (only for pre-filter survivors)
         double currentPrice = market.getCurrentYesPrice() != null
                 ? market.getCurrentYesPrice().doubleValue() : 0.5;
 
-        // Cache check: each article-market pair is sent to Claude at most once per app lifetime.
+        // Cache check: each article-market pair is analyzed at most once per app lifetime.
         String cacheKey = article.getArticleId() + ":" + market.getMarketId();
         if (!sentimentCallCache.contains(cacheKey)) {
-            // Rate limit: max MAX_CLAUDE_PER_MINUTE calls per rolling minute.
+            // Rate limit: max MAX_SENTIMENT_PER_MINUTE calls per rolling minute.
             long nowMs        = System.currentTimeMillis();
-            long windowStart  = claudeMinuteWindowStart.get();
+            long windowStart  = sentimentMinuteWindowStart.get();
             if (nowMs - windowStart >= 60_000L
-                    && claudeMinuteWindowStart.compareAndSet(windowStart, nowMs)) {
-                claudeCallsThisMinute.set(0);
+                    && sentimentMinuteWindowStart.compareAndSet(windowStart, nowMs)) {
+                sentimentCallsThisMinute.set(0);
             }
-            if (claudeCallsThisMinute.get() >= MAX_CLAUDE_PER_MINUTE) {
-                log.info("claude_sentiment_call articleId={} marketId={} status=rate_limited",
+            if (sentimentCallsThisMinute.get() >= MAX_SENTIMENT_PER_MINUTE) {
+                log.info("sentiment_analysis_call articleId={} marketId={} status=rate_limited",
                         article.getArticleId(), market.getMarketId());
             } else {
-                claudeCallsThisMinute.incrementAndGet();
+                sentimentCallsThisMinute.incrementAndGet();
                 if (sentimentCallCache.size() < 50_000) sentimentCallCache.add(cacheKey);
                 ClaudeSentimentService.SentimentResult sentiment =
                         sentimentService.analyze(market.getQuestion(), currentPrice,
                                                  article.getTitle(), article.getSummary());
                 if (sentiment != null) {
-                    log.info("claude_sentiment_call articleId={} marketId={} status=success",
+                    log.info("sentiment_analysis_call articleId={} marketId={} status=success",
                             article.getArticleId(), market.getMarketId());
                     if (!sentiment.relevant()) {
-                        log.debug("event=news_claude_not_relevant marketId={} articleId={}",
+                        log.debug("event=news_sentiment_not_relevant marketId={} articleId={}",
                                 market.getMarketId(), article.getArticleId());
                         return null;
                     }
                     if (Math.abs(sentiment.sentiment()) < sentimentRelevanceThreshold
                             || sentiment.confidence() < sentimentConfidenceThreshold) {
-                        log.debug("event=news_claude_low_signal marketId={} sentiment={} confidence={}",
+                        log.debug("event=news_sentiment_low_signal marketId={} sentiment={} confidence={}",
                                 market.getMarketId(), sentiment.sentiment(), sentiment.confidence());
                         return null;
                     }
@@ -221,15 +223,15 @@ public class NewsCorrelationDetector {
                             sentiment.sentiment(), sentiment.confidence(),
                             direction, sentiment.reasoning(), "claude");
                 }
-                log.info("claude_sentiment_call articleId={} marketId={} status=error",
+                log.info("sentiment_analysis_call articleId={} marketId={} status=error",
                         article.getArticleId(), market.getMarketId());
             }
         } else {
-            log.info("claude_sentiment_call articleId={} marketId={} status=cached",
+            log.info("sentiment_analysis_call articleId={} marketId={} status=cached",
                     article.getArticleId(), market.getMarketId());
         }
 
-        // Fallback: Claude unavailable/cached/rate-limited — use keyword-score gate
+        // Fallback: sentiment API unavailable/cached/rate-limited — use keyword-score gate
         log.debug("event=news_keyword_fallback marketId={} keywordScore={}", market.getMarketId(), keywordScore);
         if (keywordScore < minScore) return null;
         return new Candidate(market, keywordScore, matched,
@@ -241,7 +243,7 @@ public class NewsCorrelationDetector {
         double score  = c.score();
         Set<String> matched = c.matched();
 
-        // Write market_news_matches row — score reflects Claude |sentiment| or keyword score.
+        // Write market_news_matches row — score reflects LLM |sentiment| or keyword score.
         MarketNewsMatch newsMatch = new MarketNewsMatch();
         newsMatch.setMarketId(market.getMarketId());
         newsMatch.setArticleId(article.getArticleId());
@@ -285,8 +287,15 @@ public class NewsCorrelationDetector {
         alert.setMarketId(market.getMarketId());
         alert.setTitle("News match: " + truncate(article.getTitle(), 80));
         alert.setDescription(buildDescription(score, c));
-        String linkSlug = market.getSlug() != null ? market.getSlug() : market.getMarketId();
-        alert.setLink("https://polymarket.com/event/" + cleanSlug(linkSlug));
+        String link;
+        if (market.getEventSlug() != null) {
+            link = "https://polymarket.com/event/" + market.getEventSlug();
+        } else {
+            String q = market.getQuestion() != null ? market.getQuestion() : market.getMarketId();
+            link = "https://polymarket.com/search?query="
+                    + URLEncoder.encode(q, StandardCharsets.UTF_8);
+        }
+        alert.setLink(link);
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
@@ -351,19 +360,4 @@ public class NewsCorrelationDetector {
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
     }
 
-    /** Strips trailing numeric outcome IDs from a Polymarket slug to produce an event-level URL. */
-    static String cleanSlug(String slug) {
-        if (slug == null) return slug;
-        String s = slug;
-        while (true) {
-            int last = s.lastIndexOf('-');
-            if (last < 0) break;
-            String tail = s.substring(last + 1);
-            if (!tail.matches("\\d+")) break;
-            if (tail.length() < 3) break;
-            if (tail.length() == 4 && tail.compareTo("2020") >= 0 && tail.compareTo("2030") <= 0) break;
-            s = s.substring(0, last);
-        }
-        return s;
-    }
 }

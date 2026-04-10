@@ -282,6 +282,22 @@ public class WalletPoller {
             return false; // logged inside resolveMarketId
         }
 
+        // Resolve event-level slug for accurate Polymarket event links.
+        // The Data API's trade.slug is market-level (contains numeric outcome ID suffixes),
+        // so we look up the Market record and use its eventSlug (from Gamma events[0].slug).
+        String eventSlug = null;
+        try {
+            Market market = marketsTable.getItem(
+                    Key.builder().partitionValue(marketId).build());
+            if (market != null) {
+                eventSlug = market.getEventSlug();
+            }
+        } catch (Exception e) {
+            log.debug("wallet_market_eventslug_lookup_failed marketId={} error={}",
+                    marketId, e.getMessage());
+        }
+        String detectorSlug = eventSlug != null ? eventSlug : slug;
+
         long epochSeconds = Long.parseLong(tsObj.toString());
         String isoTimestamp = Instant.ofEpochSecond(epochSeconds).toString();
 
@@ -310,12 +326,12 @@ public class WalletPoller {
 
         // Fire detectors synchronously. Per-item catch: a detector error never kills the poll loop.
         try {
-            activityDetector.checkTrade(trade, wallet.getAlias(), slug);
+            activityDetector.checkTrade(trade, wallet.getAlias(), detectorSlug);
         } catch (Exception e) {
             log.warn("wallet_activity_check_failed txHash={} error={}", txHash, e.getMessage());
         }
         try {
-            consensusDetector.checkConsensus(trade, slug);
+            consensusDetector.checkConsensus(trade, detectorSlug);
         } catch (Exception e) {
             log.warn("consensus_check_failed txHash={} error={}", txHash, e.getMessage());
         }
