@@ -165,6 +165,13 @@ function relativeTime(iso) {
   return Math.floor(diff / 86400) + 'd ago';
 }
 
+function scoreBorderClass(score) {
+  if (score == null) return 'border-l-gray-600';
+  if (score >= 0.7) return 'border-l-green-500';
+  if (score >= 0.5) return 'border-l-yellow-500';
+  return 'border-l-gray-600';
+}
+
 function copyTopic() {
   const t = document.getElementById('s-topic').textContent;
   navigator.clipboard.writeText(t).catch(() => {});
@@ -277,7 +284,8 @@ function renderMetaHighlight(alert) {
     sizeUsdc:    '$',
   };
   const [k, v] = m.split('=');
-  return `<span class="ml-1 text-gray-500">${icons[k] || ''}${v || ''}</span>`;
+  const display = !isNaN(v) ? parseFloat(v).toFixed(2) : (v || '');
+  return `<span class="ml-1 text-gray-500">${icons[k] || ''}${display}</span>`;
 }
 
 async function loadAlerts() {
@@ -313,9 +321,9 @@ async function loadAlerts() {
       const meta = renderMetaHighlight(a);
       const price = a.currentYesPrice != null ? `<span class="text-gray-500">${(a.currentYesPrice * 100).toFixed(1)}¢</span>` : '';
       const question = a.marketQuestion
-        ? `<span class="text-gray-400">${truncate(a.marketQuestion, 80)}</span>` : '';
+        ? `<a href="https://www.google.com/search?q=polymarket+${encodeURIComponent(a.marketQuestion)}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-400 hover:underline">${truncate(a.marketQuestion, 80)}</a>` : '';
 
-      return `<div class="rounded px-3 py-2 ${severityBg(a.severity)} severity-${a.severity} ${a.badge ? 'ping-anim' : ''}" data-id="${a.alertId}">
+      return `<div class="rounded px-3 py-2 ${severityBg(a.severity)} severity-${a.severity} border-l-2 ${scoreBorderClass(a.score)} ${a.badge ? 'ping-anim' : ''}" data-id="${a.alertId}">
         <div class="flex flex-wrap items-center gap-2">
           ${badge}
           <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${typeBadgeColor(a.type)}">${typeLabel(a.type)}</span>
@@ -359,6 +367,9 @@ async function loadWatchedMarkets() {
       return;
     }
 
+    Object.values(sparkCharts).forEach(c => c.destroy());
+    Object.keys(sparkCharts).forEach(k => delete sparkCharts[k]);
+
     const grid = document.getElementById('markets-grid');
     grid.innerHTML = '';
 
@@ -369,7 +380,7 @@ async function loadWatchedMarkets() {
         <div class="font-semibold text-gray-200 leading-tight">${truncate(m.question || m.marketId, 100)}</div>
         <div class="flex items-center gap-3 text-gray-400">
           <span>Yes: <span class="text-green-400 font-semibold">${m.currentYesPrice != null ? (m.currentYesPrice * 100).toFixed(1) + '¢' : '—'}</span></span>
-          <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24Hr)}</span></span>
+          <span>Vol 24h: <span class="text-blue-400">${fmt(m.volume24h ?? m.volume24Hr)}</span></span>
           <span class="ml-auto text-gray-600">${m.category || ''}</span>
         </div>
         <canvas id="spark-${m.marketId}" height="50"></canvas>
