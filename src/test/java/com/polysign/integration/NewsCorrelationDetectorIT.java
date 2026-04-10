@@ -1,24 +1,18 @@
-package com.polysign.detector;
+package com.polysign.integration;
 
 import com.polysign.common.AppClock;
+import com.polysign.detector.NewsCorrelationDetector;
+import com.polysign.detector.PriceMovementDetector;
+import com.polysign.detector.StatisticalAnomalyDetector;
 import com.polysign.model.Alert;
 import com.polysign.model.Article;
 import com.polysign.model.Market;
 import com.polysign.model.MarketNewsMatch;
-import com.polysign.poller.MarketPoller;
-import com.polysign.poller.PricePoller;
-import com.polysign.poller.RssPoller;
-import com.polysign.poller.WalletPoller;
-import com.polysign.processing.NewsConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
@@ -27,53 +21,34 @@ import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test for NewsCorrelationDetector against a live LocalStack DynamoDB.
+ * Integration test for {@link NewsCorrelationDetector} against a Testcontainers LocalStack instance.
  *
- * <p>Prerequisites:
- * <ol>
- *   <li>LocalStack running on localhost:4566
- *       ({@code docker compose up localstack -d})</li>
- *   <li>Run with {@code -Dintegration-tests=true}</li>
- * </ol>
- *
- * <p>Skipped by default to keep {@code mvn test} runnable on a fresh clone
- * with no infrastructure.
+ * <p>Extends {@link AbstractIntegrationIT} which manages the shared LocalStack container
+ * and mocks all background pollers and consumers. This class additionally mocks the
+ * two price-movement detectors to prevent spurious alerts for the test market.
  */
-@EnabledIfSystemProperty(named = "integration-tests", matches = "true")
-@SpringBootTest
-@ActiveProfiles("local")
-@TestPropertySource(properties = "aws.endpoint-override=http://localhost:4566")
-@MockBean({MarketPoller.class, PricePoller.class, WalletPoller.class,
-           PriceMovementDetector.class, StatisticalAnomalyDetector.class,
-           com.polysign.notification.NotificationConsumer.class,
-           RssPoller.class, NewsConsumer.class})
-class NewsCorrelationDetectorIntegrationTest {
+@MockBean({PriceMovementDetector.class, StatisticalAnomalyDetector.class})
+class NewsCorrelationDetectorIT extends AbstractIntegrationIT {
 
-    /**
-     * Unique per test run — prevents cross-run bleed and enables safe parallel
-     * execution against a shared LocalStack.
-     */
-    static final String TEST_MARKET_ID  = "test-market-news-" + UUID.randomUUID();
-    static final String TEST_ARTICLE_ID = "test-article-news-" + UUID.randomUUID();
+    static final String TEST_MARKET_ID  = "test-market-news-it";
+    static final String TEST_ARTICLE_ID = "test-article-news-it";
 
-    @Autowired NewsCorrelationDetector      newsCorrelationDetector;
-    @Autowired DynamoDbTable<Market>        marketsTable;
-    @Autowired DynamoDbTable<Article>       articlesTable;
-    @Autowired DynamoDbTable<Alert>         alertsTable;
+    @Autowired NewsCorrelationDetector        newsCorrelationDetector;
+    @Autowired DynamoDbTable<Market>          marketsTable;
+    @Autowired DynamoDbTable<Article>         articlesTable;
+    @Autowired DynamoDbTable<Alert>           alertsTable;
     @Autowired DynamoDbTable<MarketNewsMatch> matchesTable;
-    @Autowired AppClock                     clock;
+    @Autowired AppClock                       clock;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @BeforeEach
     @AfterEach
     void cleanup() {
-        // Remove market_news_matches for TEST_MARKET_ID via base-table PK scan
         for (Page<MarketNewsMatch> page : matchesTable.query(
                 QueryConditional.keyEqualTo(
                         Key.builder().partitionValue(TEST_MARKET_ID).build()))) {
@@ -84,8 +59,6 @@ class NewsCorrelationDetectorIntegrationTest {
                         .build());
             }
         }
-
-        // Remove alerts for TEST_MARKET_ID via GSI
         for (Page<Alert> page : alertsTable
                 .index("marketId-createdAt-index")
                 .query(QueryConditional.keyEqualTo(
@@ -97,14 +70,8 @@ class NewsCorrelationDetectorIntegrationTest {
                         .build());
             }
         }
-
-        // Remove test article
         articlesTable.deleteItem(Key.builder().partitionValue(TEST_ARTICLE_ID).build());
-
-        // Remove test market
         marketsTable.deleteItem(Key.builder().partitionValue(TEST_MARKET_ID).build());
-
-        // Reset cache so each test starts with a fresh market scan
         newsCorrelationDetector.clearCache();
     }
 
@@ -135,7 +102,6 @@ class NewsCorrelationDetectorIntegrationTest {
 
         List<Alert> alerts = fetchAlertsForTestMarket();
         assertThat(alerts).hasSize(1);
-
         Alert alert = alerts.get(0);
         assertThat(alert.getType()).isEqualTo("news_correlation");
         assertThat(alert.getSeverity()).isEqualTo("warning");
@@ -143,7 +109,6 @@ class NewsCorrelationDetectorIntegrationTest {
         assertThat(alert.getMetadata().get("articleId")).isEqualTo(TEST_ARTICLE_ID);
         assertThat(alert.getMetadata().get("score")).isNotEmpty();
 
-        // Also verify market_news_matches row was written
         List<MarketNewsMatch> matches = fetchMatchesForTestMarket();
         assertThat(matches).hasSize(1);
         assertThat(matches.get(0).getArticleId()).isEqualTo(TEST_ARTICLE_ID);
@@ -158,7 +123,7 @@ class NewsCorrelationDetectorIntegrationTest {
         Market market = new Market();
         market.setMarketId(TEST_MARKET_ID);
         market.setQuestion("Will the test election result happen?");
-        market.setVolume24h("50000");     // below 100k threshold
+        market.setVolume24h("50000");
         market.setKeywords(Set.of("test", "election", "result"));
         marketsTable.putItem(market);
 

@@ -1,22 +1,16 @@
-package com.polysign.detector;
+package com.polysign.integration;
 
 import com.polysign.common.AppClock;
+import com.polysign.detector.ConsensusDetector;
+import com.polysign.detector.PriceMovementDetector;
+import com.polysign.detector.StatisticalAnomalyDetector;
 import com.polysign.model.Alert;
 import com.polysign.model.WalletTrade;
-import com.polysign.poller.MarketPoller;
-import com.polysign.poller.PricePoller;
-import com.polysign.poller.RssPoller;
-import com.polysign.poller.WalletPoller;
-import com.polysign.processing.NewsConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
@@ -27,38 +21,21 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test for ConsensusDetector against a live LocalStack DynamoDB.
+ * Integration test for {@link ConsensusDetector} against a Testcontainers LocalStack instance.
  *
- * Prerequisites:
- *   1. LocalStack running on localhost:4566
- *      (docker compose up localstack -d)
- *   2. Run with -Dintegration-tests=true
- *
- * Skipped by default to keep {@code mvn test} runnable on a fresh
- * clone with no infrastructure. Phase 10 will formalize
- * integration-test execution via Maven Failsafe and CI.
+ * <p>Extends {@link AbstractIntegrationIT} which manages the shared LocalStack container
+ * and mocks all background pollers and consumers. This class additionally mocks the
+ * two price-movement detectors to prevent them from scanning the markets table and
+ * generating spurious alerts for the test market.
  */
-@EnabledIfSystemProperty(named = "integration-tests", matches = "true")
-@SpringBootTest
-@ActiveProfiles("local")
-@TestPropertySource(properties = "aws.endpoint-override=http://localhost:4566")
-@MockBean({MarketPoller.class, PricePoller.class, WalletPoller.class,
-           PriceMovementDetector.class, StatisticalAnomalyDetector.class,
-           com.polysign.notification.NotificationConsumer.class,
-           RssPoller.class, NewsConsumer.class})
-class ConsensusDetectorIntegrationTest {
+@MockBean({PriceMovementDetector.class, StatisticalAnomalyDetector.class})
+class ConsensusDetectorIT extends AbstractIntegrationIT {
 
-    /**
-     * Unique per test run — prevents cross-run bleed and enables safe parallel
-     * execution against a shared LocalStack.
-     */
-    static final String TEST_MARKET_ID =
-            "test-market-consensus-" + UUID.randomUUID();
+    static final String TEST_MARKET_ID = "test-market-consensus-it";
 
     @Autowired ConsensusDetector          consensusDetector;
     @Autowired DynamoDbTable<WalletTrade> walletTradesTable;
@@ -70,7 +47,6 @@ class ConsensusDetectorIntegrationTest {
     @BeforeEach
     @AfterEach
     void cleanup() {
-        // Remove any wallet_trades rows for TEST_MARKET_ID via the GSI.
         for (Page<WalletTrade> page : walletTradesTable
                 .index("marketId-timestamp-index")
                 .query(QueryConditional.keyEqualTo(
@@ -82,8 +58,6 @@ class ConsensusDetectorIntegrationTest {
                         .build());
             }
         }
-
-        // Remove any alerts rows for TEST_MARKET_ID via the GSI.
         for (Page<Alert> page : alertsTable
                 .index("marketId-createdAt-index")
                 .query(QueryConditional.keyEqualTo(
@@ -106,15 +80,14 @@ class ConsensusDetectorIntegrationTest {
     @Test
     void consensusFiresExactlyOnceOnThreeWallets() {
         Instant now = clock.now();
-        WalletTrade t1 = seedTrade("addr-A", "tx-A", "BUY", now.minus(Duration.ofMinutes(4)));
-        WalletTrade t2 = seedTrade("addr-B", "tx-B", "BUY", now.minus(Duration.ofMinutes(3)));
+        seedTrade("addr-A", "tx-A", "BUY", now.minus(Duration.ofMinutes(4)));
+        seedTrade("addr-B", "tx-B", "BUY", now.minus(Duration.ofMinutes(3)));
         WalletTrade t3 = seedTrade("addr-C", "tx-C", "BUY", now.minus(Duration.ofMinutes(2)));
 
         consensusDetector.checkConsensus(t3, "test-slug");
 
         List<Alert> alerts = fetchAlertsForTestMarket();
         assertThat(alerts).hasSize(1);
-
         Alert alert = alerts.get(0);
         assertThat(alert.getSeverity()).isEqualTo("critical");
         assertThat(alert.getType()).isEqualTo("consensus");
@@ -123,25 +96,21 @@ class ConsensusDetectorIntegrationTest {
     }
 
     /**
-     * A fourth wallet buying the same market in the same 30-minute window must NOT
-     * produce a second alert — the AlertIdFactory 30-minute bucket deduplicates it.
-     *
-     * CRITICAL: if this test sees count == 2, stop and investigate AlertIdFactory
-     * canonicalPayloadHash before changing ConsensusDetector or AlertIdFactory.
+     * A fourth wallet buying in the same 30-minute window must NOT produce a
+     * second alert — the AlertIdFactory 30-minute bucket deduplicates it.
      */
     @Test
     void consensusIsIdempotentOnFourthWallet() {
         Instant now = clock.now();
-        WalletTrade t1 = seedTrade("addr-A", "tx-A", "BUY", now.minus(Duration.ofMinutes(4)));
-        WalletTrade t2 = seedTrade("addr-B", "tx-B", "BUY", now.minus(Duration.ofMinutes(3)));
+        seedTrade("addr-A", "tx-A", "BUY", now.minus(Duration.ofMinutes(4)));
+        seedTrade("addr-B", "tx-B", "BUY", now.minus(Duration.ofMinutes(3)));
         WalletTrade t3 = seedTrade("addr-C", "tx-C", "BUY", now.minus(Duration.ofMinutes(2)));
-        consensusDetector.checkConsensus(t3, "test-slug");   // fires alert #1
+        consensusDetector.checkConsensus(t3, "test-slug");
 
         WalletTrade t4 = seedTrade("addr-D", "tx-D", "BUY", now.minus(Duration.ofMinutes(1)));
-        consensusDetector.checkConsensus(t4, "test-slug");   // must NOT fire a second alert
+        consensusDetector.checkConsensus(t4, "test-slug");
 
-        List<Alert> alerts = fetchAlertsForTestMarket();
-        assertThat(alerts)
+        assertThat(fetchAlertsForTestMarket())
                 .as("Expected exactly 1 alert after 4th wallet (idempotency via 30-min bucket)")
                 .hasSize(1);
     }
@@ -162,7 +131,6 @@ class ConsensusDetectorIntegrationTest {
         return t;
     }
 
-    /** Collects all alerts for TEST_MARKET_ID, paginating fully. */
     private List<Alert> fetchAlertsForTestMarket() {
         List<Alert> result = new ArrayList<>();
         for (Page<Alert> page : alertsTable

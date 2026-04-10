@@ -156,6 +156,20 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <plugin>
+                <!-- Integration tests (*IT.java) run during mvn verify via Failsafe.
+                     Unit tests (*Test.java) run during mvn test via Surefire (default). -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

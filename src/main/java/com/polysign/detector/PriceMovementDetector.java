@@ -89,9 +89,9 @@ public class PriceMovementDetector {
     }
 
     /**
-     * Core detection loop — package-private for direct invocation in tests.
+     * Core detection loop — public for direct invocation in integration tests.
      */
-    void detect() {
+    public void detect() {
         Instant now = clock.now();
         int checked = 0;
         int fired = 0;

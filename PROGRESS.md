@@ -1242,12 +1242,119 @@ Unused `WebClient` import removed from `RssPoller.java`.
    closed-market Gamma poll. ResolutionSweeper.findClosedMarkets() still returns empty list.
 
 ### Notes for next phase
-- Phase 10: Testcontainers integration test (the most valuable test in the project per spec).
-  Sequence: spin up LocalStack, insert fake snapshots with 10% move, run PriceMovementDetector,
-  assert exactly one alert row + one SQS message, re-run and assert no new rows (idempotency),
-  seed T+15min snapshot, run AlertOutcomeEvaluator, assert one alert_outcomes row with wasCorrect=true.
+- Phase 10 complete — see Phase 10 entry below.
 - SqsQueueMetrics and SignalQualityMetrics are not covered by unit tests (they are thin
-  scheduling/gauge-registration wrappers). The Testcontainers integration test can optionally
-  verify gauge values via the Prometheus endpoint.
+  scheduling/gauge-registration wrappers). The Testcontainers integration test validates
+  the surrounding infrastructure (DynamoDB, SQS, S3) they depend on.
 - The `polysign.dlq.depth` gauge will read 0 until a message enters a DLQ. The chaos
   experiments in Phase 12 will exercise this path live.
+
+---
+
+## Phase 10 — Testcontainers Integration Tests + Failsafe + CI
+Status: complete
+Date: 2026-04-10
+
+### What was built
+
+**DECISION 1 — Testcontainers replaces manual LocalStack**
+- `AbstractIntegrationIT.java` — shared base class for all integration tests.
+  Uses the Testcontainers Singleton Container Pattern: `LocalStackContainer` pinned to
+  `localstack/localstack:3.8` is started once in a `static {}` block and reused across
+  all subclasses. `@DynamicPropertySource` injects the dynamic port into
+  `aws.endpoint-override`, overriding the hardcoded `http://localstack:4566` from
+  `application-local.yml`. BootstrapRunner (ApplicationRunner @Order=1) creates all
+  DynamoDB tables, SQS queues, and S3 bucket on Spring context startup — no manual
+  table creation needed in tests.
+- Complete `@MockBean` list derived by grepping all `@Scheduled` annotations across the
+  codebase (13 total): base class mocks the 10 that reach external services or would
+  interfere with all tests (MarketPoller, PricePoller, WalletPoller, RssPoller,
+  NotificationConsumer, NewsConsumer, SqsQueueMetrics, SignalQualityMetrics,
+  SnapshotArchiver, ResolutionSweeper). Subclasses add their own.
+
+**DECISION 2 — The golden-path integration test**
+- `GoldenPathIT.java` — 13-step test proving the complete signal quality loop:
+  1. Seed Market (volume24h=$100k) + 20 flat snapshots at 0.50 + spike at 0.60 (T0)
+  2. Fix clock to T0 = now−2h; call `priceMovementDetector.detect()`
+  3. Assert 1 alert in DynamoDB (type=price_movement, direction=up)
+  4. Assert 1 message in alerts-to-notify SQS (depth=1)
+  5. Call detect() again → still 1 alert, still 1 SQS message (DynamoDB idempotency proof)
+  6. Seed T+15min snapshot at 0.62; advance clock to T1 = T0+20min
+  7. Call `alertOutcomeEvaluator.evaluate()`
+  8. Assert 1 outcome row: horizon=t15m, wasCorrect=true, magnitudePp>0
+  9. Call evaluate() again → still 1 outcome row (attribute_not_exists(horizon) idempotency)
+- Clock strategy: `AppClock.setClock(Clock.fixed(T0))` before detection;
+  `AppClock.setClock(Clock.fixed(T1))` before evaluation; reset to `Clock.systemUTC()`
+  in @AfterEach. No @MockBean on AppClock — the real bean is used.
+- 20% spike (≥ 2× 8% threshold) → bypassDedupe=true → effectiveWindow=Duration.ZERO →
+  createdAt = T0 exactly → alert is within evaluator's [T1−25h, T1−15min] window.
+
+**DECISION 3 — Maven Failsafe separates unit and integration tests**
+- `maven-failsafe-plugin` added to `pom.xml`.
+  - `mvn test` → Surefire → `*Test.java` (121 unit tests)
+  - `mvn verify` → Surefire + Failsafe → `*Test.java` + `*IT.java` (121 + 5 = 126 total)
+
+**DECISION 4 — Migrated existing integration tests to *IT.java**
+- `ConsensusDetectorIT.java` — migrated from ConsensusDetectorIntegrationTest.java.
+  Now extends AbstractIntegrationIT; no @EnabledIfSystemProperty gate; adds
+  @MockBean({PriceMovementDetector, StatisticalAnomalyDetector}) for its context.
+- `NewsCorrelationDetectorIT.java` — migrated from NewsCorrelationDetectorIntegrationTest.java.
+  Same pattern. Shares Spring ApplicationContext with ConsensusDetectorIT (same @MockBean set).
+- Old `*IntegrationTest.java` files in `com.polysign.detector` deleted.
+
+**DECISION 5 — CI via GitHub Actions**
+- `.github/workflows/ci.yml` — triggers on push and PR to main; Java 25 Temurin;
+  Maven cache; runs `mvn -B verify` (unit + integration tests in one step).
+  Testcontainers auto-detects Docker on `ubuntu-latest`.
+
+**Visibility changes (required for cross-package test access)**
+- `PriceMovementDetector.detect()` — `void` → `public void`
+- `AlertOutcomeEvaluator.evaluate()` — `void` → `public void`
+- `NewsCorrelationDetector.clearCache()` — `synchronized void` → `public synchronized void`
+
+### Files touched
+**New**
+- `src/test/java/com/polysign/integration/AbstractIntegrationIT.java`
+- `src/test/java/com/polysign/integration/ConsensusDetectorIT.java`
+- `src/test/java/com/polysign/integration/NewsCorrelationDetectorIT.java`
+- `src/test/java/com/polysign/integration/GoldenPathIT.java`
+- `.github/workflows/ci.yml`
+
+**Modified**
+- `pom.xml` — maven-failsafe-plugin added
+- `src/main/java/com/polysign/detector/PriceMovementDetector.java` — detect() public
+- `src/main/java/com/polysign/backtest/AlertOutcomeEvaluator.java` — evaluate() public
+- `src/main/java/com/polysign/detector/NewsCorrelationDetector.java` — clearCache() public
+
+**Deleted**
+- `src/test/java/com/polysign/detector/ConsensusDetectorIntegrationTest.java`
+- `src/test/java/com/polysign/detector/NewsCorrelationDetectorIntegrationTest.java`
+
+### Verification
+- `mvn test` → **121 unit tests, 0 failures, 0 skipped**
+- `mvn verify` → **121 unit tests + 5 integration tests = 126 total, 0 failures**
+  - ConsensusDetectorIT: 2 tests (consensus fires, idempotency)
+  - NewsCorrelationDetectorIT: 2 tests (high-volume fires, low-volume skips)
+  - GoldenPathIT: 1 test (13-step full pipeline)
+- LocalStack container starts once and is shared across all 3 IT classes (singleton pattern)
+
+### Deviations from spec
+1. **`detect()` and `evaluate()` made public** (were package-private). The `com.polysign.integration`
+   package requires public access. This is the only way to call these methods directly from a
+   different package without subclassing. The methods were always intended for test invocation
+   (Javadoc said "package-private for direct invocation in tests").
+2. **StatisticalAnomalyDetector is @MockBean in GoldenPathIT** (in addition to the base-class
+   mocks). This prevents it from scanning the markets table and potentially firing a spurious
+   statistical_anomaly alert on the spike data, which would break the "exactly 1 alert" assertion.
+3. **SQS depth check via getQueueAttributes** (not receiveMessage). LocalStack returns exact
+   counts via APPROXIMATE_NUMBER_OF_MESSAGES. The @BeforeEach/@AfterEach cleanup purges the
+   queue so no stale messages from other test classes affect the assertion.
+
+### Notes for next phase
+- Phase 11: README, DESIGN.md, final documentation.
+- CI workflow is live — `.github/workflows/ci.yml` will run on first push to GitHub.
+- The golden-path test is the mutation proof: commenting out `alertService.tryCreate(...)` in
+  PriceMovementDetector causes assertions at steps 5, 6, 8, and 9 to all fail red.
+- Spring Test context caching: ConsensusDetectorIT and NewsCorrelationDetectorIT share one
+  ApplicationContext (same @MockBean set); GoldenPathIT gets its own (different @MockBean set).
+  3 IT classes → 2 Spring context startups (one shared, one for GoldenPathIT).

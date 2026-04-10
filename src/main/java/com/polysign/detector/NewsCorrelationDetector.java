@@ -174,10 +174,10 @@ public class NewsCorrelationDetector {
     }
 
     /**
-     * Clears the market cache. Package-private — called by integration tests to
-     * force a full reload after seeding test data into DynamoDB.
+     * Clears the market cache. Public for integration test access across packages —
+     * forces a full reload after seeding test data into DynamoDB.
      */
-    synchronized void clearCache() {
+    public synchronized void clearCache() {
         cachedMarkets  = null;
         cacheExpiresAt = null;
     }

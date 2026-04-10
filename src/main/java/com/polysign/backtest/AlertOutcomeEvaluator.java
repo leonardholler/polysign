@@ -98,9 +98,9 @@ public class AlertOutcomeEvaluator {
     }
 
     /**
-     * Core evaluation loop — package-private for direct invocation in tests.
+     * Core evaluation loop — public for direct invocation in integration tests.
      */
-    void evaluate() {
+    public void evaluate() {
         Instant now      = clock.now();
         Instant earliest = now.minus(Duration.ofHours(25));
         Instant latest   = now.minus(Duration.ofMinutes(15));
