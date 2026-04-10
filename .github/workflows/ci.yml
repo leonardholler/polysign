@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build, unit tests, and integration tests
+        # mvn verify runs: compile → test (Surefire, *Test.java) → integration-test (Failsafe, *IT.java) → verify
+        # Testcontainers auto-detects Docker on ubuntu-latest (no extra setup required).
+        run: mvn -B verify
