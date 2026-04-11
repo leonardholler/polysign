@@ -210,6 +210,7 @@ public class WalletPoller {
         String latestQuestion     = null;
         String latestOutcome      = null;
         String latestSizeUsdc     = null;
+        String latestPrice        = null;
         BigDecimal BIG_THRESHOLD  = new BigDecimal("1000");
 
         for (Map<String, Object> raw : rawTrades) {
@@ -237,6 +238,7 @@ public class WalletPoller {
                                     latestQuestion  = str(raw, "title");
                                     latestOutcome   = str(raw, "outcome");
                                     latestSizeUsdc  = tradeUsdc.toPlainString();
+                                    latestPrice     = price != null ? price.toPlainString() : null;
                                 }
                             }
                         } catch (NumberFormatException ignored) { /* skip */ }
@@ -259,6 +261,7 @@ public class WalletPoller {
             wallet.setLastMarketQuestion(latestQuestion);
             wallet.setLastOutcome(latestOutcome);
             wallet.setLastSizeUsdc(latestSizeUsdc);
+            wallet.setLastTradePrice(latestPrice);
         }
         if (wrote > 0) {
             int prev = wallet.getTradeCount() != null ? wallet.getTradeCount() : 0;

@@ -244,6 +244,11 @@ public class NewsCorrelationDetector {
         // Fallback: sentiment API unavailable/cached/rate-limited — use keyword-score gate
         log.debug("event=news_keyword_fallback marketId={} keywordScore={}", market.getMarketId(), keywordScore);
         if (keywordScore < minScore) return null;
+        // Require ≥3 matched keywords for fallback to prevent single/double-word false positives.
+        if (matched.size() < 3) {
+            log.debug("event=news_keyword_count_skip_fallback marketId={} matched={}", market.getMarketId(), matched.size());
+            return null;
+        }
         return new Candidate(market, keywordScore, matched,
                 null, null, null, null, "keyword_fallback");
     }

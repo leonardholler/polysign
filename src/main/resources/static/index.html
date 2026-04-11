@@ -34,7 +34,10 @@
 <!-- ── Fixed header ─────────────────────────────────────────────────────── -->
 <header class="fixed top-0 left-0 right-0 z-30 h-10 flex items-center px-4 gap-3 border-b border-gray-800"
         style="background:#030712;">
-  <span class="font-bold text-white text-base tracking-tight mr-2">PolySign</span>
+  <div class="flex flex-col leading-none gap-0 mr-2">
+    <span class="font-bold text-white text-xl tracking-tight">PolySign</span>
+    <span class="text-[10px] text-gray-600">prediction market intelligence</span>
+  </div>
   <span id="conn-status" class="flex items-center gap-1.5 text-xs">
     <span id="conn-dot" class="w-2 h-2 rounded-full bg-gray-600"></span>
     <span id="conn-label" class="text-gray-500">—</span>
@@ -78,6 +81,11 @@
   </div>
 </div>
 
+<!-- ── Signal Quality row ─────────────────────────────────────────────────── -->
+<div class="border-b border-gray-800 px-4 py-1.5">
+  <span class="text-xs text-gray-500">Signal Quality (7d, 1h) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · consensus —% · news —%</span></span>
+</div>
+
 <!-- ── Main two-column layout ─────────────────────────────────────────────── -->
 <div class="flex flex-col md:flex-row min-h-screen">
 
@@ -118,30 +126,6 @@
   </div>
 </div>
 
-<!-- ── Signal Quality (collapsible, bottom) ───────────────────────────────── -->
-<div class="border-t border-gray-800">
-  <button class="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-gray-900 transition-colors"
-          onclick="toggleSignalQuality()">
-    <span id="sq-chevron" class="text-gray-600 text-xs">▸</span>
-    <span class="text-xs text-gray-500">Signal Quality:</span>
-    <span id="sq-summary" class="text-xs text-gray-600">loading…</span>
-  </button>
-  <div id="sq-panel" class="hidden px-4 pb-4">
-    <table class="w-full text-xs border-collapse mt-2">
-      <thead>
-        <tr class="text-gray-500 border-b border-gray-800">
-          <th class="text-left py-1 pr-4">Detector</th>
-          <th class="text-center py-1 px-4">1h Precision</th>
-          <th class="text-center py-1 px-4">24h Precision</th>
-          <th class="text-center py-1 px-4">Count (7d)</th>
-        </tr>
-      </thead>
-      <tbody id="sq-body">
-        <tr><td colspan="4" class="text-gray-600 py-2">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
 
 </div><!-- /pt-10 -->
 
@@ -286,10 +270,13 @@ function renderAlertDetail(a) {
 }
 
 function renderAlertCard(a) {
-  const typeCol = typeColor(a.type);
-  const detail  = renderAlertDetail(a);
-  const link    = a.link ? `<a href="${a.link}" target="_blank" rel="noopener" class="text-blue-400 hover:underline text-[10px]">↗</a>` : '';
+  const typeCol  = typeColor(a.type);
+  const detail   = renderAlertDetail(a);
+  const link     = a.link ? `<a href="${a.link}" target="_blank" rel="noopener" class="text-blue-400 hover:underline text-[10px]">↗</a>` : '';
+  const question = a.marketQuestion
+    ? `<div class="text-gray-400 text-[10px] truncate mb-0.5">${truncate(a.marketQuestion, 50)}</div>` : '';
   return `<div class="rounded bg-gray-900/80 border border-gray-800 px-3 py-2">
+    ${question}
     <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <span class="text-[10px] font-bold ${typeCol}">${typeLabel(a.type)}</span>
       <span class="text-gray-300 text-xs">${detail}</span>
@@ -327,7 +314,7 @@ async function loadAlerts() {
     alerts = alerts.filter(a => (a.score ?? 1) >= 0.4);
 
     if (alerts.length === 0) {
-      const empty = '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-2">◎</div>No alerts in the last 60 minutes</div>';
+      const empty = '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-2">◎</div>No alerts yet — price alerts need ~15 min of history after startup</div>';
       if (lastAlertHtml !== empty) {
         document.getElementById('alert-feed').innerHTML = empty;
         lastAlertHtml = empty;
@@ -458,17 +445,19 @@ function renderWallets(wallets) {
     const isBuy     = dir === 'BUY';
     const borderCol = isBuy ? 'border-l-emerald-600' : 'border-l-red-700';
     const dirCol    = isBuy ? 'text-emerald-400'     : 'text-red-400';
-    const sizeStr   = w.lastSizeUsdc ? ' — ' + fmtUsd(parseFloat(w.lastSizeUsdc)) : '';
+    const sizeStr  = w.lastSizeUsdc ? ' — ' + fmtUsd(parseFloat(w.lastSizeUsdc)) : '';
+    const priceStr = w.lastTradePrice
+      ? ` <span class="text-gray-500">@ ${(parseFloat(w.lastTradePrice)*100).toFixed(1)}¢</span>` : '';
     let tradeInfo;
     if (!dir) {
       tradeInfo = '—';
     } else if (outcome && outcome !== 'YES' && outcome !== 'NO') {
       // Named outcome (e.g. "ARIZONA DIAMONDBACKS") — outcome IS the useful info, skip question
-      tradeInfo = `${dir} ${outcome}${sizeStr}`;
+      tradeInfo = `${dir} ${outcome}${sizeStr}${priceStr}`;
     } else {
       // YES/NO binary market — show market question for context
       const q = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
-      tradeInfo = `${dir}${outcome ? ' ' + outcome : ''} on "${q}"${sizeStr}`;
+      tradeInfo = `${dir}${outcome ? ' ' + outcome : ''} on "${q}"${sizeStr}${priceStr}`;
     }
     return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
       <div class="flex items-center justify-between gap-2">
@@ -572,58 +561,6 @@ async function loadStats() {
 
 // ── Signal Quality ────────────────────────────────────────────────────────────
 
-const DETECTOR_LABELS = {
-  price_movement:      'price_movement',
-  statistical_anomaly: 'statistical_anomaly',
-  consensus:           'consensus',
-  news_correlation:    'news_correlation',
-};
-
-let sqLoaded = false;
-
-function toggleSignalQuality() {
-  const panel = document.getElementById('sq-panel');
-  const chev  = document.getElementById('sq-chevron');
-  const hidden = panel.classList.toggle('hidden');
-  chev.textContent = hidden ? '▸' : '▾';
-  if (!sqLoaded) { loadSignalQuality(); sqLoaded = true; }
-}
-
-async function loadSignalQuality() {
-  try {
-    const [r1h, r24h] = await Promise.all([
-      fetch('/api/signals/performance?horizon=t1h'),
-      fetch('/api/signals/performance?horizon=t24h'),
-    ]);
-    const d1h  = r1h.ok  ? await r1h.json()  : null;
-    const d24h = r24h.ok ? await r24h.json() : null;
-    const idx1h = {}, idx24h = {};
-    (d1h?.detectors  || []).forEach(d => { idx1h[d.type]  = d; });
-    (d24h?.detectors || []).forEach(d => { idx24h[d.type] = d; });
-
-    const parts = [];
-    const rows = Object.keys(DETECTOR_LABELS).map(type => {
-      const p1  = idx1h[type]?.precision  ?? null;
-      const p24 = idx24h[type]?.precision ?? null;
-      const cnt = idx1h[type]?.count ?? idx24h[type]?.count ?? null;
-      parts.push(`${type.replace('_','')} ${fmtPct(p1)}`);
-      return `<tr class="border-b border-gray-800/50">
-        <td class="py-1 pr-4 text-gray-400">${DETECTOR_LABELS[type]}</td>
-        <td class="text-center py-1 px-4 font-semibold ${precisionColor(p1)}">${fmtPct(p1)}</td>
-        <td class="text-center py-1 px-4 font-semibold ${precisionColor(p24)}">${fmtPct(p24)}</td>
-        <td class="text-center py-1 px-4 text-gray-500">${cnt != null ? cnt : '—'}</td>
-      </tr>`;
-    });
-
-    document.getElementById('sq-body').innerHTML = rows.join('');
-    document.getElementById('sq-summary').textContent =
-      `price ${fmtPct(idx1h.price_movement?.precision)} · anomaly ${fmtPct(idx1h.statistical_anomaly?.precision)} · consensus ${fmtPct(idx1h.consensus?.precision)} · news ${fmtPct(idx1h.news_correlation?.precision)}`;
-  } catch (_) {
-    document.getElementById('sq-summary').textContent = '(unavailable)';
-  }
-}
-
-// Load summary inline on page load (for the collapsed header line)
 (async function loadSqSummary() {
   try {
     const r = await fetch('/api/signals/performance?horizon=t1h');

@@ -22,6 +22,7 @@ public class WatchedWallet {
     private String lastMarketQuestion;   // question of the market they last traded
     private String lastOutcome;          // "YES" or "NO" — outcome of the most recent trade
     private String lastSizeUsdc;         // dollar amount of the most recent trade (e.g. "2450.00")
+    private String lastTradePrice;       // raw price (0-1) of the most recent $1000+ trade
 
     @DynamoDbPartitionKey
     public String getAddress() { return address; }
@@ -36,6 +37,7 @@ public class WatchedWallet {
     public String  getLastMarketQuestion()   { return lastMarketQuestion;   }
     public String  getLastOutcome()          { return lastOutcome;          }
     public String  getLastSizeUsdc()         { return lastSizeUsdc;         }
+    public String  getLastTradePrice()       { return lastTradePrice;       }
 
     public void setAddress(String address)                       { this.address             = address;             }
     public void setAlias(String alias)                           { this.alias               = alias;               }
@@ -48,4 +50,5 @@ public class WatchedWallet {
     public void setLastMarketQuestion(String lastMarketQuestion) { this.lastMarketQuestion  = lastMarketQuestion;  }
     public void setLastOutcome(String lastOutcome)               { this.lastOutcome         = lastOutcome;         }
     public void setLastSizeUsdc(String lastSizeUsdc)             { this.lastSizeUsdc        = lastSizeUsdc;        }
+    public void setLastTradePrice(String lastTradePrice)         { this.lastTradePrice      = lastTradePrice;      }
 }
