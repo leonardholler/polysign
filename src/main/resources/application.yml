@@ -122,6 +122,7 @@ polysign:
     wallet:
       interval-ms: 60000
       initial-delay-ms: 90000
+      lookback-hours: 48
     rss:
       interval-ms: 300000       # every 5 minutes
       initial-delay-ms: 15000   # 15s after startup (markets table may still be populating)

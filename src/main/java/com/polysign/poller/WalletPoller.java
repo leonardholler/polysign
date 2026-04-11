@@ -31,7 +31,6 @@ import software.amazon.awssdk.enhanced.dynamodb.model.Page;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
 import java.util.List;
@@ -64,8 +63,8 @@ public class WalletPoller {
     private static final Logger log = LoggerFactory.getLogger(WalletPoller.class);
     private static final String CB_NAME   = "polymarket-data";
     private static final int    PAGE_SIZE = 100;
-    /** Default look-back for first sync — wallets with null lastSyncedAt. */
-    private static final Duration FIRST_SYNC_LOOKBACK = Duration.ofHours(24);
+    /** How far back to fetch trades on first sync and how far back to keep trades from returning wallets. */
+    private final int lookbackHours;
 
     /** Consecutive zero-trade cycles before PIPELINE STALL error. */
     private static final int STALL_THRESHOLD = 3;
@@ -99,8 +98,10 @@ public class WalletPoller {
             ObjectMapper mapper,
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            @Value("${polysign.pollers.wallet.lookback-hours:48}") int lookbackHours) {
 
+        this.lookbackHours       = lookbackHours;
         this.dataApiClient       = dataApiClient;
         this.marketsTable        = marketsTable;
         this.watchedWalletsTable = watchedWalletsTable;
@@ -191,10 +192,24 @@ public class WalletPoller {
         if (wallet.getLastSyncedAt() != null) {
             startEpoch = Instant.parse(wallet.getLastSyncedAt()).getEpochSecond();
         } else {
-            startEpoch = pollTime.minus(FIRST_SYNC_LOOKBACK).getEpochSecond();
+            startEpoch = pollTime.minusSeconds((long) lookbackHours * 3600).getEpochSecond();
         }
 
         List<Map<String, Object>> rawTrades = fetchTrades(address, startEpoch);
+
+        // Drop trades older than lookbackHours silently — they reference resolved markets
+        // that are no longer in the top-400 table and would produce spurious WARNs.
+        // Trades within the window that still miss a market lookup keep their WARN.
+        long cutoffEpoch = pollTime.minusSeconds((long) lookbackHours * 3600).getEpochSecond();
+        rawTrades = rawTrades.stream()
+                .filter(t -> {
+                    Object ts = t.get("timestamp");
+                    if (ts == null) return true;
+                    try { return Long.parseLong(ts.toString()) >= cutoffEpoch; }
+                    catch (NumberFormatException ignored) { return true; }
+                })
+                .toList();
+
         if (rawTrades.isEmpty()) {
             // Still update lastSyncedAt so next cycle doesn't re-fetch from FIRST_SYNC_LOOKBACK
             updateLastSyncedAt(wallet, pollTime);
