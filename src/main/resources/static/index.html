@@ -430,7 +430,8 @@ function renderWallets(wallets) {
     .filter(w => w.address && !w.address.startsWith('0x0000')
               && w.address !== '_comment'
               && !(w.alias || '').startsWith('PLACEHOLDER')
-              && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h)
+              && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h
+              && !(w.lastSizeUsdc == null && w.recentDirection == null))
     .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
 
   document.getElementById('st-wallets-active').textContent = filtered.length + ' active in 24h';
