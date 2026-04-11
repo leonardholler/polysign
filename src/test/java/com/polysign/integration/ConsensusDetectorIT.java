@@ -8,6 +8,7 @@ import com.polysign.model.Alert;
 import com.polysign.model.WalletTrade;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.test.context.TestPropertySource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -33,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * generating spurious alerts for the test market.
  */
 @MockBean({PriceMovementDetector.class, StatisticalAnomalyDetector.class})
+@TestPropertySource(properties = "polysign.detectors.wallet.consensus-min-quality-sum=0.0")
 class ConsensusDetectorIT extends AbstractIntegrationIT {
 
     static final String TEST_MARKET_ID = "test-market-consensus-it";
