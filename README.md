@@ -2,7 +2,7 @@
 
 <!-- ![CI](https://github.com/leonardholler/polysign/actions/workflows/ci.yml/badge.svg) -->
 
-> **Live demo**: *URL added after AWS deployment*
+> **Live demo**: https://polysign.dev
 
 PolySign is a real-time event-processing and anomaly-detection system for Polymarket prediction markets. It polls 400+ active markets every 60 seconds, runs four independent detectors (price threshold, statistical anomaly, whale wallet consensus, news correlation), and pushes alerts to my phone when high-signal events occur. Then it scores every alert against forward price movement — at T+15 minutes, T+1 hour, and T+24 hours — to measure whether its own signals actually work.
 
@@ -218,7 +218,7 @@ The `/api/alerts/by-signal-strength` endpoint sorts by this overlap count. The b
 | Frontend | Vanilla HTML + JS + Chart.js + Tailwind CDN. No build step. One file. |
 | Testing | JUnit 5 + Mockito + AssertJ, Testcontainers with LocalStack 3.8 |
 | CI | GitHub Actions — Java 25 Temurin, `mvn -B verify` |
-| Local dev | Docker Compose — LocalStack 3.8 + Spring Boot JAR |
+| Local dev | Docker Compose override (docker-compose.local.yml) — LocalStack 3.8 for offline dev |
 
 **126 tests** (121 unit + 5 integration), all green. Unit/integration split via Maven Surefire + Failsafe (`mvn test` vs `mvn verify`).
 
@@ -287,9 +287,15 @@ cd polysign
 docker compose up --build
 ```
 
-Wait about 90 seconds for LocalStack to bootstrap all tables/queues and for the first market poll to complete. Then open [http://localhost:8080](http://localhost:8080).
+Default `docker compose up --build` runs the `aws` Spring profile and talks to real AWS services. It requires valid AWS credentials in your environment (or a `.env` file with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
 
-The first cycle takes a few minutes: `MarketPoller` paginates Polymarket's 50,000+ markets, applies quality filters (volume floors, end-of-life, 24h activity), and keeps the top 400 by 24h volume. `PricePoller` then fetches prices at 10 calls/sec through the CLOB API. After that, everything runs every 60 seconds.
+For offline dev without an AWS account, layer the local override instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+```
+
+Wait about 90 seconds for LocalStack to bootstrap all tables/queues, then open [http://localhost:8080](http://localhost:8080). The first cycle takes a few minutes: `MarketPoller` paginates Polymarket's 50,000+ markets, applies quality filters (volume floors, end-of-life, 24h activity), and keeps the top 400 by 24h volume. `PricePoller` then fetches prices at 10 calls/sec through the CLOB API. After that, everything runs every 60 seconds.
 
 ### Phone notifications
 
@@ -352,9 +358,6 @@ polysign:
 - EC2 t3.small: ~$15/month
 - Claude API (Sonnet, 5 calls/min cap): ~$5-10/month
 - Total: ~$20-25/month
-
-### Architecture note
-This runs LocalStack for DynamoDB/SQS/S3 locally on the EC2 instance. For a production deployment, replace LocalStack with real AWS services using the `aws` Spring profile. See DESIGN.md for the full architecture.
 
 ---
 
