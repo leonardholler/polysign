@@ -144,6 +144,7 @@ public class WalletDiscovery implements ApplicationRunner {
                     wallet.setAlias(alias);
                     wallet.setCategory(cat.name().toLowerCase());
                     wallet.setNotes("Auto-discovered from Polymarket leaderboard");
+                    wallet.setQualityScore(initialQualityScore(entry));
                     deduped.put(address, wallet);
                 }
                 log.debug("wallet_discovery_category category={} fetched={}", cat.name(), entries.size());
@@ -197,6 +198,7 @@ public class WalletDiscovery implements ApplicationRunner {
                 wallet.setAlias((String) seed.get("alias"));
                 wallet.setCategory((String) seed.get("category"));
                 wallet.setNotes((String) seed.get("notes"));
+                wallet.setQualityScore(3.0); // floor: log10(100) * 1.5 — no trade data in JSON
                 result.put(address, wallet);
             }
         } catch (Exception e) {
@@ -234,5 +236,29 @@ public class WalletDiscovery implements ApplicationRunner {
     private static String stringOrNull(Map<String, Object> map, String key) {
         Object v = map.get(key);
         return v == null ? null : v.toString();
+    }
+
+    /**
+     * Estimates an initial quality score from a leaderboard API entry.
+     * Mirrors the WalletPoller formula: log10(max(avgTradeSize, 100)) * 1.5,
+     * using a floor of 100 so newly discovered wallets start at 3.0 minimum
+     * rather than contributing zero to the consensus quality-sum gate.
+     *
+     * <p>Falls back to 3.0 if {@code volume} or {@code numTrades} fields are
+     * absent or unparseable — this is expected for some leaderboard responses.
+     */
+    private static double initialQualityScore(Map<String, Object> entry) {
+        try {
+            Object volObj    = entry.get("volume");
+            Object tradesObj = entry.get("numTrades");
+            if (volObj != null && tradesObj != null) {
+                double vol    = Double.parseDouble(volObj.toString());
+                double trades = Double.parseDouble(tradesObj.toString());
+                if (trades > 0 && vol > 0) {
+                    return Math.log10(Math.max(vol / trades, 100.0)) * 1.5;
+                }
+            }
+        } catch (Exception ignored) {}
+        return 3.0; // log10(100) * 1.5 — $100 avg trade floor
     }
 }

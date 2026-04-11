@@ -67,7 +67,7 @@ polysign:
       consensus-window-minutes: 30
       consensus-high-freq-trade-count: 100
       consensus-high-freq-min-usdc: 500
-      consensus-min-quality-sum: 12.0
+      consensus-min-quality-sum: 9.0    # 3 wallets × score 3.0 = $100 avg trade each; winRate fixed at 0.5
     news:
       min-score: 0.55
       min-volume-usdc: 100000
