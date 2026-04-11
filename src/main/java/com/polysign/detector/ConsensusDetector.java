@@ -48,6 +48,12 @@ public class ConsensusDetector {
     private final Duration consensusWindow;
     private final int consensusMinWallets;
 
+    @Value("${polysign.detectors.wallet.consensus-high-freq-trade-count:100}")
+    private int highFreqTradeCount;
+
+    @Value("${polysign.detectors.wallet.consensus-high-freq-min-usdc:500}")
+    private double highFreqMinUsdc;
+
     @Autowired
     public ConsensusDetector(
             DynamoDbTable<WalletTrade>   walletTradesTable,
@@ -69,13 +75,17 @@ public class ConsensusDetector {
                       AlertService alertService,
                       AppClock clock,
                       Duration consensusWindow,
-                      int consensusMinWallets) {
+                      int consensusMinWallets,
+                      int highFreqTradeCount,
+                      double highFreqMinUsdc) {
         this.walletTradesTable   = walletTradesTable;
         this.watchedWalletsTable = null; // not needed in unit tests — alias falls back to address prefix
         this.alertService        = alertService;
         this.clock               = clock;
         this.consensusWindow     = consensusWindow;
         this.consensusMinWallets = consensusMinWallets;
+        this.highFreqTradeCount  = highFreqTradeCount;
+        this.highFreqMinUsdc     = highFreqMinUsdc;
     }
 
     /**
@@ -100,13 +110,47 @@ public class ConsensusDetector {
                         && !Instant.parse(t.getTimestamp()).isBefore(windowStart))
                 .toList();
 
-        // Group distinct wallet addresses per direction.
+        // Cache wallet lookups for the duration of this consensus check cycle.
+        Map<String, WatchedWallet> walletCache = new HashMap<>();
+
+        // Group distinct wallet addresses per direction, filtering out high-frequency small bets.
         Map<String, Set<String>> directionToAddresses = new HashMap<>();
         for (WalletTrade t : inWindow) {
             if (t.getSide() == null || t.getAddress() == null) continue;
+            String addr      = t.getAddress().toLowerCase();
+            double tradeUsdc = t.getSizeUsdc() != null ? t.getSizeUsdc().doubleValue() : 0.0;
+
+            Integer tradeCount = null;
+            if (watchedWalletsTable != null) {
+                WatchedWallet w;
+                if (walletCache.containsKey(addr)) {
+                    w = walletCache.get(addr);
+                } else {
+                    try {
+                        w = watchedWalletsTable.getItem(Key.builder().partitionValue(addr).build());
+                    } catch (Exception e) {
+                        log.debug("wallet_lookup_failed address={}", addr);
+                        w = null;
+                    }
+                    walletCache.put(addr, w);
+                }
+                if (w != null) {
+                    tradeCount = w.getTradeCount();
+                }
+                if (tradeCount != null && tradeCount > highFreqTradeCount && tradeUsdc < highFreqMinUsdc) {
+                    log.debug("consensus_skip_high_freq address={} tradeCount={} tradeUsdc={}",
+                            addr, tradeCount, tradeUsdc);
+                    continue;
+                }
+            }
+
+            boolean highFreq = tradeCount != null && tradeCount > highFreqTradeCount;
+            log.debug("consensus_include address={} tradeCount={} tradeUsdc={} highFreq={}",
+                    addr, tradeCount, tradeUsdc, highFreq);
+
             directionToAddresses
                     .computeIfAbsent(t.getSide(), k -> new HashSet<>())
-                    .add(t.getAddress().toLowerCase());
+                    .add(addr);
         }
 
         // Fire on the first direction that meets the threshold.

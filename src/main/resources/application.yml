@@ -65,6 +65,8 @@ polysign:
       min-trade-usdc: 1000
       consensus-min-wallets: 3
       consensus-window-minutes: 30
+      consensus-high-freq-trade-count: 100
+      consensus-high-freq-min-usdc: 500
     news:
       min-score: 0.75
       min-volume-usdc: 100000

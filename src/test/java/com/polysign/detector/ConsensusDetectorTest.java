@@ -191,7 +191,7 @@ class ConsensusDetectorTest {
         TestableConsensusDetector(AlertService alertService, AppClock clock,
                                    List<WalletTrade> stubbedTrades,
                                    Duration consensusWindow, int consensusMinWallets) {
-            super(null, alertService, clock, consensusWindow, consensusMinWallets);
+            super(null, alertService, clock, consensusWindow, consensusMinWallets, 100, 500.0);
             this.stubbedTrades = stubbedTrades;
         }
 
