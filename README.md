@@ -387,3 +387,4 @@ I want to be honest about where this falls short.
 - **Kalshi integration**: A second prediction market source. Cross-platform price divergence is a signal type PolySign doesn't capture yet.
 - **Orderbook depth time series**: Currently captured only at alert-fire time. Continuous tracking would enable "ignore this alert, the book is too thin to act on" filtering.
 - **Lambda + EventBridge rewrite**: See [Architectural Evolution — Roadmap](#roadmap). Each detector is a natural Lambda candidate.
+
