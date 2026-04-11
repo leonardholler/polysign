@@ -130,23 +130,31 @@ Target: 10–30 phone notifications per day.
 
 ---
 
-## What I Would Do Differently on Real AWS
+## Architectural Evolution
 
-I built PolySign as a monolith: one Spring Boot JAR, one `docker-compose up`. That's the right call for a portfolio project. But at Amazon scale, I'd change the following.
+### Shipped
 
-**Lambda + EventBridge instead of @Scheduled.** Each detector is a stateless 60-second job. I'd split them into four Lambdas (`polysign-price-detector`, `polysign-stat-detector`, `polysign-wallet-detector`, `polysign-news-detector`), each triggered by an EventBridge `rate(1 minute)` rule. Per-detector scaling, per-detector error isolation, per-detector cost visibility. Cold starts don't matter at 60-second cadence.
+PolySign runs on a single EC2 t3.small in us-east-2, fronted by Caddy for HTTPS via Let's Encrypt at polysign.dev. All eight DynamoDB tables use on-demand capacity with TTL and GSIs covering every access pattern. The three SQS queues each have a DLQ with a five-receive redrive policy; DLQ depth is a Micrometer gauge so a clogged queue shows up in metrics before it shows up in silence. S3 stores daily price-snapshot rollups with versioning enabled. The EC2 instance carries an IAM instance role — no static keys anywhere, credentials resolve through IMDS. Two idempotent scripts (`bootstrap-aws.sh` / `verify-aws.sh`) create all infrastructure and run a 16/16 smoke-test suite; re-running them on an already-provisioned account is safe.
 
-**EventBridge Pipes from DynamoDB Streams.** Instead of polling `wallet_trades` every 60 seconds, enable DynamoDB Streams and pipe change events to a `polysign-consensus-evaluator` Lambda. Real-time consensus detection without polling overhead.
+News sentiment analysis uses Haiku 4.5 instead of Sonnet — sufficient for short directional relevance checks, ~12× cheaper per call. A DynamoDB-backed dedup cache (keyed by article × market pair) prevents redundant API calls across process restarts. Resilience4j circuit breakers cover all six outbound call paths; retry policies use exponential backoff with jitter. Micrometer exports 14 metrics to `/actuator/prometheus`. Every log line is structured JSON with a `correlationId` field that traces a single event end-to-end.
 
-**Step Functions for outcome evaluation.** The current `AlertOutcomeEvaluator` polls every 5 minutes looking for alerts with due horizons. A Step Functions workflow is cleaner: on alert fire, start a state machine that uses `Wait` states at T+15min, T+1h, T+24h, evaluating at each. No polling. The `Wait` state is free.
+### Roadmap
 
-**Kinesis instead of SQS for wallet trades.** SQS doesn't guarantee ordering. For wallet trade processing, I want ordered-by-wallet delivery so consensus evaluation doesn't race. Kinesis Data Streams with wallet address as the partition key handles this.
+The monolith is intentional for v1: one JAR, one deployment, one place to look when something breaks. These are the changes that make sense once real traffic and scale justify the operational complexity.
+
+**Lambda + EventBridge instead of `@Scheduled`.** Each detector is a stateless 60-second job. Four Lambdas triggered by `rate(1 minute)` EventBridge rules give per-detector scaling, error isolation, and cost visibility. Cold starts don't matter at 60-second cadence.
+
+**EventBridge Pipes from DynamoDB Streams.** Instead of polling `wallet_trades` every 60 seconds, enable DynamoDB Streams and pipe change events to a consensus-evaluator Lambda. Real-time consensus detection without polling overhead.
+
+**Step Functions for outcome evaluation.** The current `AlertOutcomeEvaluator` polls every 5 minutes for alerts with due horizons. A Step Functions workflow is cleaner: on alert fire, start a state machine with `Wait` states at T+15min, T+1h, T+24h, evaluating at each. No polling — the `Wait` state is free.
+
+**Kinesis instead of SQS for wallet trades.** SQS doesn't guarantee ordering. Kinesis Data Streams with wallet address as the partition key delivers per-wallet ordered events so consensus evaluation doesn't race.
 
 **X-Ray with adaptive sampling.** 5% on the normal poll path (high volume, low value), 100% on any path that creates an alert (low volume, high value). Subsegments on every DynamoDB call, SQS send, and external API fetch.
 
 **DynamoDB auto-scaling on price_snapshots.** It's the hottest table — 400 writes per 60-second cycle. Target tracking at 70% utilization, min 5 WCU, max 1000 WCU. Other tables stay on-demand.
 
-**Alarm thresholds tuned by signal quality.** If `polysign.signals.precision` for any detector drops below 50% for 6 consecutive hours, that's either a Polymarket API change or a market regime shift. Alarm fires, I investigate. The signal quality pipeline becomes an operational input, not just a dashboard widget.
+**Alarm thresholds tuned by signal quality.** If `polysign.signals.precision` for any detector drops below 50% for 6 consecutive hours, that's either a Polymarket API change or a market regime shift. The signal quality pipeline becomes an operational input, not just a dashboard widget.
 
 ---
 
@@ -375,4 +383,4 @@ I want to be honest about where this falls short.
 - **Embedding-based news matching**: Replace keyword overlap with sentence embeddings (`all-MiniLM-L6-v2` or similar) for semantic matching. Catches "Trump won't win" vs "Will Trump win?" correctly.
 - **Kalshi integration**: A second prediction market source. Cross-platform price divergence is a signal type PolySign doesn't capture yet.
 - **Orderbook depth time series**: Currently captured only at alert-fire time. Continuous tracking would enable "ignore this alert, the book is too thin to act on" filtering.
-- **Lambda + EventBridge rewrite**: See [What I Would Do Differently](#what-i-would-do-differently-on-real-aws). Each detector is a natural Lambda candidate.
+- **Lambda + EventBridge rewrite**: See [Architectural Evolution — Roadmap](#roadmap). Each detector is a natural Lambda candidate.
