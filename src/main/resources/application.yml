@@ -67,6 +67,7 @@ polysign:
       consensus-window-minutes: 30
       consensus-high-freq-trade-count: 100
       consensus-high-freq-min-usdc: 500
+      consensus-min-quality-sum: 12.0
     news:
       min-score: 0.85
       min-volume-usdc: 100000

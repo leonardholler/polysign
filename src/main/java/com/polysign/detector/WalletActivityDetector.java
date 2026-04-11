@@ -87,6 +87,8 @@ public class WalletActivityDetector {
         metadata.put("sizeUsdc",   String.format("%.2f", sizeUsdc));
         metadata.put("price",      trade.getPrice() != null
                                    ? trade.getPrice().toPlainString() : "?");
+        metadata.put("entryPrice", trade.getPrice() != null
+                                   ? trade.getPrice().toPlainString() : null);
         metadata.put("txHash",     trade.getTxHash());
         metadata.put("detectedAt", now.toString());
 

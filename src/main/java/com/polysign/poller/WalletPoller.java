@@ -203,45 +203,56 @@ public class WalletPoller {
 
         int wrote = 0;
         // latestTimestamp: most recent trade of any size → drives lastTradeAt
-        // latestBigTimestamp: most recent $1000+ trade → drives the four display fields
-        String latestTimestamp    = null;
-        String latestBigTimestamp = null;
-        String latestDirection    = null;
-        String latestQuestion     = null;
-        String latestOutcome      = null;
-        String latestSizeUsdc     = null;
-        String latestPrice        = null;
-        BigDecimal BIG_THRESHOLD  = new BigDecimal("1000");
+        // latestBigTimestamp: most recent $1000+ trade → drives the five display fields
+        String latestTimestamp      = null;
+        String latestBigTimestamp   = null;
+        String latestDirection      = null;
+        String latestQuestion       = null;
+        String latestOutcome        = null;
+        String latestSizeUsdc       = null;
+        String latestPrice          = null;
+        String latestBigConditionId = null; // Fix 5: track conditionId of last big trade for market link
+        BigDecimal BIG_THRESHOLD    = new BigDecimal("1000");
+        double cycleVolumeUsdc      = 0.0;  // Fix 8: accumulate all trade volume this cycle
 
         for (Map<String, Object> raw : rawTrades) {
             try {
                 if (writeTrade(raw, wallet)) {
                     wrote++;
-                    Object tsObj = raw.get("timestamp");
-                    if (tsObj != null) {
+                    // Fix 4: prefer createdAt (ISO string from API) over timestamp (epoch seconds)
+                    Object createdAtObj = raw.get("createdAt");
+                    Object tsObj        = raw.get("timestamp");
+                    String isoTs = null;
+                    if (createdAtObj != null && !createdAtObj.toString().isBlank()) {
+                        isoTs = createdAtObj.toString();
+                    } else if (tsObj != null) {
                         try {
-                            String isoTs = Instant.ofEpochSecond(Long.parseLong(tsObj.toString())).toString();
-                            BigDecimal size  = decimal(raw, "size");
-                            BigDecimal price = decimal(raw, "price");
-                            BigDecimal tradeUsdc = (size != null && price != null)
-                                    ? size.multiply(price).setScale(2, java.math.RoundingMode.HALF_UP)
-                                    : BigDecimal.ZERO;
-                            // Always track the most recent trade timestamp (all sizes).
-                            if (latestTimestamp == null || isoTs.compareTo(latestTimestamp) > 0) {
-                                latestTimestamp = isoTs;
-                            }
-                            // Only update display fields if this trade is >= $1000.
-                            if (tradeUsdc.compareTo(BIG_THRESHOLD) >= 0) {
-                                if (latestBigTimestamp == null || isoTs.compareTo(latestBigTimestamp) > 0) {
-                                    latestBigTimestamp = isoTs;
-                                    latestDirection = str(raw, "side");
-                                    latestQuestion  = str(raw, "title");
-                                    latestOutcome   = str(raw, "outcome");
-                                    latestSizeUsdc  = tradeUsdc.toPlainString();
-                                    latestPrice     = price != null ? price.toPlainString() : null;
-                                }
-                            }
+                            isoTs = Instant.ofEpochSecond(Long.parseLong(tsObj.toString())).toString();
                         } catch (NumberFormatException ignored) { /* skip */ }
+                    }
+                    if (isoTs != null) {
+                        BigDecimal size  = decimal(raw, "size");
+                        BigDecimal price = decimal(raw, "price");
+                        BigDecimal tradeUsdc = (size != null && price != null)
+                                ? size.multiply(price).setScale(2, java.math.RoundingMode.HALF_UP)
+                                : BigDecimal.ZERO;
+                        cycleVolumeUsdc += tradeUsdc.doubleValue(); // Fix 8
+                        // Always track the most recent trade timestamp (all sizes).
+                        if (latestTimestamp == null || isoTs.compareTo(latestTimestamp) > 0) {
+                            latestTimestamp = isoTs;
+                        }
+                        // Only update display fields if this trade is >= $1000.
+                        if (tradeUsdc.compareTo(BIG_THRESHOLD) >= 0) {
+                            if (latestBigTimestamp == null || isoTs.compareTo(latestBigTimestamp) > 0) {
+                                latestBigTimestamp   = isoTs;
+                                latestDirection      = str(raw, "side");
+                                latestQuestion       = str(raw, "title");
+                                latestOutcome        = str(raw, "outcome");
+                                latestSizeUsdc       = tradeUsdc.toPlainString();
+                                latestPrice          = price != null ? price.toPlainString() : null;
+                                latestBigConditionId = str(raw, "conditionId"); // Fix 5
+                            }
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -252,9 +263,9 @@ public class WalletPoller {
 
         // Update wallet summary fields for the Smart Money Tracker dashboard.
         if (latestTimestamp != null) {
-            wallet.setLastTradeAt(latestTimestamp);
+            wallet.setLastTradeAt(latestTimestamp); // Fix 4: actual trade timestamp, not pollTime
         }
-        // The four display fields only update when a $1000+ trade was seen in this batch.
+        // The display fields only update when a $1000+ trade was seen in this batch.
         // If no such trade, previous values are preserved (kept from last qualifying trade).
         if (latestBigTimestamp != null) {
             wallet.setRecentDirection(latestDirection);
@@ -262,10 +273,36 @@ public class WalletPoller {
             wallet.setLastOutcome(latestOutcome);
             wallet.setLastSizeUsdc(latestSizeUsdc);
             wallet.setLastTradePrice(latestPrice);
+            // Fix 5: resolve market link from conditionId cache populated by writeTrade
+            if (latestBigConditionId != null) {
+                String mktId = conditionToMarketId.get(latestBigConditionId);
+                if (mktId != null) {
+                    try {
+                        Market mkt = marketsTable.getItem(Key.builder().partitionValue(mktId).build());
+                        String evSlug = mkt != null ? mkt.getEventSlug() : null;
+                        wallet.setLastMarketLink(evSlug != null
+                                ? "https://polymarket.com/event/" + evSlug : null);
+                    } catch (Exception e) {
+                        log.debug("wallet_market_link_lookup_failed conditionId={} error={}",
+                                latestBigConditionId, e.getMessage());
+                    }
+                }
+            }
         }
         if (wrote > 0) {
             int prev = wallet.getTradeCount() != null ? wallet.getTradeCount() : 0;
             wallet.setTradeCount(prev + wrote);
+            // Fix 8: update total volume and recompute quality score
+            double prevTotal = wallet.getTotalVolumeUsdc() != null ? wallet.getTotalVolumeUsdc() : 0.0;
+            double newTotal  = prevTotal + cycleVolumeUsdc;
+            wallet.setTotalVolumeUsdc(newTotal);
+            int count = wallet.getTradeCount();
+            if (count > 0 && newTotal > 0) {
+                double avgSize     = newTotal / count;
+                double winRate     = 0.5; // default until backtest data accumulates
+                double score       = Math.log10(Math.max(avgSize, 1.0)) * (1.0 + winRate);
+                wallet.setQualityScore(score);
+            }
         }
 
         updateLastSyncedAt(wallet, pollTime);

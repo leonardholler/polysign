@@ -32,11 +32,10 @@
 <body class="text-gray-100 min-h-screen font-mono text-sm">
 
 <!-- ── Fixed header ─────────────────────────────────────────────────────── -->
-<header class="fixed top-0 left-0 right-0 z-30 h-10 flex items-center px-4 gap-3 border-b border-gray-800"
-        style="background:#030712;">
-  <div class="flex flex-col leading-none gap-0 mr-2">
-    <span class="font-bold text-white text-xl tracking-tight">PolySign</span>
-    <span class="text-[10px] text-gray-600">prediction market intelligence</span>
+<header class="fixed top-0 left-0 right-0 z-30 h-16 flex items-center px-4 gap-3 border-b border-gray-800 bg-gray-950">
+  <div class="flex flex-col leading-tight mr-2">
+    <span class="text-3xl font-black tracking-tight text-white">PolySign</span>
+    <span class="text-xs text-gray-500">prediction market intelligence</span>
   </div>
   <span id="conn-status" class="flex items-center gap-1.5 text-xs">
     <span id="conn-dot" class="w-2 h-2 rounded-full bg-gray-600"></span>
@@ -55,7 +54,7 @@
   </span>
 </header>
 
-<div class="pt-10">
+<div class="pt-16">
 
 <!-- ── Stats row ─────────────────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-800 border-b border-gray-800">
@@ -89,12 +88,13 @@
 <!-- ── Main two-column layout ─────────────────────────────────────────────── -->
 <div class="flex flex-col md:flex-row min-h-screen">
 
-  <!-- Left: Alert Feed (65%) -->
+  <!-- Left: Live Events (65%) -->
   <div class="flex-1 md:w-[65%] border-r border-gray-800 px-4 py-4">
-    <div class="flex items-center gap-2 mb-3">
-      <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Alert Feed</h2>
+    <div class="flex items-center gap-2 mb-1">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Live Events</h2>
       <span class="text-gray-700 text-xs">grouped by market · 10s refresh</span>
     </div>
+    <div class="text-[10px] text-gray-600 mb-3">every whale trade, price move, and news match as it happens</div>
     <div id="alert-feed-container">
       <div id="alert-feed" class="space-y-1.5">
         <div class="text-gray-600 text-xs py-4 text-center">Loading…</div>
@@ -105,12 +105,13 @@
   <!-- Right: Smart Money + Watched Markets (35%) -->
   <div class="md:w-[35%] flex flex-col">
 
-    <!-- Smart Money Tracker -->
+    <!-- Whale Leaderboard -->
     <div class="border-b border-gray-800 px-4 py-4">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Smart Money</h2>
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Whale Leaderboard</h2>
         <button id="wallet-show-all-btn" class="text-xs text-blue-400 hover:underline hidden" onclick="toggleShowAllWallets()">Show all</button>
       </div>
+      <div class="text-[10px] text-gray-600 mb-3">tracked wallets ranked by recent activity</div>
       <div id="wallet-list" class="space-y-2">
         <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
       </div>
@@ -263,8 +264,9 @@ function renderAlertDetail(a) {
     const out   = m.outcome || '';
     const sz    = m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '';
     const col   = dir === 'BUY' ? 'text-emerald-400' : 'text-red-400';
+    const ep    = m.entryPrice && m.entryPrice !== '?' ? ` <span class="text-gray-500">@ ${(parseFloat(m.entryPrice)*100).toFixed(1)}¢</span>` : '';
     return `<span class="${col}">${alias || '?'} ${dir} ${out}</span>` +
-           (sz ? ` <span class="text-gray-400">${sz}</span>` : '');
+           (sz ? ` <span class="text-gray-400">${sz}</span>` : '') + ep;
   }
   return a.title || '';
 }
@@ -459,13 +461,16 @@ function renderWallets(wallets) {
       const q = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
       tradeInfo = `${dir}${outcome ? ' ' + outcome : ''} on "${q}"${sizeStr}${priceStr}`;
     }
+    const tradeInfoEl = w.lastMarketLink
+      ? `<a href="${w.lastMarketLink}" target="_blank" rel="noopener" class="text-xs ${dirCol} mt-0.5 leading-tight hover:underline block">${tradeInfo}</a>`
+      : `<div class="text-xs ${dirCol} mt-0.5 leading-tight">${tradeInfo}</div>`;
     return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
       <div class="flex items-center justify-between gap-2">
         <a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener"
            class="font-bold text-gray-200 hover:text-blue-400 hover:underline text-xs">🐋 ${w.alias || w.address.slice(0,10)}</a>
         <span class="text-gray-600 text-[10px] shrink-0">${relativeTime(w.lastTradeAt)}</span>
       </div>
-      <div class="text-xs ${dirCol} mt-0.5 leading-tight">${tradeInfo}</div>
+      ${tradeInfoEl}
       <div class="flex items-center justify-end mt-0.5">
         <span class="text-gray-600 text-[10px]">${w.tradeCount != null ? w.tradeCount + ' trades' : ''}</span>
       </div>

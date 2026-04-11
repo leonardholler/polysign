@@ -54,6 +54,9 @@ public class ConsensusDetector {
     @Value("${polysign.detectors.wallet.consensus-high-freq-min-usdc:500}")
     private double highFreqMinUsdc;
 
+    @Value("${polysign.detectors.wallet.consensus-min-quality-sum:12.0}")
+    private double consensusMinQualitySum;
+
     @Autowired
     public ConsensusDetector(
             DynamoDbTable<WalletTrade>   walletTradesTable,
@@ -78,14 +81,15 @@ public class ConsensusDetector {
                       int consensusMinWallets,
                       int highFreqTradeCount,
                       double highFreqMinUsdc) {
-        this.walletTradesTable   = walletTradesTable;
-        this.watchedWalletsTable = null; // not needed in unit tests — alias falls back to address prefix
-        this.alertService        = alertService;
-        this.clock               = clock;
-        this.consensusWindow     = consensusWindow;
-        this.consensusMinWallets = consensusMinWallets;
-        this.highFreqTradeCount  = highFreqTradeCount;
-        this.highFreqMinUsdc     = highFreqMinUsdc;
+        this.walletTradesTable    = walletTradesTable;
+        this.watchedWalletsTable  = null; // not needed in unit tests — alias falls back to address prefix
+        this.alertService         = alertService;
+        this.clock                = clock;
+        this.consensusWindow      = consensusWindow;
+        this.consensusMinWallets  = consensusMinWallets;
+        this.highFreqTradeCount   = highFreqTradeCount;
+        this.highFreqMinUsdc      = highFreqMinUsdc;
+        this.consensusMinQualitySum = 0.0; // disabled in unit tests (no wallet quality data)
     }
 
     /**
@@ -153,12 +157,26 @@ public class ConsensusDetector {
                     .add(addr);
         }
 
-        // Fire on the first direction that meets the threshold.
+        // Fire on the first direction that meets the wallet count AND quality-sum thresholds.
         for (Map.Entry<String, Set<String>> entry : directionToAddresses.entrySet()) {
             String direction = entry.getKey();
             Set<String> distinctWallets = entry.getValue();
 
             if (distinctWallets.size() >= consensusMinWallets) {
+                // Fix 8: require the sum of qualityScores to exceed the threshold so that
+                // 3x low-reputation wallets (e.g. swisstony) can't trigger a consensus alert.
+                double qualitySum = 0.0;
+                for (String addr : distinctWallets) {
+                    WatchedWallet w = walletCache.get(addr);
+                    if (w != null && w.getQualityScore() != null) {
+                        qualitySum += w.getQualityScore();
+                    }
+                }
+                if (qualitySum < consensusMinQualitySum) {
+                    log.debug("consensus_skip_low_quality marketId={} direction={} walletCount={} qualitySum={}",
+                            marketId, direction, distinctWallets.size(), qualitySum);
+                    continue;
+                }
                 // Collect the trades for this direction to build per-wallet detail later.
                 List<WalletTrade> consensusTrades = inWindow.stream()
                         .filter(t -> direction.equals(t.getSide())

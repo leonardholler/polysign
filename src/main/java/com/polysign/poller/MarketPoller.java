@@ -365,6 +365,15 @@ public class MarketPoller {
 
         Key key = Key.builder().partitionValue(marketId).build();
         Market existing  = marketsTable.getItem(key);
+        // Fix 6: skip essentially-resolved markets (price near 0 or 1 means effectively decided).
+        // Gamma active=true&closed=false can still include briefly-active resolved markets.
+        if (existing != null && existing.getCurrentYesPrice() != null) {
+            double p = existing.getCurrentYesPrice().doubleValue();
+            if (p >= 0.98 || p <= 0.02) {
+                log.debug("market_skip_resolved marketId={} currentYesPrice={}", marketId, p);
+                return;
+            }
+        }
         Boolean isWatched = shouldWatch ? Boolean.TRUE
                             : (existing != null && existing.getIsWatched() != null)
                             ? existing.getIsWatched() : Boolean.FALSE;

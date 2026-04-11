@@ -23,6 +23,9 @@ public class WatchedWallet {
     private String lastOutcome;          // "YES" or "NO" — outcome of the most recent trade
     private String lastSizeUsdc;         // dollar amount of the most recent trade (e.g. "2450.00")
     private String lastTradePrice;       // raw price (0-1) of the most recent $1000+ trade
+    private String lastMarketLink;       // polymarket.com/event/{eventSlug} for the most recent $1000+ trade
+    private Double qualityScore;         // log10(avgTradeSize) * (1 + winRate) — updated each sync
+    private Double totalVolumeUsdc;      // running sum of all trade USDC values written in this session
 
     @DynamoDbPartitionKey
     public String getAddress() { return address; }
@@ -38,6 +41,9 @@ public class WatchedWallet {
     public String  getLastOutcome()          { return lastOutcome;          }
     public String  getLastSizeUsdc()         { return lastSizeUsdc;         }
     public String  getLastTradePrice()       { return lastTradePrice;       }
+    public String  getLastMarketLink()       { return lastMarketLink;       }
+    public Double  getQualityScore()         { return qualityScore;         }
+    public Double  getTotalVolumeUsdc()      { return totalVolumeUsdc;      }
 
     public void setAddress(String address)                       { this.address             = address;             }
     public void setAlias(String alias)                           { this.alias               = alias;               }
@@ -51,4 +57,7 @@ public class WatchedWallet {
     public void setLastOutcome(String lastOutcome)               { this.lastOutcome         = lastOutcome;         }
     public void setLastSizeUsdc(String lastSizeUsdc)             { this.lastSizeUsdc        = lastSizeUsdc;        }
     public void setLastTradePrice(String lastTradePrice)         { this.lastTradePrice      = lastTradePrice;      }
+    public void setLastMarketLink(String lastMarketLink)         { this.lastMarketLink      = lastMarketLink;      }
+    public void setQualityScore(Double qualityScore)             { this.qualityScore        = qualityScore;        }
+    public void setTotalVolumeUsdc(Double totalVolumeUsdc)       { this.totalVolumeUsdc     = totalVolumeUsdc;     }
 }

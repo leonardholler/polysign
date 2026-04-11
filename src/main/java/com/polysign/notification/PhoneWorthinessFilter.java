@@ -60,6 +60,15 @@ public class PhoneWorthinessFilter {
 
     /**
      * Returns {@code true} if this alert should be pushed to the user's phone.
+     *
+     * <p>Rules evaluated in order — first match wins:
+     * <ol>
+     *   <li>Consensus auto-pass</li>
+     *   <li>Multi-detector convergence (≥2 detector types on same market in 15 min)</li>
+     *   <li>Precision-gated critical (severity=critical AND t1h precision ≥ threshold)</li>
+     *   <li>Whale trade ≥ $10K (immediate value while backtesting data accumulates)</li>
+     *   <li>Price movement entering a resolution zone (ENTERED_BULLISH / ENTERED_BEARISH)</li>
+     * </ol>
      */
     public boolean isPhoneWorthy(Alert alert) {
         // Rule (a): consensus always qualifies
@@ -75,6 +84,28 @@ public class PhoneWorthinessFilter {
         // Rule (c): critical + t1h precision gate (fail closed when precision is null)
         if ("critical".equals(alert.getSeverity())) {
             return hasSufficientPrecision(alert.getType());
+        }
+
+        // Rule (d): any whale trade >= $10K — bypass precision gate while backtest data accumulates
+        if ("wallet_activity".equals(alert.getType())) {
+            var meta = alert.getMetadata();
+            if (meta != null) {
+                String sizeStr = meta.get("sizeUsdc");
+                if (sizeStr != null) {
+                    try {
+                        if (Double.parseDouble(sizeStr) >= 10_000) return true;
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+
+        // Rule (e): price movement entering a resolution zone
+        if ("price_movement".equals(alert.getType())) {
+            var meta = alert.getMetadata();
+            if (meta != null) {
+                String zt = meta.get("zoneTransition");
+                if ("ENTERED_BULLISH".equals(zt) || "ENTERED_BEARISH".equals(zt)) return true;
+            }
         }
 
         return false;
