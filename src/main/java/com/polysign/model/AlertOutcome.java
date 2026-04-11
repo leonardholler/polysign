@@ -33,6 +33,7 @@ public class AlertOutcome {
     private BigDecimal magnitudePp;
     private BigDecimal spreadBpsAtAlert;   // nullable, informational from alert metadata
     private BigDecimal depthAtMidAtAlert;  // nullable, informational from alert metadata
+    private String category;               // Polymarket market category (e.g. "Politics"); null for pre-Phase-13 rows
 
     // ── Key / index getters ───────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ public class AlertOutcome {
     public BigDecimal getMagnitudePp()        { return magnitudePp; }
     public BigDecimal getSpreadBpsAtAlert()   { return spreadBpsAtAlert; }
     public BigDecimal getDepthAtMidAtAlert()  { return depthAtMidAtAlert; }
+    public String     getCategory()           { return category; }
 
     // ── Setters ───────────────────────────────────────────────────────────────
 
@@ -77,4 +79,5 @@ public class AlertOutcome {
     public void setMagnitudePp(BigDecimal magnitudePp)             { this.magnitudePp       = magnitudePp; }
     public void setSpreadBpsAtAlert(BigDecimal spreadBpsAtAlert)   { this.spreadBpsAtAlert  = spreadBpsAtAlert; }
     public void setDepthAtMidAtAlert(BigDecimal depthAtMidAtAlert) { this.depthAtMidAtAlert = depthAtMidAtAlert; }
+    public void setCategory(String category)                       { this.category          = category; }
 }

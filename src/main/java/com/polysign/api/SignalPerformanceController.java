@@ -1,6 +1,7 @@
 package com.polysign.api;
 
 import com.polysign.backtest.SignalPerformanceService;
+import com.polysign.backtest.SignalPerformanceService.CategoryPerformanceResponse;
 import com.polysign.backtest.SignalPerformanceService.PerformanceResponse;
 import com.polysign.common.AppClock;
 import org.springframework.http.ResponseEntity;
@@ -78,5 +79,33 @@ public class SignalPerformanceController {
 
         PerformanceResponse response = service.getPerformance(type, resolvedHorizon, resolvedSince);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * GET /api/signals/by-category?since=&lt;ISO-8601&gt;
+     *
+     * Returns signal performance aggregated by Polymarket market category.
+     * Outcomes written before Phase 13 (no category field) are resolved from the
+     * markets table via batch-get.
+     *
+     * @param since optional ISO-8601 instant (default: 7 days ago)
+     */
+    @GetMapping("/by-category")
+    public ResponseEntity<CategoryPerformanceResponse> getByCategory(
+            @RequestParam(required = false) String since) {
+
+        Instant resolvedSince;
+        if (since == null || since.isBlank()) {
+            resolvedSince = clock.now().minus(Duration.ofDays(7));
+        } else {
+            try {
+                resolvedSince = Instant.parse(since);
+            } catch (DateTimeParseException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Invalid 'since' parameter '" + since + "'. Must be ISO-8601 instant (e.g. 2026-04-01T00:00:00Z)");
+            }
+        }
+
+        return ResponseEntity.ok(service.byCategoryPerformance(resolvedSince));
     }
 }

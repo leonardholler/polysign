@@ -3,6 +3,7 @@ package com.polysign.backtest;
 import com.polysign.common.AppClock;
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import com.polysign.model.PriceSnapshot;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -62,6 +63,7 @@ public class AlertOutcomeEvaluator {
     private final DynamoDbTable<Alert>        alertsTable;
     private final DynamoDbTable<PriceSnapshot> snapshotsTable;
     private final DynamoDbTable<AlertOutcome>  alertOutcomesTable;
+    private final DynamoDbTable<Market>        marketsTable;
     private final AppClock                     clock;
     private final MeterRegistry                meterRegistry;
 
@@ -70,11 +72,13 @@ public class AlertOutcomeEvaluator {
             DynamoDbTable<Alert> alertsTable,
             DynamoDbTable<PriceSnapshot> snapshotsTable,
             DynamoDbTable<AlertOutcome> alertOutcomesTable,
+            DynamoDbTable<Market> marketsTable,
             AppClock clock,
             MeterRegistry meterRegistry) {
         this.alertsTable        = alertsTable;
         this.snapshotsTable     = snapshotsTable;
         this.alertOutcomesTable = alertOutcomesTable;
+        this.marketsTable       = marketsTable;
         this.clock              = clock;
         this.meterRegistry      = meterRegistry;
     }
@@ -84,6 +88,7 @@ public class AlertOutcomeEvaluator {
         this.alertsTable        = null;
         this.snapshotsTable     = null;
         this.alertOutcomesTable = null;
+        this.marketsTable       = null;
         this.clock              = clock;
         this.meterRegistry      = null;
     }
@@ -131,6 +136,9 @@ public class AlertOutcomeEvaluator {
 
         String directionPredicted = extractDirectionPredicted(alert);
 
+        // category — resolved once per alert from the markets table (null-safe: missing market → null category)
+        String category = resolveCategory(alert.getMarketId());
+
         // priceAtAlert — from the snapshot closest to firedAt
         Optional<PriceSnapshot> alertSnap = findClosestSnapshot(alert.getMarketId(), firedAt);
         if (alertSnap.isEmpty()) {
@@ -161,6 +169,7 @@ public class AlertOutcomeEvaluator {
                     alertId, alert.getType(), alert.getMarketId(),
                     firedAt, priceAtAlert, priceAtHorizon,
                     directionPredicted, hc.label(), now, alert.getMetadata());
+            outcome.setCategory(category);
 
             writeOutcome(outcome);
             emitMetric(alert.getType(), hc.label());
@@ -234,6 +243,19 @@ public class AlertOutcomeEvaluator {
         }
 
         return outcome;
+    }
+
+    // ── Category resolution ───────────────────────────────────────────────────
+
+    private String resolveCategory(String marketId) {
+        if (marketsTable == null || marketId == null) return null;
+        try {
+            Market market = marketsTable.getItem(Key.builder().partitionValue(marketId).build());
+            return market != null ? market.getCategory() : null;
+        } catch (Exception e) {
+            log.debug("alert_outcome_category_resolve_failed marketId={} error={}", marketId, e.getMessage());
+            return null;
+        }
     }
 
     // ── Direction extraction (Decision 2) ─────────────────────────────────────

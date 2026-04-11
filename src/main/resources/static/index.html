@@ -85,6 +85,33 @@
   <span class="text-xs text-gray-500">Signal Quality (7d, 1h) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · consensus —% · news —%</span></span>
 </div>
 
+<!-- ── Signal Performance by Category ───────────────────────────────────── -->
+<div class="border-b border-gray-800">
+  <button id="cat-toggle" onclick="toggleCatPanel()"
+          class="w-full flex items-center justify-between px-4 py-2 text-xs text-gray-400 hover:text-gray-200 focus:outline-none">
+    <span>Signal Performance by Category (7d)</span>
+    <span id="cat-chevron" class="transition-transform duration-200">▲</span>
+  </button>
+  <div id="cat-panel">
+    <table class="w-full text-xs font-mono border-collapse">
+      <thead>
+        <tr class="text-gray-500 border-b border-gray-800">
+          <th class="px-4 py-1 text-left cursor-pointer select-none hover:text-gray-300" onclick="sortCat('category')">Category <span id="cat-sort-category"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('alertCount')">Alerts <span id="cat-sort-alertCount"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('precisionT15m')">P@15m <span id="cat-sort-precisionT15m"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('precisionT1h')">P@1h <span id="cat-sort-precisionT1h"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('precisionT24h')">P@24h <span id="cat-sort-precisionT24h"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('avgMagnitudePp')">Avg Move <span id="cat-sort-avgMagnitudePp"></span></th>
+          <th class="px-4 py-1 text-right cursor-pointer select-none hover:text-gray-300" onclick="sortCat('sampleCount')">n <span id="cat-sort-sampleCount"></span></th>
+        </tr>
+      </thead>
+      <tbody id="cat-tbody">
+        <tr><td colspan="7" class="px-4 py-2 text-gray-600">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ── Main two-column layout ─────────────────────────────────────────────── -->
 <div class="flex flex-col md:flex-row min-h-screen">
 
@@ -577,6 +604,74 @@ async function loadStats() {
       `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · consensus ${fmtPct(idx.consensus?.precision)} · news ${fmtPct(idx.news_correlation?.precision)}`;
   } catch (_) {}
 })();
+
+// ── Signal Performance by Category ───────────────────────────────────────────
+
+let catData = [];
+let catSortKey = 'precisionT1h';
+let catSortAsc = false;
+let catOpen = true;
+
+function toggleCatPanel() {
+  catOpen = !catOpen;
+  document.getElementById('cat-panel').style.display = catOpen ? '' : 'none';
+  document.getElementById('cat-chevron').style.transform = catOpen ? '' : 'rotate(180deg)';
+}
+
+function sortCat(key) {
+  if (catSortKey === key) { catSortAsc = !catSortAsc; }
+  else { catSortKey = key; catSortAsc = key === 'category'; }
+  renderCatTable();
+}
+
+function renderCatTable() {
+  const headers = ['category','alertCount','precisionT15m','precisionT1h','precisionT24h','avgMagnitudePp','sampleCount'];
+  headers.forEach(h => {
+    const el = document.getElementById('cat-sort-' + h);
+    if (el) el.textContent = catSortKey === h ? (catSortAsc ? '▲' : '▼') : '';
+  });
+
+  const sorted = [...catData].sort((a, b) => {
+    const va = a[catSortKey] ?? (catSortAsc ? Infinity : -Infinity);
+    const vb = b[catSortKey] ?? (catSortAsc ? Infinity : -Infinity);
+    if (typeof va === 'string') return catSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return catSortAsc ? va - vb : vb - va;
+  });
+
+  const tbody = document.getElementById('cat-tbody');
+  if (sorted.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-2 text-gray-600">No data</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = sorted.map(c => {
+    const lowN = c.sampleCount < 30;
+    const rowCls = lowN ? 'opacity-50 italic' : '';
+    const nLabel = c.sampleCount + (lowN ? ' (low-n)' : '');
+    return `<tr class="border-t border-gray-800 hover:bg-gray-800/40 ${rowCls}">
+      <td class="px-4 py-1 text-left text-gray-300">${c.category ?? 'unknown'}</td>
+      <td class="px-4 py-1 text-right text-gray-400">${c.alertCount}</td>
+      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT15m)}</td>
+      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT1h)}</td>
+      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT24h)}</td>
+      <td class="px-4 py-1 text-right text-gray-400">${c.avgMagnitudePp != null ? (c.avgMagnitudePp * 100).toFixed(1) + 'pp' : '—'}</td>
+      <td class="px-4 py-1 text-right text-gray-500">${nLabel}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadCatPerformance() {
+  try {
+    const r = await fetch('/api/signals/by-category');
+    if (!r.ok) return;
+    const d = await r.json();
+    catData = d.categories || [];
+    renderCatTable();
+  } catch (_) {}
+}
+
+loadCatPerformance();
+setInterval(loadCatPerformance, 300_000); // refresh every 5 min
 
 // ── Bootstrap & polling ───────────────────────────────────────────────────────
 
