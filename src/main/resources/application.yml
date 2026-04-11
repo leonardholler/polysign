@@ -69,7 +69,7 @@ polysign:
       consensus-high-freq-min-usdc: 500
       consensus-min-quality-sum: 12.0
     news:
-      min-score: 0.85
+      min-score: 0.55
       min-volume-usdc: 100000
       dedupe-window-minutes: 1440   # 24 hours — same article-market pair fires once per day
       max-matches-per-article: 3    # cap: top 3 markets by score per article

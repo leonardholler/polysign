@@ -21,6 +21,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
+import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -169,19 +170,27 @@ public class RssPoller {
         }
         String articleId = UrlCanonicalizer.sha256(rawUrl);
 
-        // 2. Fetch raw article HTML and archive to S3
+        // 2. Skip if already processed — prevents re-enqueue on every 5-minute poll cycle.
+        //    sentimentCallCache fills on first processing; re-enqueueing the same article
+        //    would route all pairs to keyword-fallback on every subsequent cycle.
+        if (articlesTable.getItem(Key.builder().partitionValue(articleId).build()) != null) {
+            log.debug("event=rss_article_skip_duplicate articleId={}", articleId);
+            return false;
+        }
+
+        // 4. Fetch raw article HTML and archive to S3
         String publishedDate = formatDate(entry.getPublishedDate());
         String s3Key         = buildS3Key(publishedDate, articleId);
         fetchAndArchive(rawUrl, s3Key);
 
-        // 3. Extract keywords from title + description
+        // 5. Extract keywords from title + description
         String title       = entry.getTitle() != null ? entry.getTitle() : "";
         String description = entry.getDescription() != null
                 && entry.getDescription().getValue() != null
                 ? entry.getDescription().getValue() : "";
         Set<String> keywords = keywordExtractor.extract(title + " " + description);
 
-        // 4. Write Article to DynamoDB (natural idempotent: same PK overwrites same data)
+        // 6. Write Article to DynamoDB (natural idempotent: same PK overwrites same data)
         Article article = new Article();
         article.setArticleId(articleId);
         article.setTitle(title);
@@ -193,7 +202,7 @@ public class RssPoller {
         article.setS3Key(s3Key);
         articlesTable.putItem(article);
 
-        // 5. Enqueue to news-to-process
+        // 7. Enqueue to news-to-process
         sqsClient.sendMessage(SendMessageRequest.builder()
                 .queueUrl(resolveQueueUrl())
                 .messageBody(articleId)

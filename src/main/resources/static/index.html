@@ -313,7 +313,7 @@ async function loadAlerts() {
     const r = await fetch('/api/alerts/by-signal-strength');
     if (!r.ok) return;
     let alerts = await r.json();
-    alerts = alerts.filter(a => (a.score ?? 1) >= 0.4);
+    alerts = alerts.filter(a => (a.score ?? 1) >= 0.3);
 
     if (alerts.length === 0) {
       const empty = '<div class="text-center py-8 text-gray-600 text-xs"><div class="text-2xl mb-2">◎</div>No alerts yet — price alerts need ~15 min of history after startup</div>';
