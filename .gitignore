@@ -20,6 +20,7 @@ localstack_data/
 .DS_Store
 Thumbs.db
 .env
+.claude/
 CLAUDE_CODE_PROMPTS.md
 CLAUDE_CONTEXT.md
 PROGRESS.md
