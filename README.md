@@ -2,11 +2,11 @@
 
 <!-- ![CI](https://github.com/leonardholler/polysign/actions/workflows/ci.yml/badge.svg) -->
 
-> **Live demo**: https://polysign.dev
+> **Live demo**: https://polysign.dev  |  **API docs**: https://polysign.dev/api/docs/ui
 
-PolySign is a real-time event-processing and anomaly-detection system for Polymarket prediction markets. It polls 400+ active markets every 60 seconds, runs four independent detectors (price threshold, statistical anomaly, whale wallet consensus, news correlation), and pushes alerts to my phone when high-signal events occur. Then it scores every alert against forward price movement — at T+15 minutes, T+1 hour, and T+24 hours — to measure whether its own signals actually work.
+PolySign is a truth-seeking engine for prediction market signals. Most retail participants trade on unverified heuristics — "whales bought, so follow" — that nobody actually measures. PolySign ingests market anomalies through four independent detectors, scores every alert at T+15m, T+1h, and T+24h against forward price movement, and serves only high-conviction convergence events through an authenticated developer API with their running precision attached. The product isn't being right. The product is being measurable.
 
-The backtesting pipeline is the point. A monitoring system that can't report its own precision is indistinguishable from a random number generator with nice UI.
+The backtesting pipeline is the point. A signal system that can't report its own precision is indistinguishable from a random number generator with nice UI.
 
 **This is a read-only monitoring tool. It does not place trades, hold funds, or have write access to any wallet.**
 
@@ -18,18 +18,20 @@ The backtesting pipeline is the point. A monitoring system that can't report its
 flowchart TD
     sources["Polymarket APIs + RSS Feeds"]
     sources -->|"every 60s"| pollers["4 Pollers"]
-    pollers --> dynamo[("DynamoDB — 8 tables")]
+    pollers --> dynamo[("DynamoDB — 9 tables")]
     dynamo --> detectors["4 Detectors"]
     detectors -->|"SHA-256 ID +\nconditional write"| dynamo
     detectors --> sqs{{"SQS: alerts-to-notify"}}
     sqs --> filter["PhoneWorthinessFilter"]
-    filter -->|"phone-worthy"| ntfy["ntfy.sh → Phone"]
+    filter -->|"phone-worthy"| ntfy["ntfy.sh → Phone\n(personal QA channel)"]
     filter --> dash["Dashboard"]
     dynamo --> eval["AlertOutcomeEvaluator\nT+15m | T+1h | T+24h"]
     eval --> dynamo
     dynamo --> perf["SignalPerformanceService"]
     perf --> dash
     perf -.->|"precision >= 60%\ngates phone alerts"| filter
+    clients["API Clients\nX-API-Key header"] -->|"auth + rate limit"| v1["v1 Endpoints\n/alerts /snapshots\n/signals /markets"]
+    v1 --> dynamo
 ```
 
 **Write path**: Polymarket Gamma API → `MarketPoller` → `markets` table → `PricePoller` → `price_snapshots` → `PriceMovementDetector` → `SHA-256(type|marketId|bucketedTimestamp)` → `alerts` (conditional write, reject on duplicate) → SQS → `PhoneWorthinessFilter` → ntfy.sh. Every hop carries a `correlationId` — one grep traces a single event through the entire pipeline.
@@ -43,6 +45,80 @@ flowchart TD
 Precision numbers are measured against live data via the backtesting pipeline. Each alert is scored at T+15m, T+1h, and T+24h against the actual forward price movement. Results are visible on the dashboard's Signal Quality panel after the system has been running long enough to accumulate a meaningful sample.
 
 Precision = correct / (correct + wrong), excluding flat cases where |delta| < 0.5 percentage points. See [DESIGN.md](DESIGN.md#signal-quality-methodology) for methodology and known biases.
+
+---
+
+## Developer API
+
+All `/api/v1/**` endpoints require an `X-API-Key` header. Raw keys are shown once at creation and not stored — the server persists only the SHA-256 hash. See [DESIGN.md](DESIGN.md#developer-api-design) for the rationale.
+
+A demo key is logged at `INFO` on first boot (look for `demo_api_key_created` in the logs). Save it — it cannot be recovered.
+
+### Authentication
+
+```bash
+curl -H "X-API-Key: psk_your_key_here" https://polysign.dev/api/v1/alerts
+```
+
+Missing or invalid key → 401:
+```json
+{ "error": "Invalid or missing API key", "hint": "Pass your key in the X-API-Key header" }
+```
+
+### Rate limits
+
+| Tier | Limit | On exceed |
+|---|---|---|
+| FREE | 60 req/min | 429 with `Retry-After` |
+| PRO | 600 req/min | 429 with `Retry-After` |
+
+Every authenticated response includes:
+
+```
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 47
+X-RateLimit-Reset: 1744182060
+```
+
+### Endpoints
+
+**Alerts** — paginated list of fired alerts, optionally filtered.
+```bash
+GET /api/v1/alerts?marketId=&type=&minSeverity=&since=&limit=50&cursor=
+```
+
+**Price snapshots** — raw price history for a market (`marketId` required).
+```bash
+GET /api/v1/snapshots?marketId=REQUIRED&since=&limit=100&cursor=
+```
+
+**Signal performance** — current precision and sample counts per detector and horizon.
+```bash
+GET /api/v1/signals/performance
+```
+
+**Markets** — active tracked markets, filterable by category and volume.
+```bash
+GET /api/v1/markets?category=&minVolume=&limit=&cursor=
+```
+
+### Pagination
+
+All list endpoints use cursor pagination. Response envelope:
+
+```json
+{
+  "data": [...],
+  "pagination": { "cursor": "eyJTIjoiY..."", "hasMore": true },
+  "meta": { "requestedAt": "2026-04-11T12:00:00Z", "clientName": "demo-client" }
+}
+```
+
+Pass the `cursor` value as the `cursor` query param on the next request. Cursors are opaque base64url strings wrapping the DynamoDB `LastEvaluatedKey`. A malformed cursor returns 400.
+
+### OpenAPI
+
+Interactive docs at `/api/docs/ui`.
 
 ---
 
@@ -109,6 +185,7 @@ This wasn't clever engineering. It was product judgment — asking "is this aler
 | `polysign.signals.magnitude.mean` | gauge | Average move size after alert |
 | `polysign.signals.sample.count` | gauge | Sample size behind each precision number |
 | `polysign.outcomes.evaluated` | counter | Backtesting throughput |
+| `polysign.api.rate_limited` | counter | Rate limit hits by client name |
 
 Every log line is structured JSON via `logstash-logback-encoder`. A `correlationId` flows from poll → detect → alert → notification. One `grep correlationId=abc123` traces a single event through the full pipeline.
 
@@ -134,9 +211,11 @@ Target: 10–30 phone notifications per day.
 
 ### Shipped
 
-PolySign runs on a single EC2 t3.small in us-east-2, fronted by Caddy for HTTPS via Let's Encrypt at polysign.dev. All eight DynamoDB tables use on-demand capacity with TTL and GSIs covering every access pattern. The three SQS queues each have a DLQ with a five-receive redrive policy; DLQ depth is a Micrometer gauge so a clogged queue shows up in metrics before it shows up in silence. S3 stores daily price-snapshot rollups with versioning enabled. The EC2 instance carries an IAM instance role — no static keys anywhere, credentials resolve through IMDS. Two idempotent scripts (`bootstrap-aws.sh` / `verify-aws.sh`) create all infrastructure and run a 16/16 smoke-test suite; re-running them on an already-provisioned account is safe.
+PolySign runs on a single EC2 t3.small in us-east-2, fronted by Caddy for HTTPS via Let's Encrypt at polysign.dev. All nine DynamoDB tables use on-demand capacity with TTL and GSIs covering every access pattern. The three SQS queues each have a DLQ with a five-receive redrive policy; DLQ depth is a Micrometer gauge so a clogged queue shows up in metrics before it shows up in silence. S3 stores daily price-snapshot rollups with versioning enabled. The EC2 instance carries an IAM instance role — no static keys anywhere, credentials resolve through IMDS. Two idempotent scripts (`bootstrap-aws.sh` / `verify-aws.sh`) create all infrastructure and run a 16/16 smoke-test suite; re-running them on an already-provisioned account is safe.
 
-News sentiment analysis uses Haiku 4.5 instead of Sonnet — sufficient for short directional relevance checks, ~12× cheaper per call. A DynamoDB-backed dedup cache (keyed by article × market pair) prevents redundant API calls across process restarts. Resilience4j circuit breakers cover all six outbound call paths; retry policies use exponential backoff with jitter. Micrometer exports 14 metrics to `/actuator/prometheus`. Every log line is structured JSON with a `correlationId` field that traces a single event end-to-end.
+News sentiment analysis uses Haiku 4.5 instead of Sonnet — sufficient for short directional relevance checks, ~12× cheaper per call. A DynamoDB-backed dedup cache (keyed by article × market pair) prevents redundant API calls across process restarts. Resilience4j circuit breakers cover all six outbound call paths; retry policies use exponential backoff with jitter. Micrometer exports metrics to `/actuator/prometheus`. Every log line is structured JSON with a `correlationId` field that traces a single event end-to-end.
+
+**Auth and developer API**: API keys are SHA-256 hashed at rest (raw key shown once at creation, AWS/GitHub PAT model). Per-key rate limiting via Resilience4j — FREE tier at 60 req/min, PRO at 600 req/min. Cursor-paginated v1 endpoints at `/api/v1/{alerts,snapshots,signals/performance,markets}`, each returning a `PaginatedResponse` envelope with a DynamoDB `LastEvaluatedKey`-backed cursor. OpenAPI spec at `/api/docs/ui`.
 
 ### Roadmap
 
@@ -194,6 +273,7 @@ The `/api/alerts/by-signal-strength` endpoint sorts by this overlap count. The b
 | DynamoDB | `wallet_trades` | PK=address, SK=txHash for natural idempotency. GSI for consensus window queries. |
 | DynamoDB | `alerts` | Deterministic PK for idempotency, 30-day TTL, GSI for per-market queries. |
 | DynamoDB | `alert_outcomes` | PK=alertId, SK=horizon. No TTL — outcomes are the whole point of the system. |
+| DynamoDB | `api_keys` | PK=apiKeyHash (SHA-256). Raw key never stored. Full scan to check demo-key existence at boot. |
 | SQS | 3 queues + 3 DLQs | Decouples detection from delivery. DLQ catches failures after 5 retries. Queue depth metrics. |
 | S3 | `polysign-archives` | Daily snapshot rollups for backtesting beyond the 30-day TTL. Article HTML archive. |
 
@@ -211,18 +291,21 @@ The `/api/alerts/by-signal-strength` endpoint sorts by this overlap count. The b
 | Framework | Spring Boot 3.5.5 (Web, Scheduling, Validation, Actuator) |
 | Build | Maven, single module, Spring Boot parent POM |
 | AWS | SDK v2 — DynamoDB Enhanced Client, SQS, S3 |
-| Resilience | Resilience4j 2.2.0 (circuit breakers, retry, rate limiting) |
+| Resilience | Resilience4j 2.2.0 (circuit breakers, retry, rate limiting — including per-key API rate limits) |
 | Metrics | Micrometer + Prometheus registry |
 | Logging | SLF4J + Logback, structured JSON via logstash-logback-encoder |
 | RSS | Rome 2.1.0 |
+| OpenAPI | springdoc-openapi-starter-webmvc-ui 2.x (`/api/docs/ui`) |
 | Frontend | Vanilla HTML + JS + Chart.js + Tailwind CDN. No build step. One file. |
 | Testing | JUnit 5 + Mockito + AssertJ, Testcontainers with LocalStack 3.8 |
 | CI | GitHub Actions — Java 25 Temurin, `mvn -B verify` |
 | Local dev | Docker Compose override (docker-compose.local.yml) — LocalStack 3.8 for offline dev |
 
-**126 tests** (121 unit + 5 integration), all green. Unit/integration split via Maven Surefire + Failsafe (`mvn test` vs `mvn verify`).
+Unit/integration split via Maven Surefire + Failsafe (`mvn test` vs `mvn verify`).
 
 The golden-path integration test (`GoldenPathIT`) proves the full signal quality loop in one test: seed a 10% price spike → run the detector → assert exactly 1 alert → run the detector again → assert no new alerts (idempotency proof) → seed a T+15min snapshot → run the evaluator → assert 1 outcome with `wasCorrect=true`. Detection, deduplication, and backtesting in 13 steps.
+
+`PublicApiIT` covers the auth and pagination paths end-to-end against LocalStack: 401 without key, 401 with invalid key, 200 with valid key, cursor pagination roundtrip, rate limit burst (65 requests → at least one 429 with correct headers).
 
 ---
 
@@ -237,10 +320,13 @@ polysign/
 ├── src/main/java/com/polysign/
 │   ├── PolySignApplication.java
 │   ├── config/        AwsConfig, DynamoConfig, HttpConfig, SchedulingConfig,
-│   │                  BootstrapRunner, WalletBootstrap, RssProperties
-│   ├── common/        CorrelationId, AppClock, AppStats, CategoryClassifier, Result<T>
+│   │                  BootstrapRunner, WalletBootstrap, RssProperties,
+│   │                  ApiKeyRepository, ApiKeyBootstrap, CreatedApiKey
+│   ├── common/        CorrelationId, AppClock, AppStats, CategoryClassifier,
+│   │                  Result<T>, ApiKeyHasher
 │   ├── model/         Market, PriceSnapshot, Article, MarketNewsMatch,
-│   │                  WatchedWallet, WalletTrade, Alert, AlertOutcome
+│   │                  WatchedWallet, WalletTrade, Alert, AlertOutcome,
+│   │                  ApiKey, Tier
 │   ├── poller/        MarketPoller, PricePoller, WalletPoller, RssPoller
 │   ├── detector/      PriceMovementDetector, StatisticalAnomalyDetector,
 │   │                  WalletActivityDetector, ConsensusDetector,
@@ -252,7 +338,11 @@ polysign/
 │   ├── processing/    KeywordExtractor, NewsMatcher, NewsConsumer, UrlCanonicalizer
 │   ├── api/           MarketController, AlertController, WalletController,
 │   │                  StatsController, SignalPerformanceController,
-│   │                  AlertDto, GlobalExceptionHandler
+│   │                  AlertDto, GlobalExceptionHandler,
+│   │                  ApiKeyAuthFilter, ApiKeyContext, RateLimitFilter
+│   └── api/v1/        AlertsV1Controller, SnapshotsV1Controller,
+│                      SignalsV1Controller, MarketsV1Controller,
+│                      CursorCodec, dto/PaginatedResponse
 │   └── metrics/       SqsQueueMetrics, SignalQualityMetrics
 ├── src/main/resources/
 │   ├── application.yml, application-local.yml, application-aws.yml
@@ -268,14 +358,18 @@ polysign/
 │   ├── notification/  NotificationConsumerTest, PhoneWorthinessFilterTest
 │   ├── processing/    KeywordExtractorTest, NewsMatcherTest, UrlCanonicalizerTest
 │   ├── poller/        MarketPollerKeywordTest
-│   ├── api/           SignalPerformanceControllerTest
+│   ├── common/        ApiKeyHasherTest
+│   ├── api/           SignalPerformanceControllerTest, ApiKeyAuthFilterTest,
+│   │                  RateLimitFilterTest
+│   ├── api/v1/        CursorCodecTest, AlertsV1ControllerTest,
+│   │                  SnapshotsV1ControllerTest, SignalsV1ControllerTest,
+│   │                  MarketsV1ControllerTest
 │   └── integration/   AbstractIntegrationIT, GoldenPathIT,
-│                      ConsensusDetectorIT, NewsCorrelationDetectorIT
+│                      ConsensusDetectorIT, NewsCorrelationDetectorIT,
+│                      PublicApiIT
 ├── DESIGN.md
 └── README.md
 ```
-
-52 source files. 20 test files. One HTML file for the dashboard.
 
 ---
 
@@ -296,6 +390,20 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
 
 Wait about 90 seconds for LocalStack to bootstrap all tables/queues, then open [http://localhost:8080](http://localhost:8080). The first cycle takes a few minutes: `MarketPoller` paginates Polymarket's 50,000+ markets, applies quality filters (volume floors, end-of-life, 24h activity), and keeps the top 400 by 24h volume. `PricePoller` then fetches prices at 10 calls/sec through the CLOB API. After that, everything runs every 60 seconds.
+
+### Demo API key
+
+On first boot, `ApiKeyBootstrap` creates a FREE-tier demo key and logs it at `INFO`:
+
+```
+event=demo_api_key_created clientName=demo-client rawKey=psk_XXXX... — SAVE THIS KEY, IT WILL NOT BE SHOWN AGAIN
+```
+
+Use it to hit the v1 endpoints:
+
+```bash
+curl -H "X-API-Key: psk_XXXX..." http://localhost:8080/api/v1/alerts
+```
 
 ### Phone notifications
 
@@ -329,6 +437,11 @@ polysign:
     news:
       min-score: 0.5              # Keyword match threshold
       min-volume-usdc: 100000     # Only correlate high-volume markets
+  auth:
+    demo-key-enabled: true
+    rate-limits:
+      free: 60
+      pro: 600
 ```
 
 ---
@@ -371,9 +484,7 @@ I want to be honest about where this falls short.
 
 **Consensus depends on wallet curation.** The watched wallets ship as placeholders. Consensus alerts won't fire until someone replaces them with real proxy addresses from the Polymarket leaderboard. And even then, "smart money" is a trailing indicator — today's top trader might be tomorrow's blowup.
 
-**Signal quality needs time.** On a fresh deployment, precision numbers are null. The first t15m evaluation takes 15 minutes, t1h takes an hour, t24h takes a day. Meaningful sample sizes (n > 100) take days of running. The numbers are only as good as the sample behind them.
-
-**No auth.** The dashboard and all API endpoints are wide open. Fine for a portfolio demo.
+**Precision numbers need time to stabilize.** On a fresh deployment, precision is null. The first t15m evaluation takes 15 minutes; meaningful sample sizes (n > 100) take days. Numbers published by the API are provisional until the sample behind them reaches statistical significance — treat any number with n < 50 as directional, not authoritative. Early-cycle figures will be unstable.
 
 **The dashboard has no tests.** One HTML file with inline JavaScript. It works. It's brittle. A frontend framework would help, but the constraint is part of the story.
 
@@ -387,4 +498,3 @@ I want to be honest about where this falls short.
 - **Kalshi integration**: A second prediction market source. Cross-platform price divergence is a signal type PolySign doesn't capture yet.
 - **Orderbook depth time series**: Currently captured only at alert-fire time. Continuous tracking would enable "ignore this alert, the book is too thin to act on" filtering.
 - **Lambda + EventBridge rewrite**: See [Architectural Evolution — Roadmap](#roadmap). Each detector is a natural Lambda candidate.
-

@@ -4,6 +4,18 @@
 
 Prediction markets produce continuous price data, and some price movements mean something. The hard part isn't detecting movements — it's knowing which ones are signal and which are noise, delivering the signal ones to a phone without crying wolf, and then measuring whether the system's definition of "signal" was actually predictive. PolySign does all three.
 
+## Why a truth-seeking engine, not a signal seller
+
+The prediction market retail ecosystem is flooded with unmeasured heuristics. Accounts post "whale just bought YES, follow the smart money" with no track record and no mechanism for self-correction. The heuristic sounds reasonable. Whether it actually works — nobody checks.
+
+Most portfolio projects that publish signals don't score them. Building a backtesting loop, publishing the precision numbers, and tying them to individual signals isn't hard engineering — it's an attitude about honesty. Most people don't bother because it makes the signals look worse.
+
+PolySign's design commitment: every signal that surfaces through the system carries its measured precision and sample count. Users of the API see not just the alert but its running track record. An alert with `precision=0.64, n=312` means something. An alert with `precision=0.71, n=4` means almost nothing — and the API tells you that.
+
+The `SignalPerformanceService` aggregates per-detector precision at three horizons. The `PhoneWorthinessFilter` reads that precision to gate notifications. A detector with sub-50% precision stops generating phone alerts automatically. The feedback loop isn't manual — the system corrects itself.
+
+This is the design distinction worth defending in an interview: not the detectors (those are table stakes), not the API (that's table stakes too), but the closed measurement loop that connects signal firing to signal scoring to signal gating. Most monitoring systems have the first. Very few have all three.
+
 ## Data Model
 
 Every table was designed around a specific access pattern. There are no tables that exist "because the entity exists" — each one maps to a query the system actually runs.
@@ -18,6 +30,7 @@ Every table was designed around a specific access pattern. There are no tables t
 | `wallet_trades` | `address` | `txHash` | Per-wallet trade history; `marketId-timestamp-index` GSI for consensus window query | SK=`txHash` gives natural idempotency — same trade re-processed is an overwrite with identical data |
 | `alerts` | `alertId` (SHA-256) | `createdAt` | Conditional write for idempotency; `marketId-createdAt-index` GSI for per-market queries and convergence checks | Deterministic PK + deterministic SK = same DynamoDB slot on every write attempt. 30-day TTL. |
 | `alert_outcomes` | `alertId` | `horizon` | Conditional write per (alert, horizon) pair; `type-firedAt-index` GSI for per-detector aggregation | One row per alert per horizon. No TTL — outcomes are the whole point. |
+| `api_keys` | `apiKeyHash` (SHA-256) | — | Single-key lookup on every authenticated request | PK is the hash of the raw key. Raw key never stored. Full scan only at boot to check demo-key existence. |
 
 ### Why DynamoDB over RDS
 
@@ -196,6 +209,41 @@ In tests, `AppClock.setClock(Clock.fixed(T0, ZoneOffset.UTC))` freezes time. The
 
 Without this, the test would be non-deterministic — the evaluator might consider the alert "not yet due" depending on when the test runs relative to wall-clock time.
 
+## Developer API Design
+
+### Key storage: SHA-256 at rest
+
+Raw API keys are never persisted. On creation, `ApiKeyHasher.generateRawKey()` produces a `psk_`-prefixed base64url-encoded 32-byte random key. `ApiKeyHasher.hash()` computes the SHA-256 hex digest. The `api_keys` DynamoDB table stores only the hash as the partition key.
+
+On every authenticated request, the filter hashes the incoming raw key and does a DynamoDB point-read against the hash. If the hash isn't in the table, or the key is marked inactive, the request gets a 401.
+
+This is the AWS/GitHub PAT model: the raw key is shown once at creation and cannot be recovered. A compromised database reveals only hashes — useless without preimage attacks on 32-byte random inputs.
+
+Log safety: the filter logs only `keyPrefix` (first 8 characters of the raw key) for operational correlation, never the full key.
+
+### Cursor over offset pagination
+
+DynamoDB doesn't support offset-based pagination natively. `LIMIT N` on a scan or query returns up to N items, and `LastEvaluatedKey` tells you where to resume. There is no `OFFSET` concept — you can't skip N items efficiently.
+
+Offset pagination would require fetching and discarding the first N rows on every page-2+ request. That's expensive, and the results are unstable under concurrent writes (inserts shift offsets).
+
+Cursor pagination maps directly to DynamoDB's native model: serialize `LastEvaluatedKey` as a type-tagged JSON object (`{"S":"..."}`, `{"N":"..."}`), base64url-encode it (no padding), and return it as an opaque cursor in the response. Deserialize on the next request and pass as `exclusiveStartKey`. Cursors are stable — the same key always resumes from the same position regardless of inserts or deletes elsewhere in the table.
+
+Malformed cursors — truncated base64url, invalid JSON, wrong attribute types — are caught in `CursorCodec.decode()` and mapped to 400 via `InvalidCursorException` in `GlobalExceptionHandler`. No stack trace leaks to the client.
+
+### Per-key rate limiting with Resilience4j
+
+Rate limiters are created lazily in `RateLimitFilter` keyed by `apiKeyHash`. On first request from a given key, the filter creates a `RateLimiter` using the tier's configured limit (FREE: 60/min, PRO: 600/min) from `application.yml`. Subsequent requests hit the cached instance.
+
+Lazy creation means no startup cost for keys that never make a request. The registry is a `ConcurrentHashMap` — no synchronization on the hot path. A key that's deactivated mid-session will stop resolving in `ApiKeyAuthFilter` before it reaches the rate limit layer.
+
+The Resilience4j `RateLimiter` uses a fixed-window model per the 1-minute period. On `RequestNotPermitted`: set `Retry-After` to the seconds until the window resets, return 429 with a JSON body, and do not count the rejected request against the quota.
+
+Rate limit headers on every authenticated response — including 200s — so clients can implement preemptive throttling without having to hit a 429 first:
+- `X-RateLimit-Limit`: the tier's request ceiling
+- `X-RateLimit-Remaining`: permits remaining in the current window
+- `X-RateLimit-Reset`: unix timestamp when the window resets
+
 ## The Scaling Story
 
 Current scale: 400 markets, 10 wallets, ~5 alerts/minute, one Spring Boot process. Here's what breaks first on the way to 20,000 markets and 10,000 wallets.
@@ -226,7 +274,7 @@ At 10,000 wallets, `WalletPoller` can't cycle through them all in 60 seconds eve
 
 ## What I Would Do Differently on AWS
 
-See the [README](README.md#what-i-would-do-differently-on-real-aws) for the full treatment. In brief: Lambda + EventBridge for each detector, Step Functions with `Wait` states for the outcome evaluator, Kinesis for ordered wallet trade processing, X-Ray with adaptive sampling, DynamoDB auto-scaling, and CloudWatch alarm thresholds derived from the signal quality metrics.
+See the [README](README.md#roadmap) for the full treatment. In brief: Lambda + EventBridge for each detector, Step Functions with `Wait` states for the outcome evaluator, Kinesis for ordered wallet trade processing, X-Ray with adaptive sampling, DynamoDB auto-scaling, and CloudWatch alarm thresholds derived from the signal quality metrics.
 
 The core insight: every `@Scheduled` method in PolySign maps cleanly to a Lambda + EventBridge rule. The monolith design is right for local dev and portfolio demos. For production at scale, the individual components are already isolated enough in code to split into separate deployments with minimal refactoring.
 
