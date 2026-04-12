@@ -63,29 +63,10 @@ polysign:
       min-depth-at-mid: 100.0    # Tier 2/3 alerts dropped if depth below this (USDC)
     wallet:
       min-trade-usdc: 1000
-      consensus-min-wallets: 3
-      consensus-window-minutes: 30
-      consensus-high-freq-trade-count: 100
-      consensus-high-freq-min-usdc: 500
-      consensus-min-quality-sum: 9.0    # 3 wallets × score 3.0 = $100 avg trade each; winRate fixed at 0.5
-    news:
-      enabled: false
-      min-score: 0.55
-      min-volume-usdc: 100000
-      dedupe-window-minutes: 1440   # 24 hours — same article-market pair fires once per day
-      max-matches-per-article: 3    # cap: top 3 markets by score per article
-      keyword-prefilter-threshold: 0.15   # minimum keyword score to pass to sentiment analysis
-      sentiment-relevance-threshold: 0.3  # minimum |sentiment| to fire alert
-      sentiment-confidence-threshold: 0.5 # minimum confidence to fire alert
-      claude-model: "claude-sonnet-4-6"
-      claude-max-tokens: 150
-      claude-timeout-ms: 5000             # hard timeout on the API call
   dynamodb:
     tables:
       markets: markets
       price-snapshots: price_snapshots
-      articles: articles
-      market-news-matches: market_news_matches
       watched-wallets: watched_wallets
       wallet-trades: wallet_trades
       alerts: alerts
@@ -93,11 +74,9 @@ polysign:
       api-keys: api_keys
   sqs:
     queues:
-      news-to-process: news-to-process
       wallet-trades-to-process: wallet-trades-to-process
       alerts-to-notify: alerts-to-notify
     dlq:
-      news-to-process: news-to-process-dlq
       wallet-trades-to-process: wallet-trades-to-process-dlq
       alerts-to-notify: alerts-to-notify-dlq
     max-receive-count: 5
@@ -125,15 +104,6 @@ polysign:
       interval-ms: 60000
       initial-delay-ms: 90000
       lookback-hours: 48
-    rss:
-      interval-ms: 300000       # every 5 minutes
-      initial-delay-ms: 15000   # 15s after startup (markets table may still be populating)
-      feeds:
-        - https://feeds.bloomberg.com/markets/news.rss        # Bloomberg Markets — financial/market-moving news
-        - https://feeds.bbci.co.uk/news/world/rss.xml         # BBC World — geopolitical world news
-        - https://rss.politico.com/politics-news.xml          # Politico — political intelligence for election markets
-        - https://www.theguardian.com/world/rss               # The Guardian World — broad world coverage
-        - https://feeds.npr.org/1001/rss.xml                  # NPR News — US news (Reuters/AP are no longer public)
   auth:
     demo-key-enabled: true
     rate-limits:
@@ -143,8 +113,6 @@ polysign:
     min-precision: 0.40  # Raise back to 0.60 once price detector precision improves above 50%
   consumer:
     notification:
-      poll-interval-ms: 1000
-    news:
       poll-interval-ms: 1000
 
 springdoc:
@@ -197,26 +165,6 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 2
         automatic-transition-from-open-to-half-open-enabled: true
 
-      claude-api:
-        register-health-indicator: false
-        sliding-window-type: COUNT_BASED
-        sliding-window-size: 10
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 60s
-        permitted-number-of-calls-in-half-open-state: 2
-        automatic-transition-from-open-to-half-open-enabled: true
-
-      rss-news:
-        # Circuit breaker per feed host — opens if a feed is persistently down.
-        # A WARN log is emitted per failure; opening the breaker suppresses retries
-        # until the feed recovers (30s half-open probe).
-        register-health-indicator: false
-        sliding-window-type: COUNT_BASED
-        sliding-window-size: 5
-        failure-rate-threshold: 60
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 1
-        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       polymarket-gamma:
@@ -246,12 +194,6 @@ resilience4j:
         exponential-backoff-multiplier: 2.0
         exponential-max-wait-duration: 15s
 
-      rss-news:
-        max-attempts: 3
-        wait-duration: 2s
-        enable-exponential-backoff: true
-        exponential-backoff-multiplier: 2.0
-        exponential-max-wait-duration: 10s
   ratelimiter:
     instances:
       polymarket-clob:

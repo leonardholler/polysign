@@ -25,8 +25,6 @@
         <resilience4j.version>2.2.0</resilience4j.version>
         <!-- Logstash encoder for JSON-structured logging -->
         <logstash.logback.version>8.0</logstash.logback.version>
-        <!-- Rome RSS library -->
-        <rome.version>2.1.0</rome.version>
     </properties>
 
     <dependencyManagement>
@@ -104,13 +102,6 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
             <version>${logstash.logback.version}</version>
-        </dependency>
-
-        <!-- ===== RSS parsing ===== -->
-        <dependency>
-            <groupId>com.rometools</groupId>
-            <artifactId>rome</artifactId>
-            <version>${rome.version}</version>
         </dependency>
 
         <!-- ===== OpenAPI / Swagger UI ===== -->

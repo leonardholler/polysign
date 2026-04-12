@@ -4,12 +4,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-if [ ! -f .env ]; then
-    echo "ERROR: Create .env with ANTHROPIC_API_KEY first"
-    echo "  printf 'ANTHROPIC_API_KEY=sk-ant-...\n' > .env"
-    exit 1
-fi
-
 docker compose down 2>/dev/null || true
 docker compose up --build -d
 

@@ -20,7 +20,7 @@ import java.util.Map;
 /**
  * Idempotent infrastructure bootstrap — runs once at application startup (order=1).
  *
- * <p>Creates the 7 DynamoDB tables, 3 SQS DLQs + 3 main queues, and the S3 bucket
+ * <p>Creates the 7 DynamoDB tables, 2 SQS DLQs + 2 main queues, and the S3 bucket
  * if they do not already exist. Re-running (or restarting the app) is safe.
  *
  * <p>Uses the low-level {@link DynamoDbClient} for table creation so that GSIs,
@@ -109,32 +109,6 @@ public class BootstrapRunner implements ApplicationRunner {
         );
         enableTtl("price_snapshots", "expiresAt");
 
-        // ── articles ──────────────────────────────────────────────────────────
-        createTable(
-            "articles",
-            List.of(attr("articleId", ScalarAttributeType.S)),
-            List.of(key("articleId",  KeyType.HASH)),
-            List.of()
-        );
-
-        // ── market_news_matches ───────────────────────────────────────────────
-        // GSI articleId-index (PK=articleId) — enables reverse lookup "which
-        // markets matched this article?", used by Phase 7.5 backtesting.
-        createTable(
-            "market_news_matches",
-            List.of(
-                attr("marketId",  ScalarAttributeType.S),
-                attr("articleId", ScalarAttributeType.S)
-            ),
-            List.of(
-                key("marketId",  KeyType.HASH),
-                key("articleId", KeyType.RANGE)
-            ),
-            List.of(
-                gsi("articleId-index", key("articleId", KeyType.HASH))
-            )
-        );
-
         // ── watched_wallets ───────────────────────────────────────────────────
         createTable(
             "watched_wallets",
@@ -147,7 +121,7 @@ public class BootstrapRunner implements ApplicationRunner {
         // SK is txHash (not timestamp) — natural idempotency key; re-processing
         // the same on-chain trade from the Data API is a no-op (PutItem overwrite
         // on the same PK+SK writes identical data). timestamp is a non-key attribute
-        // that serves as the GSI SK for time-range queries in ConsensusDetector.
+        // that serves as the GSI SK for time-range queries.
         createTable(
             "wallet_trades",
             List.of(
@@ -267,11 +241,9 @@ public class BootstrapRunner implements ApplicationRunner {
     // ══════════════════════════════════════════════════════════════════════════
 
     private void bootstrapSqs() {
-        String newsToProcessDlqArn         = getOrCreateQueue("news-to-process-dlq",          null);
         String walletTradesToProcessDlqArn = getOrCreateQueue("wallet-trades-to-process-dlq", null);
         String alertsToNotifyDlqArn        = getOrCreateQueue("alerts-to-notify-dlq",         null);
 
-        getOrCreateQueue("news-to-process",          newsToProcessDlqArn);
         getOrCreateQueue("wallet-trades-to-process", walletTradesToProcessDlqArn);
         getOrCreateQueue("alerts-to-notify",         alertsToNotifyDlqArn);
     }
