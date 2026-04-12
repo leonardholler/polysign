@@ -26,12 +26,6 @@ public class DynamoConfig {
     @Value("${polysign.dynamodb.tables.price-snapshots:price_snapshots}")
     private String priceSnapshotsTable;
 
-    @Value("${polysign.dynamodb.tables.articles:articles}")
-    private String articlesTable;
-
-    @Value("${polysign.dynamodb.tables.market-news-matches:market_news_matches}")
-    private String marketNewsMatchesTable;
-
     @Value("${polysign.dynamodb.tables.watched-wallets:watched_wallets}")
     private String watchedWalletsTable;
 
@@ -55,16 +49,6 @@ public class DynamoConfig {
     @Bean
     public DynamoDbTable<PriceSnapshot> priceSnapshotsTable(DynamoDbEnhancedClient client) {
         return client.table(priceSnapshotsTable, TableSchema.fromBean(PriceSnapshot.class));
-    }
-
-    @Bean
-    public DynamoDbTable<Article> articlesTable(DynamoDbEnhancedClient client) {
-        return client.table(articlesTable, TableSchema.fromBean(Article.class));
-    }
-
-    @Bean
-    public DynamoDbTable<MarketNewsMatch> marketNewsMatchesTable(DynamoDbEnhancedClient client) {
-        return client.table(marketNewsMatchesTable, TableSchema.fromBean(MarketNewsMatch.class));
     }
 
     @Bean

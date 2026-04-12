@@ -76,22 +76,4 @@ public class HttpConfig {
                 .build();
     }
 
-    /**
-     * Anthropic Messages API — used by {@link com.polysign.detector.ClaudeSentimentService}
-     * for directional sentiment analysis of news articles.
-     * Requires {@code ANTHROPIC_API_KEY} env var; calls are rate-limited by NewsConsumer throughput.
-     */
-    @Bean("claudeApiClient")
-    public WebClient claudeApiClient() {
-        return WebClient.builder()
-                .baseUrl("https://api.anthropic.com")
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
-                .defaultHeader(HttpHeaders.USER_AGENT, "polysign/0.1 (monitoring-bot; not-a-trading-bot)")
-                .build();
-    }
-
-    // NOTE: RssPoller intentionally uses java.net.http.HttpClient (not WebClient) for both
-    // feed XML fetching and article HTML archiving. Rome's SyndFeedInput requires a blocking
-    // InputStream, which does not compose cleanly with reactive WebClient. All calls are still
-    // wrapped in the rss-news Resilience4j CB + retry — see CONVENTIONS.md for the exception.
 }

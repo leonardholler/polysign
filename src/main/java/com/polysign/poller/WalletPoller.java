@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.polysign.common.AppClock;
 import com.polysign.common.CorrelationId;
-import com.polysign.detector.ConsensusDetector;
 import com.polysign.detector.WalletActivityDetector;
 import com.polysign.model.Market;
 import com.polysign.model.WalletTrade;
@@ -77,7 +76,6 @@ public class WalletPoller {
     private final DynamoDbTable<WatchedWallet>  watchedWalletsTable;
     private final DynamoDbTable<WalletTrade>    walletTradesTable;
     private final WalletActivityDetector        activityDetector;
-    private final ConsensusDetector             consensusDetector;
     private final AppClock                      clock;
     private final ObjectMapper                  mapper;
     private final CircuitBreaker                circuitBreaker;
@@ -93,7 +91,6 @@ public class WalletPoller {
             DynamoDbTable<WatchedWallet> watchedWalletsTable,
             DynamoDbTable<WalletTrade> walletTradesTable,
             WalletActivityDetector activityDetector,
-            ConsensusDetector consensusDetector,
             AppClock clock,
             ObjectMapper mapper,
             CircuitBreakerRegistry cbRegistry,
@@ -107,7 +104,6 @@ public class WalletPoller {
         this.watchedWalletsTable = watchedWalletsTable;
         this.walletTradesTable   = walletTradesTable;
         this.activityDetector    = activityDetector;
-        this.consensusDetector   = consensusDetector;
         this.clock               = clock;
         this.mapper              = mapper;
         this.circuitBreaker      = cbRegistry.circuitBreaker(CB_NAME);
@@ -397,11 +393,6 @@ public class WalletPoller {
         } catch (Exception e) {
             log.warn("wallet_activity_check_failed txHash={} error={}", txHash, e.getMessage());
         }
-        try {
-            consensusDetector.checkConsensus(trade, detectorSlug);
-        } catch (Exception e) {
-            log.warn("consensus_check_failed txHash={} error={}", txHash, e.getMessage());
-        }
 
         return true;
     }
@@ -445,8 +436,8 @@ public class WalletPoller {
             }
         }
 
-        // 3. Not found — log structured WARN for Phase 7.5 audit, skip the trade.
-        log.warn("event=wallet_trade_unknown_market conditionId={} proxyWallet={} txHash={} slug={} timestamp={}",
+        // 3. Not found — market not in tracked universe (top 400 by 24h volume), skip the trade.
+        log.debug("event=wallet_trade_unknown_market conditionId={} proxyWallet={} txHash={} slug={} timestamp={}",
                 conditionId, proxyWallet, txHash, slug, tradeTimestamp);
         return null;
     }

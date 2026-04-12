@@ -82,7 +82,7 @@
 
 <!-- ── Signal Quality row ─────────────────────────────────────────────────── -->
 <div class="border-b border-gray-800 px-4 py-1.5">
-  <span class="text-xs text-gray-500">Signal Quality (7d, 1h) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · consensus —% · news —%</span></span>
+  <span class="text-xs text-gray-500">Signal Quality (7d, 1h) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · whale —%</span></span>
 </div>
 
 <!-- ── Signal Performance by Category ───────────────────────────────────── -->
@@ -215,13 +215,12 @@ function copyTopic() {
 // ── Alert rendering ───────────────────────────────────────────────────────────
 
 function typeLabel(type) {
-  return { price_movement:'PRICE', statistical_anomaly:'ANOMALY', consensus:'CONSENSUS',
-           news_correlation:'NEWS', wallet_activity:'WHALE' }[type] || type.toUpperCase();
+  return { price_movement:'PRICE', statistical_anomaly:'ANOMALY',
+           wallet_activity:'WHALE' }[type] || type.toUpperCase();
 }
 
 function typeColor(type) {
   return { price_movement:'text-blue-400', statistical_anomaly:'text-purple-400',
-           consensus:'text-emerald-400', news_correlation:'text-amber-400',
            wallet_activity:'text-pink-400' }[type] || 'text-gray-400';
 }
 
@@ -252,38 +251,6 @@ function renderAlertDetail(a) {
     if (!z) return a.title || '';
     return `<span class="text-purple-400">z=${parseFloat(z).toFixed(1)}</span>` +
            (mean && std ? ` <span class="text-gray-600">(σ ${parseFloat(std).toFixed(3)}, μ ${parseFloat(mean).toFixed(3)})</span>` : '');
-  }
-  if (a.type === 'news_correlation') {
-    const title = m.articleTitle || m.title || '';
-    if (m.scoringMethod === 'claude') {
-      const dir = m.sentimentDirection === 'YES' ? 'bullish' : 'bearish';
-      const pct = Math.abs(Math.round(parseFloat(m.sentimentScore || 0) * 100));
-      const col = m.sentimentDirection === 'YES' ? 'text-emerald-400' : 'text-red-400';
-      return (title ? `<span class="text-gray-400">${truncate(title, 50)}</span> ` : '') +
-             `<span class="text-[9px] font-mono bg-gray-800 text-gray-400 rounded px-1 py-0.5">AI</span> ` +
-             `<span class="${col}">${dir} ${pct}%</span>` +
-             (m.source ? ` <span class="text-gray-600">${m.source}</span>` : '');
-    }
-    const score = m.score || m.keywordScore;
-    return (title ? `<span class="text-gray-400">${truncate(title, 55)}</span> ` : '') +
-           (score ? `<span class="text-gray-600">match: ${Math.round(parseFloat(score)*100)}%</span>` : '');
-  }
-  if (a.type === 'consensus') {
-    const wc  = m.walletCount || '?';
-    const dir = (m.direction || '').toUpperCase();
-    const out = (m.outcome || '').toUpperCase();
-    const tot = m.totalSizeUsdc ? fmtUsd(parseFloat(m.totalSizeUsdc)) : '';
-    const col = dir === 'BUY' ? 'text-emerald-400' : 'text-red-400';
-    let walletBreakdown = '';
-    if (m.walletDetails) {
-      const parts = m.walletDetails.split('|').map(p => {
-        const segs = p.split(':');
-        return segs[0] + ' ' + fmtUsd(parseFloat(segs[2] || 0));
-      });
-      walletBreakdown = `<br><span class="text-gray-500 text-[10px]">${parts.join(' · ')}</span>`;
-    }
-    return `<span class="${col}">${wc} wallets ${dir} ${out}${tot ? ' — ' + tot + ' total' : ''}</span>` +
-           walletBreakdown;
   }
   if (a.type === 'wallet_activity') {
     const alias = m.alias || m.walletAlias || '';
@@ -373,10 +340,9 @@ async function loadAlerts() {
       const pmLink = g.link || (g.question
         ? `https://polymarket.com/search?query=${encodeURIComponent(g.question)}` : 'https://polymarket.com');
 
-      // Auto-expand groups with any consensus or critical alert
-      const hasCritical  = g.alerts.some(a => a.severity === 'critical');
-      const hasConsensus = g.alerts.some(a => a.type === 'consensus');
-      if (hasCritical || hasConsensus) expandedMarkets.add(safeId);
+      // Auto-expand groups with any critical alert
+      const hasCritical = g.alerts.some(a => a.severity === 'critical');
+      if (hasCritical) expandedMarkets.add(safeId);
 
       const isExpanded = expandedMarkets.has(safeId);
       const priceNum = g.price != null ? g.price : null;
@@ -601,7 +567,7 @@ async function loadStats() {
     const idx = {};
     (d.detectors || []).forEach(x => { idx[x.type] = x; });
     document.getElementById('sq-summary').textContent =
-      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · consensus ${fmtPct(idx.consensus?.precision)} · news ${fmtPct(idx.news_correlation?.precision)}`;
+      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · whale ${fmtPct(idx.wallet_activity?.precision)}`;
   } catch (_) {}
 })();
 

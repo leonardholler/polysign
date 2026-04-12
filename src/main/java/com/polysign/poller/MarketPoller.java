@@ -7,7 +7,6 @@ import com.polysign.common.AppStats;
 import com.polysign.common.CategoryClassifier;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Market;
-import com.polysign.processing.KeywordExtractor;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.Retry;
@@ -88,7 +87,6 @@ public class MarketPoller {
     private final ObjectMapper          mapper;
     private final CircuitBreaker        circuitBreaker;
     private final Retry                 retry;
-    private final KeywordExtractor      keywordExtractor;
     private final AppStats               appStats;
     private final AtomicLong            trackedCount = new AtomicLong(0);
 
@@ -100,7 +98,6 @@ public class MarketPoller {
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
             MeterRegistry meterRegistry,
-            KeywordExtractor keywordExtractor,
             AppStats appStats,
             @Value("${polysign.pollers.market.min-volume-usdc:10000}")    double minVolumeUsdc,
             @Value("${polysign.pollers.market.min-volume-24h-usdc:10000}") double minVolume24hUsdc,
@@ -123,7 +120,6 @@ public class MarketPoller {
         this.marketsTable     = marketsTable;
         this.clock            = clock;
         this.mapper           = mapper;
-        this.keywordExtractor = keywordExtractor;
         this.appStats         = appStats;
         this.circuitBreaker   = cbRegistry.circuitBreaker(CB_NAME);
         this.retry            = retryRegistry.retry(CB_NAME);
@@ -361,8 +357,6 @@ public class MarketPoller {
             log.info("market_category_other marketId={} question={}", marketId, question);
         }
 
-        Set<String> keywords = keywordExtractor.extract(question);
-
         Key key = Key.builder().partitionValue(marketId).build();
         Market existing  = marketsTable.getItem(key);
         // Fix 6: skip essentially-resolved markets (price near 0 or 1 means effectively decided).
@@ -386,7 +380,6 @@ public class MarketPoller {
         market.setVolume(stringOrNull(item, "volume"));
         market.setVolume24h(stringOrNull(item, "volume24hr")); // Gamma field name is volume24hr
         market.setOutcomes(outcomeList);
-        market.setKeywords(keywords);
         market.setIsWatched(isWatched);
         market.setUpdatedAt(clock.nowIso());
         market.setYesTokenId(yesTokenId);

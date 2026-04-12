@@ -23,8 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Metrics emitted:
  * <ul>
- *   <li>{@code polysign.sqs.queue.depth} (gauge, tag: queue) — 3 main queues</li>
- *   <li>{@code polysign.dlq.depth} (gauge, tag: queue) — 3 DLQs</li>
+ *   <li>{@code polysign.sqs.queue.depth} (gauge, tag: queue) — 2 main queues</li>
+ *   <li>{@code polysign.dlq.depth} (gauge, tag: queue) — 2 DLQs</li>
  * </ul>
  */
 @Component
@@ -35,10 +35,8 @@ public class SqsQueueMetrics {
     private final SqsClient sqsClient;
 
     // Queue names (resolved from config at startup)
-    private final String newsQueue;
     private final String walletQueue;
     private final String alertsQueue;
-    private final String newsDlq;
     private final String walletDlq;
     private final String alertsDlq;
 
@@ -48,23 +46,19 @@ public class SqsQueueMetrics {
     public SqsQueueMetrics(
             SqsClient sqsClient,
             MeterRegistry meterRegistry,
-            @Value("${polysign.sqs.queues.news-to-process:news-to-process}")                   String newsQueue,
             @Value("${polysign.sqs.queues.wallet-trades-to-process:wallet-trades-to-process}") String walletQueue,
             @Value("${polysign.sqs.queues.alerts-to-notify:alerts-to-notify}")                 String alertsQueue,
-            @Value("${polysign.sqs.dlq.news-to-process:news-to-process-dlq}")                  String newsDlq,
             @Value("${polysign.sqs.dlq.wallet-trades-to-process:wallet-trades-to-process-dlq}") String walletDlq,
             @Value("${polysign.sqs.dlq.alerts-to-notify:alerts-to-notify-dlq}")               String alertsDlq) {
 
         this.sqsClient   = sqsClient;
-        this.newsQueue   = newsQueue;
         this.walletQueue = walletQueue;
         this.alertsQueue = alertsQueue;
-        this.newsDlq     = newsDlq;
         this.walletDlq   = walletDlq;
         this.alertsDlq   = alertsDlq;
 
         // Main queues
-        for (String q : new String[]{newsQueue, walletQueue, alertsQueue}) {
+        for (String q : new String[]{walletQueue, alertsQueue}) {
             final String name = q;
             Gauge.builder("polysign.sqs.queue.depth", depthCache,
                             m -> m.getOrDefault(name, 0L).doubleValue())
@@ -74,7 +68,7 @@ public class SqsQueueMetrics {
         }
 
         // DLQs
-        for (String q : new String[]{newsDlq, walletDlq, alertsDlq}) {
+        for (String q : new String[]{walletDlq, alertsDlq}) {
             final String name = q;
             Gauge.builder("polysign.dlq.depth", depthCache,
                             m -> m.getOrDefault(name, 0L).doubleValue())
@@ -91,8 +85,8 @@ public class SqsQueueMetrics {
     @Scheduled(fixedDelay = 60_000, initialDelay = 35_000)
     public void refresh() {
         for (String queueName : new String[]{
-                newsQueue, walletQueue, alertsQueue,
-                newsDlq, walletDlq, alertsDlq}) {
+                walletQueue, alertsQueue,
+                walletDlq, alertsDlq}) {
             try {
                 String url = sqsClient.getQueueUrl(r -> r.queueName(queueName)).queueUrl();
                 String raw = sqsClient.getQueueAttributes(r -> r

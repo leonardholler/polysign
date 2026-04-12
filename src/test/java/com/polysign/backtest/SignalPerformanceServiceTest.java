@@ -37,10 +37,9 @@ class SignalPerformanceServiceTest {
     }
 
     /**
-     * Seed 20 fake AlertOutcome records:
+     * Seed 15 fake AlertOutcome records:
      *  - 8 price_movement at t1h: 5 correct, 2 wrong, 1 flat (null wasCorrect)
      *  - 7 statistical_anomaly at t1h: 3 correct, 3 wrong, 1 flat
-     *  - 5 news_correlation at t1h: all wasCorrect=null
      */
     @Test
     void precisionAndCountsAreComputedCorrectly() {
@@ -55,9 +54,6 @@ class SignalPerformanceServiceTest {
         for (int i = 0; i < 3; i++) outcomes.add(outcome("statistical_anomaly", "t1h", true,  "0.04"));
         for (int i = 0; i < 3; i++) outcomes.add(outcome("statistical_anomaly", "t1h", false, "-0.02"));
         outcomes.add(outcome("statistical_anomaly", "t1h", null, "0.001")); // flat
-
-        // news_correlation: 5 with wasCorrect=null
-        for (int i = 0; i < 5; i++) outcomes.add(outcome("news_correlation", "t1h", null, "0.03"));
 
         TestableService service = new TestableService(clock, outcomes);
         PerformanceResponse resp = service.getPerformance(null, "t1h", SINCE);
@@ -75,12 +71,6 @@ class SignalPerformanceServiceTest {
         assertThat(sa.count()).isEqualTo(7);
         // precision = 3 / (3+3) = 0.5
         assertThat(sa.precision()).isCloseTo(0.5, within(1e-9));
-
-        DetectorPerformance nc = findType(resp, "news_correlation");
-        assertThat(nc).isNotNull();
-        assertThat(nc.count()).isEqualTo(5);
-        // precision = null (0 in denominator — all wasCorrect=null)
-        assertThat(nc.precision()).isNull();
     }
 
     @Test

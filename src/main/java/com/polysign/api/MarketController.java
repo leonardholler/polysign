@@ -2,7 +2,6 @@ package com.polysign.api;
 
 import com.polysign.common.AppClock;
 import com.polysign.model.Market;
-import com.polysign.model.MarketNewsMatch;
 import com.polysign.model.PriceSnapshot;
 import com.polysign.model.WalletTrade;
 import org.slf4j.Logger;
@@ -29,7 +28,6 @@ import java.util.stream.StreamSupport;
  *   <li>GET /api/markets?category=&watchedOnly=&limit=</li>
  *   <li>GET /api/markets/{marketId}</li>
  *   <li>GET /api/markets/{marketId}/price-history?windowMinutes=60</li>
- *   <li>GET /api/markets/{marketId}/news</li>
  *   <li>GET /api/markets/{marketId}/whale-trades</li>
  *   <li>POST /api/markets/{marketId}/watch</li>
  * </ul>
@@ -40,21 +38,18 @@ public class MarketController {
 
     private static final Logger log = LoggerFactory.getLogger(MarketController.class);
 
-    private final DynamoDbTable<Market>          marketsTable;
-    private final DynamoDbTable<PriceSnapshot>   snapshotsTable;
-    private final DynamoDbTable<MarketNewsMatch> newsMatchesTable;
-    private final DynamoDbTable<WalletTrade>     walletTradesTable;
-    private final AppClock                       clock;
+    private final DynamoDbTable<Market>        marketsTable;
+    private final DynamoDbTable<PriceSnapshot> snapshotsTable;
+    private final DynamoDbTable<WalletTrade>   walletTradesTable;
+    private final AppClock                     clock;
 
     public MarketController(
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<PriceSnapshot> priceSnapshotsTable,
-            DynamoDbTable<MarketNewsMatch> marketNewsMatchesTable,
             DynamoDbTable<WalletTrade> walletTradesTable,
             AppClock clock) {
         this.marketsTable      = marketsTable;
         this.snapshotsTable    = priceSnapshotsTable;
-        this.newsMatchesTable  = marketNewsMatchesTable;
         this.walletTradesTable = walletTradesTable;
         this.clock             = clock;
     }
@@ -125,18 +120,6 @@ public class MarketController {
                 .items()
                 .stream()
                 .map(s -> new PriceHistoryPoint(s.getTimestamp(), s.getMidpoint()))
-                .toList();
-    }
-
-    // ── GET /api/markets/{marketId}/news ─────────────────────────────────────
-
-    @GetMapping("/{marketId}/news")
-    public List<MarketNewsMatch> getMarketNews(@PathVariable String marketId) {
-        QueryConditional qc = QueryConditional.keyEqualTo(
-                Key.builder().partitionValue(marketId).build());
-        return newsMatchesTable.query(r -> r.queryConditional(qc).scanIndexForward(false))
-                .items()
-                .stream()
                 .toList();
     }
 

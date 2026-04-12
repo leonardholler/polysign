@@ -4,7 +4,6 @@ import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Set;
 
 /**
  * DynamoDB "markets" table.
@@ -28,7 +27,6 @@ public class Market {
     private String  volume;       // lifetime total volume
     private String  volume24h;    // 24-hour volume (Gamma: volume24hr)
     private List<String> outcomes;
-    private Set<String>  keywords;
     private Boolean isWatched;
     private String  updatedAt;
     private String  yesTokenId;   // clobTokenIds[0] — YES outcome token for CLOB calls
@@ -58,7 +56,6 @@ public class Market {
     public String       getVolume()        { return volume;        }
     public String       getVolume24h()     { return volume24h;     }
     public List<String> getOutcomes()      { return outcomes;      }
-    public Set<String>  getKeywords()      { return keywords;      }
     public Boolean      getIsWatched()     { return isWatched;     }
     public String       getYesTokenId()    { return yesTokenId;    }
     public String       getClobTokenIds()  { return clobTokenIds;  }
@@ -79,7 +76,6 @@ public class Market {
     public void setVolume(String volume)              { this.volume       = volume;       }
     public void setVolume24h(String volume24h)        { this.volume24h    = volume24h;    }
     public void setOutcomes(List<String> outcomes)    { this.outcomes     = outcomes;     }
-    public void setKeywords(Set<String> keywords)     { this.keywords     = keywords;     }
     public void setIsWatched(Boolean isWatched)       { this.isWatched    = isWatched;    }
     public void setUpdatedAt(String updatedAt)        { this.updatedAt    = updatedAt;    }
     public void setYesTokenId(String yesTokenId)      { this.yesTokenId   = yesTokenId;   }

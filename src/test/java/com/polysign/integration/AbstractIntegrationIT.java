@@ -7,9 +7,7 @@ import com.polysign.metrics.SqsQueueMetrics;
 import com.polysign.notification.NotificationConsumer;
 import com.polysign.poller.MarketPoller;
 import com.polysign.poller.PricePoller;
-import com.polysign.poller.RssPoller;
 import com.polysign.poller.WalletPoller;
-import com.polysign.processing.NewsConsumer;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
@@ -54,10 +52,8 @@ import org.testcontainers.utility.DockerImageName;
         MarketPoller.class,
         PricePoller.class,
         WalletPoller.class,
-        RssPoller.class,
         // ── SQS consumers ────────────────────────────────────────────────────
         NotificationConsumer.class,
-        NewsConsumer.class,
         // ── Phase 9 metrics schedulers ───────────────────────────────────────
         SqsQueueMetrics.class,
         SignalQualityMetrics.class,
