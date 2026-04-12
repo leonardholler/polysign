@@ -90,6 +90,7 @@ polysign:
       wallet-trades: wallet_trades
       alerts: alerts
       alert-outcomes: alert_outcomes
+      api-keys: api_keys
   sqs:
     queues:
       news-to-process: news-to-process
@@ -133,6 +134,11 @@ polysign:
         - https://rss.politico.com/politics-news.xml          # Politico — political intelligence for election markets
         - https://www.theguardian.com/world/rss               # The Guardian World — broad world coverage
         - https://feeds.npr.org/1001/rss.xml                  # NPR News — US news (Reuters/AP are no longer public)
+  auth:
+    demo-key-enabled: true
+    rate-limits:
+      free: 60
+      pro: 600
   notification:
     min-precision: 0.40  # Raise back to 0.60 once price detector precision improves above 50%
   consumer:
@@ -140,6 +146,12 @@ polysign:
       poll-interval-ms: 1000
     news:
       poll-interval-ms: 1000
+
+springdoc:
+  api-docs:
+    path: /api/docs
+  swagger-ui:
+    path: /api/docs/ui
 
 logging:
   level:

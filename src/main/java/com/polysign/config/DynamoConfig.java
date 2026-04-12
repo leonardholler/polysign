@@ -44,6 +44,9 @@ public class DynamoConfig {
     @Value("${polysign.dynamodb.tables.alert-outcomes:alert_outcomes}")
     private String alertOutcomesTable;
 
+    @Value("${polysign.dynamodb.tables.api-keys:api_keys}")
+    private String apiKeysTable;
+
     @Bean
     public DynamoDbTable<Market> marketsTable(DynamoDbEnhancedClient client) {
         return client.table(marketsTable, TableSchema.fromBean(Market.class));
@@ -82,5 +85,10 @@ public class DynamoConfig {
     @Bean
     public DynamoDbTable<AlertOutcome> alertOutcomesTable(DynamoDbEnhancedClient client) {
         return client.table(alertOutcomesTable, TableSchema.fromBean(AlertOutcome.class));
+    }
+
+    @Bean
+    public DynamoDbTable<ApiKey> apiKeysTable(DynamoDbEnhancedClient client) {
+        return client.table(apiKeysTable, TableSchema.fromBean(ApiKey.class));
     }
 }

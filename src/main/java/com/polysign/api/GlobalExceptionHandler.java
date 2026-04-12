@@ -1,5 +1,6 @@
 package com.polysign.api;
 
+import com.polysign.api.v1.InvalidCursorException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.net.URI;
+import java.util.Map;
 
 /**
  * Global exception handler that returns RFC 7807 application/problem+json
@@ -20,6 +22,11 @@ import java.net.URI;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(InvalidCursorException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidCursor(InvalidCursorException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", "Invalid cursor"));
+    }
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ProblemDetail> handleResponseStatus(ResponseStatusException ex) {

@@ -113,6 +113,13 @@
             <version>${rome.version}</version>
         </dependency>
 
+        <!-- ===== OpenAPI / Swagger UI ===== -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.8.8</version>
+        </dependency>
+
         <!-- ===== Lombok ===== -->
         <!-- Spring Boot 3.5.5 parent BOM manages the Lombok version.
              The BOM ships a version compatible with JDK 25.

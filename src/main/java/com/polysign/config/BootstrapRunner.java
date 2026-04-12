@@ -187,6 +187,15 @@ public class BootstrapRunner implements ApplicationRunner {
         );
         enableTtl("alerts", "expiresAt");
 
+        // ── api_keys ──────────────────────────────────────────────────────────
+        // PK: apiKeyHash (S) — SHA-256 hex digest. Raw key is never stored.
+        createTable(
+            "api_keys",
+            List.of(attr("apiKeyHash", ScalarAttributeType.S)),
+            List.of(key("apiKeyHash", KeyType.HASH)),
+            List.of()
+        );
+
         // ── alert_outcomes ────────────────────────────────────────────────────
         // No TTL — outcomes are cheap and the whole point is long-term measurement.
         // GSI type-firedAt-index enables per-detector aggregation queries.
