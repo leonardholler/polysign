@@ -69,6 +69,7 @@ polysign:
       consensus-high-freq-min-usdc: 500
       consensus-min-quality-sum: 9.0    # 3 wallets × score 3.0 = $100 avg trade each; winRate fixed at 0.5
     news:
+      enabled: false
       min-score: 0.55
       min-volume-usdc: 100000
       dedupe-window-minutes: 1440   # 24 hours — same article-market pair fires once per day

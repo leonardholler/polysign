@@ -71,6 +71,7 @@ public class NewsCorrelationDetector {
     private final NewsMatcher                    newsMatcher;
     private final ClaudeSentimentService         sentimentService;
     private final AppClock                       clock;
+    private final boolean                        enabled;
     private final double                         minScore;
     private final double                         minVolumeUsdc;
     private final Duration                       dedupeWindow;
@@ -96,6 +97,7 @@ public class NewsCorrelationDetector {
             NewsMatcher                    newsMatcher,
             ClaudeSentimentService         sentimentService,
             AppClock                       clock,
+            @Value("${polysign.detectors.news.enabled:false}")                        boolean enabled,
             @Value("${polysign.detectors.news.min-score:0.75}")                      double minScore,
             @Value("${polysign.detectors.news.min-volume-usdc:100000}")              double minVolumeUsdc,
             @Value("${polysign.detectors.news.dedupe-window-minutes:1440}")          int    dedupeWindowMinutes,
@@ -103,6 +105,7 @@ public class NewsCorrelationDetector {
             @Value("${polysign.detectors.news.keyword-prefilter-threshold:0.3}")     double keywordPrefilterThreshold,
             @Value("${polysign.detectors.news.sentiment-relevance-threshold:0.3}")   double sentimentRelevanceThreshold,
             @Value("${polysign.detectors.news.sentiment-confidence-threshold:0.5}")  double sentimentConfidenceThreshold) {
+        this.enabled                     = enabled;
         this.marketsTable                = marketsTable;
         this.matchesTable                = matchesTable;
         this.alertService                = alertService;
@@ -138,6 +141,10 @@ public class NewsCorrelationDetector {
      * @param article fully populated article with keywords
      */
     public void checkMarkets(Article article) {
+        if (!enabled) {
+            log.debug("event=news_detector_disabled");
+            return;
+        }
         List<Market> markets = getOrLoadMarkets();
 
         // Pre-score all markets by keyword quality; iterate best-first so the rate-limited

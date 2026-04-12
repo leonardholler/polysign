@@ -35,6 +35,7 @@ public class NewsConsumer {
     private static final int SQS_LONG_POLL_SECONDS = 20;
     private static final int SQS_MAX_MESSAGES      = 10;
 
+    private final boolean                 enabled;
     private final SqsClient               sqsClient;
     private final DynamoDbTable<Article>  articlesTable;
     private final NewsCorrelationDetector newsCorrelationDetector;
@@ -47,7 +48,9 @@ public class NewsConsumer {
             SqsClient sqsClient,
             DynamoDbTable<Article>  articlesTable,
             NewsCorrelationDetector newsCorrelationDetector,
-            @Value("${polysign.sqs.queues.news-to-process:news-to-process}") String newsQueueName) {
+            @Value("${polysign.sqs.queues.news-to-process:news-to-process}") String newsQueueName,
+            @Value("${polysign.detectors.news.enabled:false}") boolean enabled) {
+        this.enabled                 = enabled;
         this.sqsClient               = sqsClient;
         this.articlesTable           = articlesTable;
         this.newsCorrelationDetector = newsCorrelationDetector;
@@ -60,6 +63,10 @@ public class NewsConsumer {
      */
     @Scheduled(fixedDelayString = "${polysign.consumer.news.poll-interval-ms:1000}")
     public void poll() {
+        if (!enabled) {
+            log.debug("event=news_consumer_disabled");
+            return;
+        }
         var messages = sqsClient.receiveMessage(
                 ReceiveMessageRequest.builder()
                         .queueUrl(resolveQueueUrl())

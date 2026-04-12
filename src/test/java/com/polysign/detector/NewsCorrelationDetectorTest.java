@@ -213,6 +213,19 @@ class NewsCorrelationDetectorTest {
         assertThat(result.sentimentDirection()).isNull();
     }
 
+    // ── Test: feature flag disabled → no work done ───────────────────────────
+
+    @Test
+    void whenDisabledCheckMarketsDoesNothing() {
+        TestableDetector disabled = new TestableDetector(
+                false, alertService, matchesTable, sentimentService, newsMatcher,
+                new AppClock());
+        disabled.checkMarkets(article("a99", "Major political event shakes markets"));
+        verify(alertService, never()).tryCreate(any());
+        verify(matchesTable, never()).putItem(any(MarketNewsMatch.class));
+        verifyNoInteractions(sentimentService);
+    }
+
     // ── Testable subclass ─────────────────────────────────────────────────────
 
     static class TestableDetector extends NewsCorrelationDetector {
@@ -223,8 +236,17 @@ class NewsCorrelationDetectorTest {
                          ClaudeSentimentService sentimentService,
                          NewsMatcher newsMatcher,
                          AppClock clock) {
+            this(true, alertService, matchesTable, sentimentService, newsMatcher, clock);
+        }
+
+        TestableDetector(boolean enabled,
+                         AlertService alertService,
+                         DynamoDbTable<MarketNewsMatch> matchesTable,
+                         ClaudeSentimentService sentimentService,
+                         NewsMatcher newsMatcher,
+                         AppClock clock) {
             super(null, matchesTable, alertService, newsMatcher, sentimentService, clock,
-                  0.75, 100_000.0, 1440, 3, 0.3, 0.3, 0.5);
+                  enabled, 0.75, 100_000.0, 1440, 3, 0.3, 0.3, 0.5);
             // Market with known keywords — market(id, question) helper
             this.markets = List.of(market("m1", "Will Trump win the 2026 election?"));
         }

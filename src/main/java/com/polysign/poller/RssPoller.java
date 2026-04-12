@@ -77,6 +77,7 @@ public class RssPoller {
     private static final Logger log = LoggerFactory.getLogger(RssPoller.class);
     private static final String R4J_NAME = "rss-news";
 
+    private final boolean                enabled;
     private final List<String>           feedUrls;
     private final DynamoDbTable<Article> articlesTable;
     private final S3Client               s3Client;
@@ -101,8 +102,10 @@ public class RssPoller {
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
             @Value("${polysign.s3.archives-bucket:polysign-archives}") String archivesBucket,
-            @Value("${polysign.sqs.queues.news-to-process:news-to-process}") String newsQueueName) {
+            @Value("${polysign.sqs.queues.news-to-process:news-to-process}") String newsQueueName,
+            @Value("${polysign.detectors.news.enabled:false}") boolean enabled) {
 
+        this.enabled          = enabled;
         this.feedUrls         = rssProperties.feeds();
         this.articlesTable    = articlesTable;
         this.s3Client         = s3Client;
@@ -120,6 +123,10 @@ public class RssPoller {
         initialDelayString = "${polysign.pollers.rss.initial-delay-ms:15000}"
     )
     public void pollFeeds() {
+        if (!enabled) {
+            log.debug("event=rss_poller_disabled");
+            return;
+        }
         int totalNew = 0;
         for (String feedUrl : feedUrls) {
             try (var ignored = CorrelationId.set("rss-" + feedUrl.hashCode())) {
