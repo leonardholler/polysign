@@ -24,8 +24,6 @@ Every table was designed around a specific access pattern. There are no tables t
 |---|---|---|---|---|
 | `markets` | `marketId` | — | Single-key get by ID; full scan for detector loop; category GSI for filtered API queries | PK-only because markets are always fetched individually or scanned in bulk |
 | `price_snapshots` | `marketId` | `timestamp` (ISO-8601) | Range query: "all snapshots for market X in the last 60 minutes" | Composite key enables efficient time-range queries per market. 30-day TTL auto-cleans old data. |
-| `articles` | `articleId` (SHA-256 of URL) | — | Single-key get for dedup check; scan for recent articles | SHA-256 of URL makes article dedup a single conditional write |
-| `market_news_matches` | `marketId` | `articleId` | "All news matches for market X" for the dashboard | Denormalized `articleTitle` + `articleUrl` avoid N+1 lookups |
 | `watched_wallets` | `address` | — | Full scan (10 rows); single-key get on poll | Small table, full scan is cheaper than a GSI |
 | `wallet_trades` | `address` | `txHash` | Per-wallet trade history; `marketId-timestamp-index` GSI for consensus window query | SK=`txHash` gives natural idempotency — same trade re-processed is an overwrite with identical data |
 | `alerts` | `alertId` (SHA-256) | `createdAt` | Conditional write for idempotency; `marketId-createdAt-index` GSI for per-market queries and convergence checks | Deterministic PK + deterministic SK = same DynamoDB slot on every write attempt. 30-day TTL. |
@@ -118,7 +116,7 @@ Kafka also requires a broker cluster. SQS is serverless, zero-maintenance, and e
 
 ## Resilience4j Strategy
 
-Six outbound call sites, each wrapped in a circuit breaker + retry. One rate limiter.
+Five outbound call sites across four unique circuit breakers, each wrapped in a retry policy. One rate limiter.
 
 | Call site | CB instance | Retry | Rate limiter | Notes |
 |---|---|---|---|---|
@@ -127,11 +125,8 @@ Six outbound call sites, each wrapped in a circuit breaker + retry. One rate lim
 | WalletPoller → Data API | `polymarket-data` | 3 attempts, exp backoff 1s–10s | — | Per-wallet catch |
 | OrderbookService → CLOB /book | `polymarket-clob` | None (500ms budget) | Shared with PricePoller | One shot — retry doesn't fit in 500ms. Alert fires with null book fields on failure. |
 | NotificationConsumer → ntfy.sh | `ntfy` | 3 attempts, exp backoff 2s–15s | — | CB window is 10 calls (smaller — ntfy traffic is lower) |
-| RssPoller → RSS feeds | `rss-news` | 3 attempts, exp backoff 2s–10s | — | Uses `java.net.http.HttpClient`, not WebClient (Rome needs a blocking `InputStream`). Still CB + retry wrapped. |
 
 Circuit breaker config: 20-call sliding window (10 for ntfy), 50% failure threshold, 30-second open state, auto half-open. When a breaker opens, the caller gets a `CallNotPermittedException` that the per-item catch swallows. The next half-open probe fires 30 seconds later.
-
-The `rss-news` exception is intentional. Rome's `SyndFeedInput.build()` takes an `InputStream`. WebClient is reactive and doesn't expose one without `.block()` gymnastics that defeat the purpose. Using `java.net.http.HttpClient` directly is simpler and still gets the same resilience wrapping — it's just imperative instead of reactive.
 
 ## Failure Modes
 
@@ -145,6 +140,20 @@ The `rss-news` exception is intentional. Rome's `SyndFeedInput.build()` takes an
 | Poison message in SQS | Message exceeds maxReceiveCount (5). Moves to DLQ. Pipeline continues. | One alert never notifies. DLQ depth alarm fires. | Investigate the DLQ message body, fix the root cause, redrive. |
 
 ## Signal Quality Methodology
+
+### Observed Results
+
+As of April 2026 (n from alert_outcomes, t1h horizon unless noted):
+
+| Category | Precision t1h | Precision t24h | n (t1h) | Notes |
+|---|---|---|---|---|
+| sports | 60% | 56% | ~101 | Above-chance; markets don't fully price in momentum during live events |
+| politics | 17% | 32% | 55 | Real finding — scoring verified correct. Markets mean-revert after detected moves. |
+| crypto | — | — | 14 | Insufficient sample size; no conclusion drawn |
+
+Politics result confirmed by the `PoliticsAuditIT` audit (April 2026): the scoring formula (`wasCorrect = directionPredicted == directionRealized`) has no sign flip or inversion. 17% at t1h is genuine low precision — politics prediction markets are efficient within a 1-hour window.
+
+The sports result is the system's strongest validated signal. 60% precision at n≈101 is statistically distinguishable from random (p < 0.01, two-sided binomial test against 50% null).
 
 ### What precision means here
 
@@ -196,7 +205,7 @@ Instead, methods that touch DynamoDB (like `querySnapshots()` in `PriceMovementD
 
 ### The two-constructor pattern
 
-`ConsensusDetector` has two constructors: a public one annotated `@Autowired` that Spring uses for dependency injection, and a package-private one that tests call directly with mocks. This avoids the fragility of `@InjectMocks` while keeping the Spring wiring clean.
+`AlertOutcomeEvaluator` has two constructors: a public one annotated `@Autowired` that Spring uses for dependency injection, and a package-private one that tests call directly. The package-private constructor sets all DynamoDB table fields to null because tests override the methods that touch those tables. This avoids the fragility of `@InjectMocks` while keeping the Spring wiring clean.
 
 ### AppClock for deterministic testing
 
@@ -287,3 +296,9 @@ Three chaos experiments verify the failure paths described above:
 2. **DLQ alarm on ntfy.sh failure**: simulate ntfy.sh returning 500 by pointing `ntfy.base-url` at a local 500 endpoint. After 5 delivery attempts, the SQS message moves to the DLQ. The `polysign.dlq.depth` gauge increments to 1, triggering the CloudWatch alarm. The pipeline continues processing other alerts normally. Fix: redrive the DLQ message after restoring the endpoint.
 
 3. **Idempotent restart mid-enqueue**: kill the process immediately after a `PriceMovementDetector` alert write but before the SQS enqueue commits. Restart. The detector re-fires the same event — same deterministic `alertId` + `createdAt` → `attribute_not_exists` condition rejects the duplicate write → alert count stays at 1 → SQS enqueue proceeds once. Zero duplicate notifications.
+
+## Future Work
+
+**News correlation (deferred)**: Keyword-matching against RSS headlines proved too noisy for reliable signal correlation. A useful implementation would use sentence embeddings (e.g., a fine-tuned MPNet model) to compute cosine similarity between market questions and article headlines, with a corpus-calibrated threshold. Deferred until there's evidence the RSS data quality justifies the operational overhead of an embedding pipeline.
+
+**Consensus detection (deferred)**: Checking whether multiple wallets traded the same market in the same direction within a rolling window was promising in design but produced an insufficient sample to evaluate at the current universe size (400 markets, 10 wallets). The denominator is too small — most markets see one or zero watched-wallet trades per day. Meaningful evaluation requires either a larger watched-wallet set (100+) or a Polymarket-native whale-list API. Deferred pending market universe expansion.
