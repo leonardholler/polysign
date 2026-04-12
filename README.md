@@ -2,6 +2,8 @@
 
 PolySign is an anomaly-detection and signal-quality system for Polymarket prediction markets. It polls 400 markets every 60 seconds, runs three independent detectors against the price and trade stream, and surfaces alerts through a cursor-paginated REST API and push notifications. The non-obvious part: every alert is scored at T+15m, T+1h, and T+24h against the actual forward price movement, and the measured precision feeds back into the notification filter. A signal system that cannot report its own accuracy is indistinguishable from noise. [polysign.dev](https://polysign.dev)
 
+![PolySign Dashboard](dashboard.png)
+
 ## What it does
 
 Three pollers ingest data from Polymarket's Gamma, CLOB, and Data APIs every 60 seconds. Three detectors evaluate the stream each cycle: `PriceMovementDetector` catches absolute threshold breaches (>= 8% in a 15-minute window), `StatisticalAnomalyDetector` flags z-score spikes above 3 sigma relative to each market's recent behavior, and `WalletActivityDetector` identifies large tracked-wallet activity in live markets. When 2+ detectors fire on the same market within 60 minutes, that convergence is the signal.
