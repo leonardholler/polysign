@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.TestPropertySource;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
@@ -32,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * two price-movement detectors to prevent spurious alerts for the test market.
  */
 @MockBean({PriceMovementDetector.class, StatisticalAnomalyDetector.class})
+@TestPropertySource(properties = "polysign.detectors.news.enabled=true")
 class NewsCorrelationDetectorIT extends AbstractIntegrationIT {
 
     static final String TEST_MARKET_ID  = "test-market-news-it";
