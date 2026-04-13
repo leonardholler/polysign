@@ -110,6 +110,8 @@ public class PriceMovementDetector {
     private final double extremeZoneLow;
     private final double extremeZoneHigh;
 
+    private final MarketLivenessGate livenessGate;
+
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
@@ -175,6 +177,7 @@ public class PriceMovementDetector {
             @Value("${polysign.detectors.price.dedupe-window-minutes:30}")   int dedupeWindowMinutes,
             @Value("${polysign.detectors.price.min-delta-p:0.02}")          double minDeltaP,
             @Value("${polysign.detectors.price.max-bypass-per-hour:3}")     int maxBypassPerHour,
+            MarketLivenessGate livenessGate,
             CommonDetectorProperties commonProps) {
         this.marketsTable                = marketsTable;
         this.snapshotsTable              = snapshotsTable;
@@ -200,6 +203,7 @@ public class PriceMovementDetector {
         this.dedupeWindow                = Duration.ofMinutes(dedupeWindowMinutes);
         this.minDeltaP                   = minDeltaP;
         this.maxBypassPerHour            = maxBypassPerHour;
+        this.livenessGate                = livenessGate;
         this.extremeZoneLow              = commonProps.getExtremeZoneLow();
         this.extremeZoneHigh             = commonProps.getExtremeZoneHigh();
     }
@@ -315,6 +319,12 @@ public class PriceMovementDetector {
      * without needing a full DynamoDB scan.
      */
     boolean checkMarket(Market market, Instant now) {
+        // ── Liveness gate: skip ended, paused, or order-frozen markets ────────
+        if (!livenessGate.isLive(market)) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_MARKET_ENDED"));
+            return false;
+        }
+
         double volume24h = parseVolume(market.getVolume24h());
         LiquidityTier tier = LiquidityTier.classify(volume24h, tier1MinVolume, tier2MinVolume);
 

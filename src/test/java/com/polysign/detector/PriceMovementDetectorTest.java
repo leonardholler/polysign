@@ -88,6 +88,7 @@ class PriceMovementDetectorTest {
                 MID_RANGE_MULTIPLIER, ZONE_ENTRY_DISCOUNT,
                 MIN_WINDOW_VOLUME, HIGH_VOLUME_WINDOW_THRESHOLD,
                 DEDUPE_WINDOW_MINUTES, MIN_DELTA_P, 3,
+                new MarketLivenessGate(clock),
                 new com.polysign.config.CommonDetectorProperties()
         );
     }
@@ -800,6 +801,7 @@ class PriceMovementDetectorTest {
                   MID_RANGE_MULTIPLIER, ZONE_ENTRY_DISCOUNT,
                   MIN_WINDOW_VOLUME, HIGH_VOLUME_WINDOW_THRESHOLD,
                   DEDUPE_WINDOW_MINUTES, MIN_DELTA_P, 3,
+                  new MarketLivenessGate(fixedClock()),
                   new com.polysign.config.CommonDetectorProperties());
             this.cannedSnapshots = snapshots;
             this.bookService = bookService;
@@ -859,6 +861,7 @@ class PriceMovementDetectorTest {
                 MID_RANGE_MULTIPLIER, ZONE_ENTRY_DISCOUNT,
                 MIN_WINDOW_VOLUME, HIGH_VOLUME_WINDOW_THRESHOLD,
                 DEDUPE_WINDOW_MINUTES, MIN_DELTA_P, 3,
+                new MarketLivenessGate(fixedClock),
                 new com.polysign.config.CommonDetectorProperties()) {
             @Override
             List<PriceSnapshot> querySnapshots(String marketId, Instant now) { return snapshots; }

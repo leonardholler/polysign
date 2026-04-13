@@ -562,6 +562,7 @@ class StatisticalAnomalyDetectorTest {
                     MAX_SPREAD_BPS, MIN_DEPTH_AT_MID,
                     DEDUPE_WINDOW_MINUTES,
                     MIN_DELTA_P,
+                    new MarketLivenessGate(fixedClock()),
                     new com.polysign.config.CommonDetectorProperties()
             );
             this.cannedSnapshots = snapshots;

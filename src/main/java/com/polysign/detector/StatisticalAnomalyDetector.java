@@ -94,6 +94,8 @@ public class StatisticalAnomalyDetector {
     private final double extremeZoneLow;
     private final double extremeZoneHigh;
 
+    private final MarketLivenessGate livenessGate;
+
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
@@ -130,6 +132,7 @@ public class StatisticalAnomalyDetector {
             @Value("${polysign.detectors.orderbook-gate.min-depth-at-mid:100.0}")   double minDepthAtMid,
             @Value("${polysign.detectors.statistical.dedupe-window-minutes:30}")    int dedupeWindowMinutes,
             @Value("${polysign.detectors.statistical.min-delta-p:0.03}")           double minDeltaP,
+            MarketLivenessGate livenessGate,
             CommonDetectorProperties commonProps) {
         this.marketsTable          = marketsTable;
         this.snapshotsTable        = snapshotsTable;
@@ -147,6 +150,7 @@ public class StatisticalAnomalyDetector {
         this.minDepthAtMid         = minDepthAtMid;
         this.dedupeWindow          = Duration.ofMinutes(dedupeWindowMinutes);
         this.minDeltaP             = minDeltaP;
+        this.livenessGate          = livenessGate;
         this.extremeZoneLow        = commonProps.getExtremeZoneLow();
         this.extremeZoneHigh       = commonProps.getExtremeZoneHigh();
     }
@@ -236,6 +240,12 @@ public class StatisticalAnomalyDetector {
      * <p>Package-private so unit tests can call it directly with synthetic data.
      */
     boolean checkMarket(Market market, Instant now) {
+        // ── Liveness gate: skip ended, paused, or order-frozen markets ────────
+        if (!livenessGate.isLive(market)) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_MARKET_ENDED"));
+            return false;
+        }
+
         double volume24h = parseVolume(market.getVolume24h());
         LiquidityTier tier = LiquidityTier.classify(volume24h, tier1MinVolume, tier2MinVolume);
 

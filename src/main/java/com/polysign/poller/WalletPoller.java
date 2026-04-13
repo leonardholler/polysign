@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.polysign.common.AppClock;
 import com.polysign.common.CorrelationId;
+import com.polysign.detector.MarketLivenessGate;
 import com.polysign.detector.WalletActivityDetector;
 import com.polysign.model.Market;
 import com.polysign.model.WalletTrade;
@@ -75,7 +76,8 @@ public class WalletPoller {
     private final DynamoDbTable<Market>         marketsTable;
     private final DynamoDbTable<WatchedWallet>  watchedWalletsTable;
     private final DynamoDbTable<WalletTrade>    walletTradesTable;
-    private final WalletActivityDetector        activityDetector;
+    private final MarketLivenessGate             livenessGate;
+    private final WalletActivityDetector         activityDetector;
     private final AppClock                      clock;
     private final ObjectMapper                  mapper;
     private final CircuitBreaker                circuitBreaker;
@@ -99,6 +101,7 @@ public class WalletPoller {
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
             MeterRegistry meterRegistry,
+            MarketLivenessGate livenessGate,
             @Value("${polysign.pollers.wallet.lookback-hours:48}") int lookbackHours) {
 
         this.lookbackHours       = lookbackHours;
@@ -108,6 +111,7 @@ public class WalletPoller {
         this.walletTradesTable   = walletTradesTable;
         this.activityDetector    = activityDetector;
         this.clock               = clock;
+        this.livenessGate        = livenessGate;
         this.mapper              = mapper;
         this.circuitBreaker      = cbRegistry.circuitBreaker(CB_NAME);
         this.retry               = retryRegistry.retry(CB_NAME);
@@ -363,9 +367,11 @@ public class WalletPoller {
         // Resolve event-level slug for accurate Polymarket event links.
         // The Data API's trade.slug is market-level (contains numeric outcome ID suffixes),
         // so we look up the Market record and use its eventSlug (from Gamma events[0].slug).
+        // market is also used below for the liveness gate check.
         String eventSlug = null;
+        Market market = null;
         try {
-            Market market = marketsTable.getItem(
+            market = marketsTable.getItem(
                     Key.builder().partitionValue(marketId).build());
             if (market != null) {
                 eventSlug = market.getEventSlug();
@@ -403,10 +409,14 @@ public class WalletPoller {
                 wallet.getAddress(), txHash, marketId, sizeUsdc);
 
         // Fire detectors synchronously. Per-item catch: a detector error never kills the poll loop.
-        try {
-            activityDetector.checkTrade(trade, wallet.getAlias(), detectorSlug);
-        } catch (Exception e) {
-            log.warn("wallet_activity_check_failed txHash={} error={}", txHash, e.getMessage());
+        // Liveness gate: skip wallet detector if the market has ended or halted. Fail-open when
+        // market is null (shouldn't happen — marketId was resolved above — but be defensive).
+        if (market == null || livenessGate.isLive(market)) {
+            try {
+                activityDetector.checkTrade(trade, wallet.getAlias(), detectorSlug);
+            } catch (Exception e) {
+                log.warn("wallet_activity_check_failed txHash={} error={}", txHash, e.getMessage());
+            }
         }
 
         return true;
