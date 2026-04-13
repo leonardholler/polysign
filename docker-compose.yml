@@ -38,6 +38,8 @@ services:
   polysign:
     build: .
     restart: unless-stopped
+    labels:
+      autoheal: "true"
     ports:
       - "8080:8080"
     environment:
@@ -46,12 +48,33 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      # JVM flags: cap heap, dump on OOM, and exit the JVM (not just the thread)
+      # so Docker detects the crash and autoheal can restart the container.
+      - JAVA_OPTS=-Xmx512m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError
     env_file:
       - path: .env
         required: false   # .env is optional; defaults above are used if absent
     depends_on:
       localstack:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # autoheal watches for containers whose Docker healthcheck enters the
+  # "unhealthy" state and restarts them automatically. This is the safety net
+  # that makes the polysign healthcheck above actually trigger a recovery when
+  # the DynamoDB connection pool is poisoned and the JVM stays up but broken.
+  autoheal:
+    image: willfarrell/autoheal
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
 
 volumes:
   localstack_data:

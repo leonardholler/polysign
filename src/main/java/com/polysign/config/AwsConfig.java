@@ -9,12 +9,14 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
+import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 import java.net.URI;
+import java.time.Duration;
 
 /**
  * Creates the core AWS SDK v2 client beans.
@@ -32,6 +34,11 @@ import java.net.URI;
  *
  * <p>S3 uses path-style access ({@code forcePathStyle=true}) which is required
  * by LocalStack and harmless on real AWS when an endpoint override is set.
+ *
+ * <p>DynamoDB and SQS clients use an Apache HTTP client pool tuned to evict
+ * idle/stale connections via {@code useIdleConnectionReaper}. This prevents
+ * "Connection pool shut down" IllegalStateExceptions from dead connections
+ * poisoning the pool on long-running deployments.
  */
 @Configuration
 public class AwsConfig {
@@ -64,7 +71,8 @@ public class AwsConfig {
     public DynamoDbClient dynamoDbClient(AwsCredentialsProvider awsCredentialsProvider) {
         var builder = DynamoDbClient.builder()
                 .region(Region.of(region))
-                .credentialsProvider(awsCredentialsProvider);
+                .credentialsProvider(awsCredentialsProvider)
+                .httpClientBuilder(pooledHttpClientBuilder());
         applyEndpointOverride(builder);
         return builder.build();
     }
@@ -80,7 +88,8 @@ public class AwsConfig {
     public SqsClient sqsClient(AwsCredentialsProvider awsCredentialsProvider) {
         var builder = SqsClient.builder()
                 .region(Region.of(region))
-                .credentialsProvider(awsCredentialsProvider);
+                .credentialsProvider(awsCredentialsProvider)
+                .httpClientBuilder(pooledHttpClientBuilder());
         applyEndpointOverride(builder);
         return builder.build();
     }
@@ -96,6 +105,26 @@ public class AwsConfig {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Apache HTTP client pool shared by DynamoDB and SQS clients.
+     *
+     * Key settings:
+     * - {@code useIdleConnectionReaper}: evicts idle/stale connections so they
+     *   cannot re-enter the pool in a broken state (root cause of
+     *   "Connection pool shut down" crashes).
+     * - {@code connectionTimeToLive}: hard cap on connection age, preventing
+     *   connections that outlive NAT/firewall idle timeouts from being reused.
+     */
+    private ApacheHttpClient.Builder pooledHttpClientBuilder() {
+        return ApacheHttpClient.builder()
+                .maxConnections(50)
+                .connectionMaxIdleTime(Duration.ofSeconds(30))
+                .connectionTimeToLive(Duration.ofMinutes(5))
+                .socketTimeout(Duration.ofSeconds(30))
+                .connectionTimeout(Duration.ofSeconds(10))
+                .useIdleConnectionReaper(true);
+    }
 
     private <B extends software.amazon.awssdk.awscore.client.builder.AwsClientBuilder<B, ?>>
     void applyEndpointOverride(B builder) {
