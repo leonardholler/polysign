@@ -59,10 +59,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
 
   # autoheal watches for containers whose Docker healthcheck enters the
   # "unhealthy" state and restarts them automatically. This is the safety net
