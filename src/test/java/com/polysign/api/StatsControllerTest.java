@@ -5,6 +5,8 @@ import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
+import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +20,7 @@ import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +46,12 @@ class StatsControllerTest {
     DynamoDbTable<WatchedWallet> watchedWalletsTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    DynamoDbTable<Market> marketsTable;
+
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    DynamoDbTable<AlertOutcome> alertOutcomesTable;
+
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     MeterRegistry meterRegistry;
 
     @Mock
@@ -62,13 +71,15 @@ class StatsControllerTest {
         // stub DynamoDB scans to return empty streams
         when(alertsTable.scan().items().stream()).thenReturn(Stream.of());
         when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of());
 
         // stub MeterRegistry gauge lookup to return null (no gauge registered)
         when(meterRegistry.find(any()).gauge()).thenReturn(null);
 
         controller = new StatsController(
-                alertsTable, watchedWalletsTable, meterRegistry,
-                appStats, clock, "test-topic", signalPerformanceService);
+                alertsTable, watchedWalletsTable, marketsTable, alertOutcomesTable,
+                meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 
     // ── Test 1: precision fields populated when scored samples exist ──────────
@@ -105,5 +116,46 @@ class StatsControllerTest {
 
         assertThat(resp.signalPrecision7d15m()).isNull();
         assertThat(resp.scoredSamples7d15m()).isEqualTo(0L);
+    }
+
+    // ── Test 3: resolution zone fields reflect market and outcome counts ───────
+
+    @Test
+    void resolutionZoneFields_reflectCountsFromTables() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+
+        // One effectively-resolved market (resolvedBy set + YES price >= 0.99)
+        Market resolved = new Market();
+        resolved.setMarketId("mkt-resolved-01");
+        resolved.setResolvedBy("0xUMA");
+        resolved.setOutcomePrices(List.of("0.99", "0.01"));
+
+        // One non-resolved market
+        Market open = new Market();
+        open.setMarketId("mkt-open-01");
+
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of(resolved, open));
+
+        // Two resolution outcome rows
+        AlertOutcome res1 = new AlertOutcome();
+        res1.setAlertId("alert-01");
+        res1.setHorizon("resolution");
+
+        AlertOutcome res2 = new AlertOutcome();
+        res2.setAlertId("alert-02");
+        res2.setHorizon("resolution");
+
+        // One non-resolution outcome (should not count)
+        AlertOutcome t1h = new AlertOutcome();
+        t1h.setAlertId("alert-03");
+        t1h.setHorizon("t1h");
+
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res1, res2, t1h));
+
+        StatsController.StatsResponse resp = controller.getStats();
+
+        assertThat(resp.marketsInResolutionZone()).isEqualTo(1L);
+        assertThat(resp.alertsInResolutionZone()).isEqualTo(2L);
     }
 }

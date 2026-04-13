@@ -151,6 +151,18 @@
         <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
       </div>
     </div>
+
+    <!-- Recent Resolutions -->
+    <div class="border-t border-gray-800 px-4 py-4">
+      <div class="flex items-center gap-2 mb-1">
+        <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Recent Resolutions</h2>
+        <span class="text-gray-700 text-xs">60s refresh</span>
+      </div>
+      <div class="text-[10px] text-gray-600 mb-3">alerts scored against final market outcomes</div>
+      <div id="resolutions-list" class="space-y-1.5">
+        <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -548,6 +560,7 @@ async function loadStats() {
     const d = await r.json();
     document.getElementById('st-markets').textContent  = d.marketsTracked ?? '—';
     document.getElementById('st-alerts').textContent   = d.alertsFiredToday ?? '—';
+    document.getElementById('st-resolution').textContent = (d.marketsInResolutionZone ?? '—') + ' in resolution zone';
     document.getElementById('st-whale').textContent    = d.watchedWallets ?? '—';
     const prec1h = d.signalPrecision7d1h;
     document.getElementById('st-precision').textContent =
@@ -654,10 +667,72 @@ async function loadCatPerformance() {
 loadCatPerformance();
 setInterval(loadCatPerformance, 300_000); // refresh every 5 min
 
+// ── Recent Resolutions ────────────────────────────────────────────────────────
+
+async function loadResolutions() {
+  try {
+    const r = await fetch('/api/resolutions/recent?limit=20');
+    if (!r.ok) return;
+    const items = await r.json();
+    const el = document.getElementById('resolutions-list');
+
+    if (!items || items.length === 0) {
+      el.innerHTML = '<div class="text-gray-600 text-xs py-3 text-center">No resolutions yet — check back soon.</div>';
+      return;
+    }
+
+    el.innerHTML = items.map(item => {
+      const dp = item.directionPredicted;
+      const dr = item.directionRealized;
+      const correct = dp && dr && dp === dr;
+      const flat = dr === 'flat';
+
+      let borderCol, labelCol, resultLabel;
+      if (flat || !dr) {
+        borderCol  = 'border-l-gray-600';
+        labelCol   = 'text-gray-500';
+        resultLabel = 'FLAT';
+      } else if (correct) {
+        borderCol  = 'border-l-emerald-600';
+        labelCol   = 'text-emerald-400';
+        resultLabel = '✓ CORRECT';
+      } else {
+        borderCol  = 'border-l-red-700';
+        labelCol   = 'text-red-400';
+        resultLabel = '✗ WRONG';
+      }
+
+      const title = item.title || item.marketId || '—';
+      const link  = item.link;
+      const titleEl = link
+        ? `<a href="${link}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline leading-tight">${truncate(title, 60)}</a>`
+        : `<span class="text-gray-200 leading-tight">${truncate(title, 60)}</span>`;
+
+      const pAlert   = item.priceAtAlert   != null ? (item.priceAtAlert   * 100).toFixed(1) + '¢' : '—';
+      const pHorizon = item.priceAtHorizon != null ? (item.priceAtHorizon * 100).toFixed(1) + '¢' : '—';
+
+      const dpLabel = dp ? (dp === 'up' ? '↑' : '↓') : '—';
+      const drLabel = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
+
+      return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
+        <div class="flex items-start justify-between gap-2 mb-0.5">
+          <div class="text-xs flex-1 min-w-0">${titleEl}</div>
+          <span class="text-[10px] font-bold shrink-0 ${labelCol}">${resultLabel}</span>
+        </div>
+        <div class="flex items-center gap-3 text-[10px] text-gray-500">
+          <span>predicted <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
+          <span class="text-gray-600">${pAlert} → ${pHorizon}</span>
+          <span class="ml-auto shrink-0">${relativeTime(item.evaluatedAt)}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (_) {}
+}
+
 // ── Bootstrap & polling ───────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadWallets()]);
+  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadWallets(), loadResolutions()]);
 }
 
 init();
@@ -665,6 +740,7 @@ setInterval(loadAlerts,         10_000);
 setInterval(loadStats,          30_000);
 setInterval(loadWatchedMarkets, 60_000);
 setInterval(loadWallets,        60_000);
+setInterval(loadResolutions,    60_000);
 </script>
 </body>
 </html>

@@ -1,10 +1,13 @@
 package com.polysign.api;
 
+import com.polysign.backtest.MarketPredicates;
 import com.polysign.backtest.SignalPerformanceService;
 import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
+import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -37,6 +40,8 @@ public class StatsController {
 
     private final DynamoDbTable<Alert>         alertsTable;
     private final DynamoDbTable<WatchedWallet> watchedWalletsTable;
+    private final DynamoDbTable<Market>        marketsTable;
+    private final DynamoDbTable<AlertOutcome>  alertOutcomesTable;
     private final MeterRegistry                meterRegistry;
     private final AppStats                     appStats;
     private final AppClock                     clock;
@@ -46,6 +51,8 @@ public class StatsController {
     public StatsController(
             DynamoDbTable<Alert> alertsTable,
             DynamoDbTable<WatchedWallet> watchedWalletsTable,
+            DynamoDbTable<Market> marketsTable,
+            DynamoDbTable<AlertOutcome> alertOutcomesTable,
             MeterRegistry meterRegistry,
             AppStats appStats,
             AppClock clock,
@@ -53,6 +60,8 @@ public class StatsController {
             SignalPerformanceService signalPerformanceService) {
         this.alertsTable               = alertsTable;
         this.watchedWalletsTable       = watchedWalletsTable;
+        this.marketsTable              = marketsTable;
+        this.alertOutcomesTable        = alertOutcomesTable;
         this.meterRegistry             = meterRegistry;
         this.appStats                  = appStats;
         this.clock                     = clock;
@@ -69,7 +78,9 @@ public class StatsController {
             Double signalPrecision7d1h,
             Double signalPrecision7d15m,
             long scoredSamples7d1h,
-            long scoredSamples7d15m) {}
+            long scoredSamples7d15m,
+            long marketsInResolutionZone,
+            long alertsInResolutionZone) {}
 
     @GetMapping
     public StatsResponse getStats() {
@@ -97,6 +108,16 @@ public class StatsController {
         AggregatePrecision ap1h  = signalPerformanceService.getAggregatePrecision("t1h",  since7d);
         AggregatePrecision ap15m = signalPerformanceService.getAggregatePrecision("t15m", since7d);
 
+        // markets in resolution zone: effectivelyResolved() is true in the local markets table
+        long marketsInResolutionZone = marketsTable.scan().items().stream()
+                .filter(m -> MarketPredicates.effectivelyResolved(m).isPresent())
+                .count();
+
+        // alerts with a resolution outcome row in alert_outcomes
+        long alertsInResolutionZone = alertOutcomesTable.scan().items().stream()
+                .filter(o -> "resolution".equals(o.getHorizon()))
+                .count();
+
         return new StatsResponse(
                 marketsTracked,
                 alertsFiredToday,
@@ -106,6 +127,8 @@ public class StatsController {
                 ap1h.precision(),
                 ap15m.precision(),
                 ap1h.scoredSamples(),
-                ap15m.scoredSamples());
+                ap15m.scoredSamples(),
+                marketsInResolutionZone,
+                alertsInResolutionZone);
     }
 }
