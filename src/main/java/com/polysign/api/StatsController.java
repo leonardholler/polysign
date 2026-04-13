@@ -1,5 +1,7 @@
 package com.polysign.api;
 
+import com.polysign.backtest.SignalPerformanceService;
+import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -38,6 +41,7 @@ public class StatsController {
     private final AppStats                     appStats;
     private final AppClock                     clock;
     private final String                       ntfyTopic;
+    private final SignalPerformanceService     signalPerformanceService;
 
     public StatsController(
             DynamoDbTable<Alert> alertsTable,
@@ -45,13 +49,15 @@ public class StatsController {
             MeterRegistry meterRegistry,
             AppStats appStats,
             AppClock clock,
-            @Value("${polysign.ntfy.topic}") String ntfyTopic) {
-        this.alertsTable         = alertsTable;
-        this.watchedWalletsTable = watchedWalletsTable;
-        this.meterRegistry       = meterRegistry;
-        this.appStats            = appStats;
-        this.clock               = clock;
-        this.ntfyTopic           = ntfyTopic;
+            @Value("${polysign.ntfy.topic}") String ntfyTopic,
+            SignalPerformanceService signalPerformanceService) {
+        this.alertsTable               = alertsTable;
+        this.watchedWalletsTable       = watchedWalletsTable;
+        this.meterRegistry             = meterRegistry;
+        this.appStats                  = appStats;
+        this.clock                     = clock;
+        this.ntfyTopic                 = ntfyTopic;
+        this.signalPerformanceService  = signalPerformanceService;
     }
 
     public record StatsResponse(
@@ -59,7 +65,11 @@ public class StatsController {
             long alertsFiredToday,
             long watchedWallets,
             String lastPollTime,
-            String ntfyTopic) {}
+            String ntfyTopic,
+            Double signalPrecision7d1h,
+            Double signalPrecision7d15m,
+            long scoredSamples7d1h,
+            long scoredSamples7d15m) {}
 
     @GetMapping
     public StatsResponse getStats() {
@@ -82,11 +92,20 @@ public class StatsController {
         // lastPollTime from AppStats (set by MarketPoller after each successful cycle)
         Instant lastPoll = appStats.getLastMarketPollAt();
 
+        // signal precision over last 7 days
+        Instant since7d = clock.now().minus(Duration.ofDays(7));
+        AggregatePrecision ap1h  = signalPerformanceService.getAggregatePrecision("t1h",  since7d);
+        AggregatePrecision ap15m = signalPerformanceService.getAggregatePrecision("t15m", since7d);
+
         return new StatsResponse(
                 marketsTracked,
                 alertsFiredToday,
                 watchedWallets,
                 lastPoll != null ? lastPoll.toString() : null,
-                ntfyTopic);
+                ntfyTopic,
+                ap1h.precision(),
+                ap15m.precision(),
+                ap1h.scoredSamples(),
+                ap15m.scoredSamples());
     }
 }

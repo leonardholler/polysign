@@ -306,6 +306,30 @@ public class SignalPerformanceService {
         return result;
     }
 
+    /**
+     * Aggregate precision and scored sample count across all detector types for one horizon.
+     *
+     * @param horizon one of t15m, t1h, t24h, resolution
+     * @param since   look-back window start (null = 7 days ago)
+     * @return precision (null if no scored samples) and scoredSamples count
+     */
+    public AggregatePrecision getAggregatePrecision(String horizon, Instant since) {
+        if (since == null) since = clock.now().minus(Duration.ofDays(7));
+
+        List<AlertOutcome> outcomes = fetchOutcomes(null, since);
+
+        long correct = outcomes.stream()
+                .filter(o -> horizon.equals(o.getHorizon()) && Boolean.TRUE.equals(o.getWasCorrect()))
+                .count();
+        long wrong = outcomes.stream()
+                .filter(o -> horizon.equals(o.getHorizon()) && Boolean.FALSE.equals(o.getWasCorrect()))
+                .count();
+        long scored = correct + wrong;
+        Double precision = scored == 0 ? null : (double) correct / scored;
+
+        return new AggregatePrecision(precision, scored);
+    }
+
     // ── Aggregation ───────────────────────────────────────────────────────────
 
     private DetectorPerformance aggregate(String type, List<AlertOutcome> outcomes) {
@@ -409,6 +433,9 @@ public class SignalPerformanceService {
 
     /** Numerator, denominator and derived precision for a single horizon bucket. */
     public record PrecisionStat(Double precision, int numerator, int denominator) {}
+
+    /** Aggregate precision and scored sample count across all detector types for one horizon. */
+    public record AggregatePrecision(Double precision, long scoredSamples) {}
 
     public record ResolutionCoverageResponse(String since, List<CategoryCoverage> categories) {}
 
