@@ -267,6 +267,34 @@ class AlertOutcomeEvaluatorTest {
         assertThat(outcome.getWasCorrect()).isTrue();
     }
 
+    // ── Test 12: categoryClassifierFallback ──────────────────────────────────
+
+    @Test
+    void categoryClassifierFallback_dynamoNull_returnsCategoryClassifierResult() {
+        // marketsTable is null in the test constructor, simulating a DynamoDB miss.
+        // CategoryClassifier should classify the title as "crypto".
+        Alert alert = new Alert();
+        alert.setAlertId("alert-12");
+        alert.setCreatedAt(T.toString());
+        alert.setType("price_movement");
+        alert.setMarketId("market-btc-1");
+        alert.setTitle("Will Bitcoin reach $100k by end of 2025?");
+        Map<String, String> meta = new HashMap<>();
+        meta.put("direction", "up");
+        meta.put("detectedAt", T.toString());
+        alert.setMetadata(meta);
+
+        TestableEvaluator ev = evaluatorWith(alert);
+        ev.addSnapshot("market-btc-1", T, "0.50");
+        ev.addSnapshot("market-btc-1", T.plus(Duration.ofHours(1)), "0.60");
+
+        ev.evaluate();
+
+        AlertOutcome outcome = ev.getOutcome("alert-12", "t1h");
+        assertThat(outcome).isNotNull();
+        assertThat(outcome.getCategory()).isEqualTo("crypto");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private TestableEvaluator evaluatorWith(Alert... alerts) {

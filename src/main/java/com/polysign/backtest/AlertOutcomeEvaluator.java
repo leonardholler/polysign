@@ -1,6 +1,7 @@
 package com.polysign.backtest;
 
 import com.polysign.common.AppClock;
+import com.polysign.common.CategoryClassifier;
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
@@ -136,8 +137,8 @@ public class AlertOutcomeEvaluator {
 
         String directionPredicted = extractDirectionPredicted(alert);
 
-        // category — resolved once per alert from the markets table (null-safe: missing market → null category)
-        String category = resolveCategory(alert.getMarketId());
+        // category — resolved once per alert; falls back to CategoryClassifier if DynamoDB misses
+        String category = resolveCategory(alert);
 
         // priceAtAlert — from the snapshot closest to firedAt
         Optional<PriceSnapshot> alertSnap = findClosestSnapshot(alert.getMarketId(), firedAt);
@@ -247,15 +248,41 @@ public class AlertOutcomeEvaluator {
 
     // ── Category resolution ───────────────────────────────────────────────────
 
-    private String resolveCategory(String marketId) {
-        if (marketsTable == null || marketId == null) return null;
-        try {
-            Market market = marketsTable.getItem(Key.builder().partitionValue(marketId).build());
-            return market != null ? market.getCategory() : null;
-        } catch (Exception e) {
-            log.debug("alert_outcome_category_resolve_failed marketId={} error={}", marketId, e.getMessage());
-            return null;
+    private String resolveCategory(Alert alert) {
+        String marketId = alert.getMarketId();
+        if (marketId == null) return null;
+
+        // Step 1: DynamoDB lookup
+        String category = null;
+        if (marketsTable != null) {
+            try {
+                Market market = marketsTable.getItem(Key.builder().partitionValue(marketId).build());
+                category = market != null ? market.getCategory() : null;
+            } catch (Exception e) {
+                log.debug("alert_outcome_category_resolve_failed marketId={} error={}", marketId, e.getMessage());
+            }
         }
+
+        if (category != null) return category;
+
+        // Step 2: DynamoDB miss or unavailable — fall back to CategoryClassifier
+        try {
+            String classified = CategoryClassifier.classify(alert.getTitle(), null);
+            incrementCategoryFallbackCounter();
+            return classified;
+        } catch (Exception e) {
+            log.warn("category_resolution_unresolvable alertId={} marketId={} reason={}",
+                    alert.getAlertId(), marketId, e.getMessage());
+        }
+
+        return "unknown";
+    }
+
+    private void incrementCategoryFallbackCounter() {
+        if (meterRegistry == null) return;
+        Counter.builder("polysign.category_resolution.fallback_used")
+                .register(meterRegistry)
+                .increment();
     }
 
     // ── Direction extraction (Decision 2) ─────────────────────────────────────
