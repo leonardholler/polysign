@@ -107,6 +107,7 @@ public class PriceMovementDetector {
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<DeltaPEvent> deltaPEvents = new ConcurrentLinkedDeque<>();
     private volatile Map<String, MarketDiagnostic> lastMarketDiagnostics = Map.of();
     private volatile int     lastRunChecked;
     private volatile int     lastRunFired;
@@ -129,12 +130,19 @@ public class PriceMovementDetector {
             double minWindowVolume, double highVolumeWindowThreshold,
             int lastRunChecked, int lastRunFired, String lastRunAt,
             List<MarketDiagnostic> markets,
-            Map<String, Long> filterCountsLastHour) {}
+            Map<String, Long> filterCountsLastHour,
+            /** marketId → max observed delta-p for markets filtered by FILTERED_MIN_DELTA_P in the last hour */
+            Map<String, Double> belowMinDeltaP,
+            /** Histogram of all observed delta-p values reaching the min-delta-p check in the last hour */
+            Map<String, Long> minDeltaPHistogramLastHour) {}
 
     /** Zone transition classification for the price move. */
     enum ZoneTransition {
         ENTERED_BULLISH, ENTERED_BEARISH, DEEPENING_BULLISH, DEEPENING_BEARISH, MID_RANGE
     }
+
+    /** Tracks observed delta-p values for all markets that reach the min-delta-p check. */
+    private record DeltaPEvent(Instant ts, String marketId, double deltaP) {}
 
     public PriceMovementDetector(
             DynamoDbTable<Market> marketsTable,
@@ -209,6 +217,20 @@ public class PriceMovementDetector {
         List<MarketDiagnostic> markets = lastMarketDiagnostics.values().stream()
                 .sorted(Comparator.comparingDouble(MarketDiagnostic::recentMovePct).reversed())
                 .collect(Collectors.toList());
+
+        // Delta-p diagnostics: per-market max observed delta for filtered markets, plus histogram
+        Map<String, Double> belowMinDeltaP = deltaPEvents.stream()
+                .filter(e -> e.ts().isAfter(since) && e.deltaP() < minDeltaP)
+                .collect(Collectors.toMap(
+                        DeltaPEvent::marketId,
+                        DeltaPEvent::deltaP,
+                        Math::max));
+        Map<String, Long> deltaPHistogram = deltaPEvents.stream()
+                .filter(e -> e.ts().isAfter(since))
+                .collect(Collectors.groupingBy(
+                        e -> deltaBucket(e.deltaP()),
+                        Collectors.counting()));
+
         return new PriceDetectorDiagnostics(
                 thresholdPctTier1, thresholdPctTier2, thresholdPctTier3,
                 tier1MinVolume, tier2MinVolume,
@@ -217,7 +239,17 @@ public class PriceMovementDetector {
                 lastRunChecked, lastRunFired,
                 lastRunAt != null ? lastRunAt.toString() : null,
                 markets,
-                filterCounts);
+                filterCounts,
+                belowMinDeltaP,
+                deltaPHistogram);
+    }
+
+    private static String deltaBucket(double d) {
+        if (d < 0.01) return "0.00-0.01";
+        if (d < 0.02) return "0.01-0.02";
+        if (d < 0.03) return "0.02-0.03";
+        if (d < 0.04) return "0.03-0.04";
+        return "0.04+";
     }
 
     /**
@@ -246,10 +278,13 @@ public class PriceMovementDetector {
         lastRunChecked = checked;
         lastRunFired   = fired;
         lastRunAt      = now;
-        // Prune filter events older than 2 hours to bound memory
+        // Prune filter events and delta-p observations older than 2 hours to bound memory
         Instant pruneBefor = now.minus(Duration.ofHours(2));
         while (!filterEvents.isEmpty() && filterEvents.peekFirst().ts().isBefore(pruneBefor)) {
             filterEvents.pollFirst();
+        }
+        while (!deltaPEvents.isEmpty() && deltaPEvents.peekFirst().ts().isBefore(pruneBefor)) {
+            deltaPEvents.pollFirst();
         }
 
         log.info("price_movement_detect_complete checked={} fired={}", checked, fired);
@@ -287,6 +322,7 @@ public class PriceMovementDetector {
 
         // Minimum absolute probability delta: 0.0045→0.0055 is 22% but only 1bp of implied prob
         BigDecimal delta = move.toPrice.subtract(move.fromPrice).abs();
+        deltaPEvents.addLast(new DeltaPEvent(now, market.getMarketId(), delta.doubleValue()));
         if (delta.compareTo(BigDecimal.valueOf(minDeltaP)) < 0) {
             filterEvents.addLast(new FilterEvent(now, "FILTERED_MIN_DELTA_P"));
             return false;

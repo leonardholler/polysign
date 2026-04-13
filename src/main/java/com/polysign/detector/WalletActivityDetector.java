@@ -17,6 +17,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -41,6 +43,13 @@ public class WalletActivityDetector {
     private final AppClock clock;
     private final double minTradeUsdc;
 
+    /**
+     * Dedup key strategy: composite of wallet address and txHash, bucketed into a 24-hour window.
+     * The same on-chain transaction always produces the same alert ID within the same day,
+     * so re-fetching a trade across multiple poll cycles never fires more than one alert.
+     */
+    static final String DEDUP_KEY_STRATEGY = "address|txHash, 24-hour bucket window";
+
     // ── Diagnostic counters (accumulated since process start) ─────────────────
     private final AtomicLong totalAboveThreshold  = new AtomicLong();
     private final AtomicLong totalAlertsFired     = new AtomicLong();
@@ -48,22 +57,41 @@ public class WalletActivityDetector {
     private final AtomicLong totalDuplicates      = new AtomicLong();
     private volatile Instant lastTradeAt;
 
+    // ── Per-hour time-windowed tracking ──────────────────────────────────────
+    private final ConcurrentLinkedDeque<Instant> rawAboveThresholdEvents  = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<Instant> uniqueAboveThresholdEvents = new ConcurrentLinkedDeque<>();
+    /** Counts the total number of dedup decisions logged at INFO to cap noise. */
+    private final AtomicInteger dupInfoLogCount = new AtomicInteger(0);
+
     public record WhaleDetectorDiagnostics(
             double minTradeUsdcThreshold,
             long totalTradesAboveThreshold,
             long totalAlertsFired,
             long totalTradesBelowThreshold,
             long totalDuplicates,
-            String lastTradeAt) {}
+            String lastTradeAt,
+            String dedupKeyStrategy,
+            long rawTradesAboveThresholdLastHour,
+            long uniqueTradesAboveThresholdLastHour) {}
 
-    public WhaleDetectorDiagnostics getDiagnostics() {
+    public WhaleDetectorDiagnostics getDiagnostics(Instant since) {
+        // Prune stale events from the per-hour deques before counting
+        while (!rawAboveThresholdEvents.isEmpty() && rawAboveThresholdEvents.peekFirst().isBefore(since)) {
+            rawAboveThresholdEvents.pollFirst();
+        }
+        while (!uniqueAboveThresholdEvents.isEmpty() && uniqueAboveThresholdEvents.peekFirst().isBefore(since)) {
+            uniqueAboveThresholdEvents.pollFirst();
+        }
         return new WhaleDetectorDiagnostics(
                 minTradeUsdc,
                 totalAboveThreshold.get(),
                 totalAlertsFired.get(),
                 totalBelowThreshold.get(),
                 totalDuplicates.get(),
-                lastTradeAt != null ? lastTradeAt.toString() : null);
+                lastTradeAt != null ? lastTradeAt.toString() : null,
+                DEDUP_KEY_STRATEGY,
+                rawAboveThresholdEvents.size(),
+                uniqueAboveThresholdEvents.size());
     }
 
     public WalletActivityDetector(
@@ -94,6 +122,7 @@ public class WalletActivityDetector {
         totalAboveThreshold.incrementAndGet();
 
         Instant now = clock.now();
+        rawAboveThresholdEvents.addLast(now);
 
         String walletLabel = alias != null ? alias : trade.getAddress();
         String direction   = trade.getSide() != null ? trade.getSide().toLowerCase() : "?";
@@ -152,12 +181,19 @@ public class WalletActivityDetector {
         boolean created = alertService.tryCreate(alert);
         if (created) {
             totalAlertsFired.incrementAndGet();
+            uniqueAboveThresholdEvents.addLast(now);
             log.info("event=wallet_activity_alert_fired address={} alias={} sizeUsdc={} marketId={}",
                     trade.getAddress(), alias, String.format("%.2f", sizeUsdc), trade.getMarketId());
         } else {
             totalDuplicates.incrementAndGet();
-            log.debug("event=wallet_trade_skipped_duplicate txHash={} address={}",
-                    txHash, trade.getAddress());
+            int logNum = dupInfoLogCount.incrementAndGet();
+            if (logNum <= 10) {
+                log.info("event=wallet_trade_deduplicated#{} dedupeKey={} address={} txHash={} marketId={}",
+                        logNum, dedupeKey, trade.getAddress(), txHash, trade.getMarketId());
+            } else {
+                log.debug("event=wallet_trade_skipped_duplicate txHash={} address={}",
+                        txHash, trade.getAddress());
+            }
         }
     }
 

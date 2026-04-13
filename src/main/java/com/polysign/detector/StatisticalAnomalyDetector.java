@@ -91,6 +91,8 @@ public class StatisticalAnomalyDetector {
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
+    private record SnapshotCountEvent(Instant ts, int count) {}
+    private final ConcurrentLinkedDeque<SnapshotCountEvent> snapshotCountEvents = new ConcurrentLinkedDeque<>();
     /** Near-miss: |z| >= threshold * 0.75 but below threshold. Reset each detect() run. */
     private int nearMissInCurrentRun;
     private volatile LastRunStats lastRunStats;
@@ -101,7 +103,9 @@ public class StatisticalAnomalyDetector {
             double zScoreTier1, double zScoreTier2, double zScoreTier3,
             int minSnapshots, double minDeltaP,
             int lastRunChecked, int lastRunFired, int lastRunNearMiss, String lastRunAt,
-            Map<String, Long> filterCountsLastHour) {}
+            Map<String, Long> filterCountsLastHour,
+            /** Distribution of snapshot counts per market over the last hour (shows warmup progress) */
+            Map<String, Long> snapshotCountHistogram) {}
 
     public StatisticalAnomalyDetector(
             DynamoDbTable<Market> marketsTable,
@@ -167,10 +171,13 @@ public class StatisticalAnomalyDetector {
         }
 
         lastRunStats = new LastRunStats(checked, fired, nearMissInCurrentRun, now.toString());
-        // Prune filter events older than 2 hours
+        // Prune filter events and snapshot count observations older than 2 hours
         Instant pruneBefor = now.minus(Duration.ofHours(2));
         while (!filterEvents.isEmpty() && filterEvents.peekFirst().ts().isBefore(pruneBefor)) {
             filterEvents.pollFirst();
+        }
+        while (!snapshotCountEvents.isEmpty() && snapshotCountEvents.peekFirst().ts().isBefore(pruneBefor)) {
+            snapshotCountEvents.pollFirst();
         }
 
         log.info("statistical_anomaly_detect_complete checked={} fired={}", checked, fired);
@@ -180,6 +187,11 @@ public class StatisticalAnomalyDetector {
         Map<String, Long> filterCounts = filterEvents.stream()
                 .filter(e -> e.ts().isAfter(since))
                 .collect(Collectors.groupingBy(FilterEvent::reason, Collectors.counting()));
+        Map<String, Long> snapshotHistogram = snapshotCountEvents.stream()
+                .filter(e -> e.ts().isAfter(since))
+                .collect(Collectors.groupingBy(
+                        e -> snapshotBucket(e.count()),
+                        Collectors.counting()));
         LastRunStats stats = lastRunStats;
         return new StatDetectorDiagnostics(
                 zScoreThresholdTier1, zScoreThresholdTier2, zScoreThresholdTier3,
@@ -188,7 +200,17 @@ public class StatisticalAnomalyDetector {
                 stats != null ? stats.fired()   : 0,
                 stats != null ? stats.nearMiss(): 0,
                 stats != null ? stats.runAt()   : null,
-                filterCounts);
+                filterCounts,
+                snapshotHistogram);
+    }
+
+    private static String snapshotBucket(int count) {
+        if (count <= 5)  return "0-5";
+        if (count <= 10) return "6-10";
+        if (count <= 15) return "11-15";
+        if (count <= 19) return "16-19";
+        if (count <= 29) return "20-29";
+        return "30+";
     }
 
     /**
@@ -205,6 +227,7 @@ public class StatisticalAnomalyDetector {
         double zScoreThreshold = zScoreThresholdForTier(tier);
 
         List<PriceSnapshot> snapshots = querySnapshots(market.getMarketId(), now);
+        snapshotCountEvents.addLast(new SnapshotCountEvent(now, snapshots.size()));
         if (snapshots.size() < minSnapshots) {
             filterEvents.addLast(new FilterEvent(now, "FILTERED_INSUFFICIENT_SNAPSHOTS"));
             return false;

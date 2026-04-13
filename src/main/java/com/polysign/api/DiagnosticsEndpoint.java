@@ -82,7 +82,7 @@ public class DiagnosticsEndpoint {
 
         PriceMovementDetector.PriceDetectorDiagnostics price = priceDetector.getDiagnostics(since);
         StatisticalAnomalyDetector.StatDetectorDiagnostics stat = statDetector.getDiagnostics(since);
-        WalletActivityDetector.WhaleDetectorDiagnostics whale = whaleDetector.getDiagnostics();
+        WalletActivityDetector.WhaleDetectorDiagnostics whale = whaleDetector.getDiagnostics(since);
 
         // Merge filter counts from price + stat detectors into one map
         Map<String, Long> combined = new HashMap<>(price.filterCountsLastHour());
