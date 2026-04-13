@@ -145,12 +145,25 @@ public class ResolutionSweeper {
 
     /**
      * Core sweep loop — package-private for direct invocation in tests.
+     *
+     * <p>Runs two resolution phases in sequence:
+     * <ol>
+     *   <li><b>Phase A (formal)</b> — markets where {@code resolvedOutcomePrice} is already
+     *       persisted (set by {@link #pollAndStoreClosedMarkets()} from the Gamma
+     *       {@code closed=true} feed).</li>
+     *   <li><b>Phase B (effective)</b> — markets where {@link MarketPredicates#effectivelyResolved}
+     *       is true but {@code closed=true} has not yet propagated (oracle assigned + decisive
+     *       price). Phase A takes precedence: if an alert already has a resolution outcome row
+     *       from Phase A, Phase B skips it via an explicit existence check.</li>
+     * </ol>
      */
     void sweep() {
         long startMs = System.currentTimeMillis();
         PollStats poll = pollAndStoreClosedMarkets();
 
         Instant now = clock.now();
+
+        // ── Phase A: formal closed=true path ─────────────────────────────────
         List<ClosedMarket> closedMarkets = findClosedMarkets();
         int processed = 0;
 
@@ -166,6 +179,35 @@ public class ResolutionSweeper {
             } catch (Exception e) {
                 log.warn("resolution_sweep_market_failed marketId={} error={}",
                         cm.marketId(), e.getMessage());
+            }
+        }
+
+        // ── Phase B: effectivelyResolved path ─────────────────────────────────
+        // Catches markets where the UMA oracle is assigned and outcomePrices is decisive
+        // but Gamma's closed=true flag hasn't propagated yet (typically lags by hours).
+        List<ClosedMarket> effectiveMarkets = findEffectivelyResolvedMarkets();
+        int effectiveProcessed = 0;
+
+        for (ClosedMarket erm : effectiveMarkets) {
+            try {
+                List<Alert> alerts = findAlertsForMarket(erm.marketId());
+                for (Alert alert : alerts) {
+                    // Explicit pre-write check: skip if Phase A (or a prior sweep) already
+                    // wrote a resolution outcome for this alert. writeResolutionOutcome also
+                    // uses attribute_not_exists(horizon) as a secondary safety net.
+                    if (resolutionOutcomeExists(alert.getAlertId())) {
+                        log.debug("resolution_outcome_skip_exists alertId={} marketId={}",
+                                alert.getAlertId(), erm.marketId());
+                        continue;
+                    }
+                    processResolutionOutcome(alert, erm, now);
+                }
+                effectiveProcessed++;
+                log.info("resolution_sweep_effective_done marketId={} alerts={}",
+                        erm.marketId(), alerts.size());
+            } catch (Exception e) {
+                log.warn("resolution_sweep_effective_failed marketId={} error={}",
+                        erm.marketId(), e.getMessage());
             }
         }
 
@@ -346,6 +388,54 @@ public class ResolutionSweeper {
             log.warn("resolution_sweeper_scan_failed error={}", e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * Scans the markets table for markets where {@link MarketPredicates#effectivelyResolved}
+     * is true but {@code resolvedOutcomePrice} is not yet set (Phase A hasn't run yet for them).
+     *
+     * <p>Returns them as {@link ClosedMarket} records with the derived resolution price
+     * (1.0 or 0.0 from the predicate). No-op in test mode (returns empty list).
+     */
+    List<ClosedMarket> findEffectivelyResolvedMarkets() {
+        if (marketsTable == null) return List.of();
+
+        List<ClosedMarket> result = new ArrayList<>();
+        try {
+            marketsTable.scan().items().forEach(m -> {
+                // Skip markets already handled by Phase A (resolvedOutcomePrice is set)
+                if (m.getResolvedOutcomePrice() != null) return;
+                MarketPredicates.effectivelyResolved(m).ifPresent(resolutionPrice -> {
+                    String priceAtAlertStr = m.getCurrentYesPrice() != null
+                            ? m.getCurrentYesPrice().toPlainString() : "0.50";
+                    result.add(new ClosedMarket(m.getMarketId(), priceAtAlertStr, resolutionPrice));
+                });
+            });
+        } catch (Exception e) {
+            log.warn("resolution_effective_scan_failed error={}", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Returns true if a {@code horizon=resolution} outcome row already exists for this alert.
+     *
+     * <p>Used as an explicit pre-write idempotency check in Phase B so that Phase A outcomes
+     * are never overwritten. {@link #writeResolutionOutcome} also enforces idempotency via
+     * {@code attribute_not_exists(horizon)} as a secondary safety net.
+     *
+     * <p>Returns false in test mode ({@code alertOutcomesTable == null}).
+     */
+    boolean resolutionOutcomeExists(String alertId) {
+        if (alertOutcomesTable == null) return false;
+        try {
+            AlertOutcome existing = alertOutcomesTable.getItem(
+                    Key.builder().partitionValue(alertId).sortValue("resolution").build());
+            return existing != null;
+        } catch (Exception e) {
+            log.debug("resolution_outcome_exists_check_failed alertId={} error={}", alertId, e.getMessage());
+            return false;
+        }
     }
 
     /** Queries all alerts for a market via the marketId-createdAt-index GSI. */

@@ -92,6 +92,70 @@ class ResolutionSweeperTest {
         assertThat(sweeper.writtenOutcomes).isEmpty();
     }
 
+    // ── Test 4: effectivelyResolved path writes resolution row ────────────────
+
+    @Test
+    void effectiveResolution_upAlert_resolutionRowCorrect() {
+        Alert alert = priceMovementAlert("alert-eff1", "mkt-eff1", "up", T);
+        BigDecimal resolutionPrice = BigDecimal.ONE; // YES resolved
+
+        TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
+        // No formal closedMarket — only effectivelyResolved
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-eff1", "0.40", resolutionPrice));
+        sweeper.alertsByMarket.put("mkt-eff1", List.of(alert));
+
+        sweeper.sweep();
+
+        assertThat(sweeper.writtenOutcomes).hasSize(1);
+        AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
+        assertThat(outcome.getHorizon()).isEqualTo("resolution");
+        assertThat(outcome.getPriceAtHorizon()).isEqualByComparingTo("1.0");
+        assertThat(outcome.getWasCorrect()).isTrue();
+    }
+
+    // ── Test 5 (e): idempotency — second write for same (alertId, resolution) ─
+
+    @Test
+    void effectiveResolution_secondSweep_doesNotWriteDuplicate() {
+        Alert alert = priceMovementAlert("alert-idem1", "mkt-idem1", "up", T);
+        BigDecimal resolutionPrice = BigDecimal.ONE;
+
+        TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-idem1", "0.50", resolutionPrice));
+        sweeper.alertsByMarket.put("mkt-idem1", List.of(alert));
+
+        // First sweep — outcome is written
+        sweeper.sweep();
+        assertThat(sweeper.writtenOutcomes).hasSize(1);
+
+        // Second sweep — resolutionOutcomeExists returns true for the written alert,
+        // so writeResolutionOutcome is NOT called again
+        sweeper.sweep();
+        assertThat(sweeper.writtenOutcomes).hasSize(1); // still 1, no duplicate
+    }
+
+    // ── Test 6: Phase A takes precedence over Phase B ─────────────────────────
+
+    @Test
+    void phaseA_takesPresedenceOverPhaseB_sameMarket() {
+        Alert alert = priceMovementAlert("alert-prec1", "mkt-prec1", "down", T);
+        // Phase A sees YES resolved (price = 1.0)
+        BigDecimal formalPrice    = BigDecimal.ONE;
+        // Phase B also fires with the same derived price — but should be skipped
+        BigDecimal effectivePrice = BigDecimal.ONE;
+
+        TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.50", formalPrice));
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.50", effectivePrice));
+        sweeper.alertsByMarket.put("mkt-prec1", List.of(alert));
+
+        sweeper.sweep();
+
+        // Phase A writes one outcome; Phase B sees it exists and skips
+        assertThat(sweeper.writtenOutcomes).hasSize(1);
+        assertThat(sweeper.writtenOutcomes.get(0).getAlertId()).isEqualTo("alert-prec1");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static Alert priceMovementAlert(String alertId, String marketId,
@@ -112,9 +176,10 @@ class ResolutionSweeperTest {
 
     private static class TestableSweeper extends ResolutionSweeper {
 
-        final List<ResolutionSweeper.ClosedMarket> closedMarkets = new ArrayList<>();
-        final Map<String, List<Alert>> alertsByMarket = new HashMap<>();
-        final List<AlertOutcome> writtenOutcomes = new ArrayList<>();
+        final List<ResolutionSweeper.ClosedMarket> closedMarkets    = new ArrayList<>();
+        final List<ResolutionSweeper.ClosedMarket> effectiveMarkets = new ArrayList<>();
+        final Map<String, List<Alert>>             alertsByMarket   = new HashMap<>();
+        final List<AlertOutcome>                   writtenOutcomes  = new ArrayList<>();
 
         TestableSweeper(AppClock clock, AlertOutcomeEvaluator evaluator) {
             super(clock, evaluator);
@@ -126,6 +191,11 @@ class ResolutionSweeperTest {
         }
 
         @Override
+        List<ResolutionSweeper.ClosedMarket> findEffectivelyResolvedMarkets() {
+            return effectiveMarkets;
+        }
+
+        @Override
         List<Alert> findAlertsForMarket(String marketId) {
             return alertsByMarket.getOrDefault(marketId, List.of());
         }
@@ -133,6 +203,15 @@ class ResolutionSweeperTest {
         @Override
         void writeResolutionOutcome(AlertOutcome outcome) {
             writtenOutcomes.add(outcome);
+        }
+
+        /**
+         * Mirrors production logic: returns true if this alert already has a written outcome.
+         * Enables idempotency testing without a live DynamoDB table.
+         */
+        @Override
+        boolean resolutionOutcomeExists(String alertId) {
+            return writtenOutcomes.stream().anyMatch(o -> o.getAlertId().equals(alertId));
         }
     }
 }
