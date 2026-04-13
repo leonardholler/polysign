@@ -146,6 +146,8 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+        ignore-exceptions:
+          - org.springframework.web.reactive.function.client.WebClientResponseException$NotFound
 
       polymarket-data:
         register-health-indicator: true
@@ -179,6 +181,8 @@ resilience4j:
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2.0
         exponential-max-wait-duration: 8s
+        ignore-exceptions:
+          - org.springframework.web.reactive.function.client.WebClientResponseException$NotFound
 
       polymarket-data:
         max-attempts: 3

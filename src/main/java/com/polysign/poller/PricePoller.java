@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
@@ -114,6 +115,10 @@ public class PricePoller {
                         } else {
                             skipped++;
                         }
+                    } catch (WebClientResponseException.NotFound e) {
+                        log.debug("price_poll_skip_delisted marketId={} tokenId={}",
+                                  market.getMarketId(), yesTokenId);
+                        skipped++;
                     } catch (Exception e) {
                         errors++;
                         log.warn("price_poll_market_error marketId={} error={}",
