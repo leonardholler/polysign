@@ -5,6 +5,7 @@ import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.time.format.DateTimeParseException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
@@ -213,9 +214,11 @@ public class SignalPerformanceService {
             outcomesByCategory.computeIfAbsent(cat, k -> new ArrayList<>()).add(o);
         }
 
-        // scan markets table for total/resolved counts per category
+        // scan markets table for total/resolved/stuck counts per category
         Map<String, Long> totalMarketsByCategory   = new HashMap<>();
         Map<String, Long> resolvedMarketsByCategory = new HashMap<>();
+        Map<String, Long> stuckMarketsByCategory    = new HashMap<>();
+        Instant now = clock.now();
         if (marketsTable != null) {
             try {
                 marketsTable.scan().items().forEach(m -> {
@@ -223,6 +226,13 @@ public class SignalPerformanceService {
                     totalMarketsByCategory.merge(cat, 1L, Long::sum);
                     if (m.getResolvedOutcomePrice() != null) {
                         resolvedMarketsByCategory.merge(cat, 1L, Long::sum);
+                    } else if (m.getEndDate() != null) {
+                        // stuck = past endDate but resolvedOutcomePrice still null
+                        try {
+                            if (Instant.parse(m.getEndDate()).isBefore(now)) {
+                                stuckMarketsByCategory.merge(cat, 1L, Long::sum);
+                            }
+                        } catch (DateTimeParseException ignored) {}
                     }
                 });
             } catch (Exception e) {
@@ -251,6 +261,7 @@ public class SignalPerformanceService {
                             cat,
                             totalMarketsByCategory.getOrDefault(cat, 0L),
                             resolvedMarketsByCategory.getOrDefault(cat, 0L),
+                            stuckMarketsByCategory.getOrDefault(cat, 0L),
                             marketsWithSignal,
                             signalsTotal,
                             signalsResolved);
@@ -405,6 +416,7 @@ public class SignalPerformanceService {
             String category,
             long totalMarkets,
             long resolvedMarkets,
+            long stuckMarkets,
             long marketsWithSignal,
             long signalsTotal,
             long signalsResolved) {}
