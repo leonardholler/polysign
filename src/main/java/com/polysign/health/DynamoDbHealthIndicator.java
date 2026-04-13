@@ -1,5 +1,6 @@
 package com.polysign.health;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
@@ -37,6 +38,7 @@ public class DynamoDbHealthIndicator implements HealthIndicator {
     private final AtomicReference<Health> cachedHealth = new AtomicReference<>();
     private volatile long lastSuccessAt = 0;
 
+    @Autowired
     public DynamoDbHealthIndicator(
             DynamoDbClient dynamoDbClient,
             @Value("${polysign.dynamodb.tables.markets:markets}") String marketsTable) {
