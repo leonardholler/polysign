@@ -28,8 +28,10 @@ import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedExce
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Sweeps closed prediction markets and writes "resolution" outcome rows.
@@ -57,6 +59,19 @@ public class ResolutionSweeper {
     private static final Logger log = LoggerFactory.getLogger(ResolutionSweeper.class);
 
     private static final int GAMMA_PAGE_LIMIT = 200;
+
+    /**
+     * Early-exit threshold for {@link #pollAndStoreClosedMarkets()}.
+     *
+     * <p>We stop pagination after this many consecutive pages that contain zero matches
+     * against our tracked-market set. This works regardless of Gamma's sort order and
+     * avoids walking 250,000+ historical markets. Our tracked set consists of recently
+     * active markets, so they appear near the head of the closed-market feed; 5 pages
+     * (~1,000 markets) of consecutive misses is a safe stopping point. A timestamp-based
+     * cutoff was rejected because {@code Market} has no {@code createdAt} field and
+     * Gamma's sort order is not guaranteed.
+     */
+    private static final int MAX_CONSECUTIVE_EMPTY = 5;
 
     private static final Expression HAS_RESOLUTION_PRICE = Expression.builder()
             .expression("attribute_exists(resolvedOutcomePrice)")
@@ -132,7 +147,8 @@ public class ResolutionSweeper {
      * Core sweep loop — package-private for direct invocation in tests.
      */
     void sweep() {
-        pollAndStoreClosedMarkets();
+        long startMs = System.currentTimeMillis();
+        PollStats poll = pollAndStoreClosedMarkets();
 
         Instant now = clock.now();
         List<ClosedMarket> closedMarkets = findClosedMarkets();
@@ -153,7 +169,8 @@ public class ResolutionSweeper {
             }
         }
 
-        log.info("resolution_sweep_complete markets_processed={}", processed);
+        log.info("resolution_sweep_complete tracked={} matched={} pages={} elapsedMs={}",
+                poll.tracked(), poll.matched(), poll.pages(), System.currentTimeMillis() - startMs);
     }
 
     private void processResolutionOutcome(Alert alert, ClosedMarket cm, Instant now) {
@@ -205,22 +222,50 @@ public class ResolutionSweeper {
      * <p>Resolution price is taken from {@code outcomePrices[0]} in the Gamma response —
      * this is the YES-outcome final price: 1.0 if YES resolved, 0.0 if NO resolved.
      *
-     * <p>No-op when {@code gammaClient} or {@code marketsTable} is null (test mode).
+     * <p>Returns a {@link PollStats} summary consumed by {@link #sweep()} for the
+     * {@code resolution_sweep_complete} log line.
+     *
+     * <p>No-op (returns zero stats) when {@code gammaClient} or {@code marketsTable}
+     * is null (test mode).
      */
-    void pollAndStoreClosedMarkets() {
-        if (gammaClient == null || marketsTable == null || objectMapper == null) return;
+    PollStats pollAndStoreClosedMarkets() {
+        if (gammaClient == null || marketsTable == null || objectMapper == null) {
+            return new PollStats(0, 0, 0);
+        }
 
-        int updated = 0;
-        int offset = 0;
+        // ── Load all tracked market IDs into memory (one scan, O(1) lookup below) ──
+        // This avoids a DynamoDB getItem round-trip per Gamma API result.
+        // Without this, the method would call getItem ~250,000 times before exhausting
+        // Polymarket's full historical archive and never completing in practice.
+        Set<String> trackedIds = new HashSet<>();
+        marketsTable.scan().items().forEach(m -> {
+            if (m.getMarketId() != null) trackedIds.add(m.getMarketId());
+        });
+        int tracked = trackedIds.size();
+        if (tracked == 0) {
+            log.debug("resolution_poll_skip no tracked markets");
+            return new PollStats(0, 0, 0);
+        }
+
+        int updated          = 0;
+        int pages            = 0;
+        int offset           = 0;
+        int consecutiveEmpty = 0;
 
         while (true) {
             List<Map<String, Object>> page = fetchClosedMarketsPage(offset);
+            pages++;
             if (page.isEmpty()) break;
 
+            int matchesThisPage = 0;
             for (Map<String, Object> item : page) {
                 try {
                     String marketId = stringOrNull(item, "id");
                     if (marketId == null || marketId.isBlank()) continue;
+
+                    // Fast membership check — skips the vast majority of historical markets
+                    if (!trackedIds.contains(marketId)) continue;
+                    matchesThisPage++;
 
                     // Only update markets already tracked in DynamoDB
                     Key key = Key.builder().partitionValue(marketId).build();
@@ -259,11 +304,23 @@ public class ResolutionSweeper {
                 }
             }
 
+            // Early-exit: if MAX_CONSECUTIVE_EMPTY pages in a row had no matches,
+            // we've moved far enough from our tracked set to stop safely.
+            if (matchesThisPage == 0) {
+                if (++consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+                    log.debug("resolution_poll_early_exit consecutive_empty_pages={} pages_scanned={}",
+                            consecutiveEmpty, pages);
+                    break;
+                }
+            } else {
+                consecutiveEmpty = 0;
+            }
+
             if (page.size() < GAMMA_PAGE_LIMIT) break;
             offset += GAMMA_PAGE_LIMIT;
         }
 
-        log.info("resolution_poll_complete markets_updated={}", updated);
+        return new PollStats(tracked, updated, pages);
     }
 
     /**
@@ -356,6 +413,11 @@ public class ResolutionSweeper {
         Object v = item.get(key);
         return v == null ? null : v.toString();
     }
+
+    // ── Inner records ─────────────────────────────────────────────────────────
+
+    /** Stats returned by {@link #pollAndStoreClosedMarkets()} for the sweep completion log. */
+    record PollStats(int tracked, int matched, int pages) {}
 
     // ── ClosedMarket record ───────────────────────────────────────────────────
 
