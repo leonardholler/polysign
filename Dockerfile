@@ -16,6 +16,14 @@ FROM eclipse-temurin:25-jre-jammy
 WORKDIR /app
 COPY --from=build /build/target/polysign-0.1.0-SNAPSHOT.jar app.jar
 
+# curl is required by the Docker healthcheck (CMD curl -f .../actuator/health).
+# The base JRE image ships without it; without curl every healthcheck returns
+# ExitCode -1, the container never becomes healthy, and autoheal kills it on
+# a ~4-minute cycle.
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # Non-root user for security
 RUN addgroup --system polysign && adduser --system --ingroup polysign polysign
 USER polysign
