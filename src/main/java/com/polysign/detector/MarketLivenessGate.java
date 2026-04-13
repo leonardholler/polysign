@@ -1,5 +1,6 @@
 package com.polysign.detector;
 
+import com.polysign.backtest.MarketPredicates;
 import com.polysign.common.AppClock;
 import com.polysign.model.Market;
 import org.slf4j.Logger;
@@ -18,6 +19,10 @@ import java.time.format.DateTimeParseException;
  *   <li>{@code endDate} is non-null and ≤ now — market's nominal expiry has passed.</li>
  *   <li>{@code active} is explicitly {@code false} — Gamma has paused the market.</li>
  *   <li>{@code acceptingOrders} is explicitly {@code false} — CLOB order book is frozen.</li>
+ *   <li>{@link MarketPredicates#effectivelyResolved} returns present — UMA oracle is assigned
+ *       and the outcome price is decisive (≥ 0.99 or ≤ 0.01). Catches markets that are
+ *       economically decided but whose {@code active}/{@code acceptingOrders} flags haven't
+ *       been flipped by Gamma yet.</li>
  * </ol>
  *
  * <h3>Null-safe defaults</h3>
@@ -78,6 +83,15 @@ public class MarketLivenessGate {
         // (3) acceptingOrders is explicitly false (null → allow)
         if (Boolean.FALSE.equals(acceptingOrders)) {
             log.info("detector_skipped_market_ended marketId={} reason=acceptingOrders endDate={} active={} acceptingOrders={}",
+                    market.getMarketId(), endDateStr, active, acceptingOrders);
+            return false;
+        }
+
+        // (4) effectively resolved — UMA oracle assigned and outcome price is decisive.
+        // Catches markets still showing active=true/acceptingOrders=true in Gamma while
+        // economically decided (outcomePrices[0] ≥ 0.99 or ≤ 0.01).
+        if (MarketPredicates.effectivelyResolved(market).isPresent()) {
+            log.info("detector_skipped_market_ended marketId={} reason=effectivelyResolved endDate={} active={} acceptingOrders={}",
                     market.getMarketId(), endDateStr, active, acceptingOrders);
             return false;
         }

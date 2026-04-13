@@ -36,7 +36,7 @@ import java.util.Set;
 /**
  * Sweeps closed prediction markets and writes "resolution" outcome rows.
  *
- * <p>Runs every 6 hours. Each run has two phases:
+ * <p>Runs every 2 minutes. Each run has two phases:
  * <ol>
  *   <li><b>Poll phase</b> — calls {@link #pollAndStoreClosedMarkets()} to fetch
  *       {@code closed=true} markets from the Gamma API and write
@@ -133,8 +133,8 @@ public class ResolutionSweeper {
         }
     }
 
-    /** @Scheduled interval: every 6 hours (0:00, 6:00, 12:00, 18:00 UTC). */
-    @Scheduled(cron = "0 0 */6 * * *")
+    /** @Scheduled interval: every 2 minutes. Sweep is cheap (~3 s, 5 Gamma pages) so frequent runs are safe. */
+    @Scheduled(fixedDelay = 120_000)
     public void run() {
         try {
             sweep();

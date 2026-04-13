@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -118,6 +119,27 @@ class MarketLivenessGateTest {
     @Test
     void unparseableEndDateAllows() {
         Market m = market("not-a-date", null, null);
+        assertThat(gate.isLive(m)).isTrue();
+    }
+
+    // ── (g) effectivelyResolved: oracle assigned + decisive price → block ─────────
+
+    @Test
+    void effectivelyResolved_blocksEvenWhenActiveAndAcceptingOrders() {
+        // resolvedBy set + outcomePrices[0]=0.9995 → MarketPredicates.effectivelyResolved is present
+        // active=true, acceptingOrders=true — Gamma hasn't flipped these flags yet
+        Market m = market(FUTURE_DATE, true, true);
+        m.setResolvedBy("0x65070BE91477460D8A7AeEb94ef92fe056C2f2A7");
+        m.setOutcomePrices(List.of("0.9995", "0.0005"));
+        assertThat(gate.isLive(m)).isFalse();
+    }
+
+    @Test
+    void effectivelyResolved_requiresResolvedBy_allowsWithoutIt() {
+        // No resolvedBy → predicate returns empty → gate must pass
+        Market m = market(FUTURE_DATE, true, true);
+        m.setResolvedBy(null);
+        m.setOutcomePrices(List.of("0.9995", "0.0005"));
         assertThat(gate.isLive(m)).isTrue();
     }
 
