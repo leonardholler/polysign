@@ -158,4 +158,77 @@ class StatsControllerTest {
         assertThat(resp.marketsInResolutionZone()).isEqualTo(1L);
         assertThat(resp.alertsInResolutionZone()).isEqualTo(2L);
     }
+
+    // ── Test 4: resolution accuracy fields ────────────────────────────────────
+
+    @Test
+    void resolutionAccuracy_computedCorrectly() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+
+        // 4 resolution outcomes: 3 correct, 1 wrong
+        AlertOutcome correct1 = resolutionOutcome("a1", "up",   "up",   1.0);
+        AlertOutcome correct2 = resolutionOutcome("a2", "down", "down", 0.0);
+        AlertOutcome correct3 = resolutionOutcome("a3", "up",   "up",   1.0);
+        AlertOutcome wrong1   = resolutionOutcome("a4", "up",   "down", 0.0);
+        // one t1h row that must not count
+        AlertOutcome other    = resolutionOutcome("a5", "up",   "up",   1.0);
+        other.setHorizon("t1h");
+
+        when(alertOutcomesTable.scan().items().stream())
+                .thenReturn(Stream.of(correct1, correct2, correct3, wrong1, other));
+
+        StatsController.StatsResponse resp = controller.getStats();
+
+        assertThat(resp.alertsInResolutionZone()).isEqualTo(4L);
+        assertThat(resp.resolutionCorrect()).isEqualTo(3L);
+        // 3/4 * 100 = 75.0
+        assertThat(resp.resolutionAccuracyPct()).isEqualTo(75.0);
+    }
+
+    @Test
+    void resolutionAccuracy_nullWhenNoResolutionOutcomes() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+        // alertOutcomesTable already stubbed to empty in setUp
+
+        StatsController.StatsResponse resp = controller.getStats();
+
+        assertThat(resp.resolutionCorrect()).isEqualTo(0L);
+        assertThat(resp.resolutionAccuracyPct()).isNull();
+    }
+
+    @Test
+    void resolutionAccuracy_notCountedWhenPriceNotFullyResolved() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+
+        // direction matches but price stuck at 0.50 — should not count as correct
+        AlertOutcome stuck = resolutionOutcome("a1", "up", "up", 0.50);
+
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(stuck));
+
+        StatsController.StatsResponse resp = controller.getStats();
+
+        assertThat(resp.alertsInResolutionZone()).isEqualTo(1L);
+        assertThat(resp.resolutionCorrect()).isEqualTo(0L);
+        // 0/1 * 100 = 0.0
+        assertThat(resp.resolutionAccuracyPct()).isEqualTo(0.0);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static AlertOutcome resolutionOutcome(
+            String alertId, String predicted, String realized, double priceAtHorizon) {
+        AlertOutcome o = new AlertOutcome();
+        o.setAlertId(alertId);
+        o.setHorizon("resolution");
+        o.setDirectionPredicted(predicted);
+        o.setDirectionRealized(realized);
+        o.setPriceAtHorizon(java.math.BigDecimal.valueOf(priceAtHorizon));
+        return o;
+    }
 }

@@ -17,10 +17,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 /**
  * Lightweight stats endpoint for the dashboard header bar.
@@ -80,7 +82,9 @@ public class StatsController {
             long scoredSamples7d1h,
             long scoredSamples7d15m,
             long marketsInResolutionZone,
-            long alertsInResolutionZone) {}
+            long alertsInResolutionZone,
+            long resolutionCorrect,
+            Double resolutionAccuracyPct) {}
 
     @GetMapping
     public StatsResponse getStats() {
@@ -113,10 +117,22 @@ public class StatsController {
                 .filter(m -> MarketPredicates.effectivelyResolved(m).isPresent())
                 .count();
 
-        // alerts with a resolution outcome row in alert_outcomes
-        long alertsInResolutionZone = alertOutcomesTable.scan().items().stream()
+        // Single scan of alert_outcomes — collect resolution rows, then derive counts.
+        List<AlertOutcome> resolutionOutcomes = alertOutcomesTable.scan().items().stream()
                 .filter(o -> "resolution".equals(o.getHorizon()))
+                .toList();
+
+        long alertsInResolutionZone = resolutionOutcomes.size();
+
+        // Correct: direction match AND price fully resolved (1.0 or 0.0).
+        long resolutionCorrect = resolutionOutcomes.stream()
+                .filter(o -> o.getDirectionPredicted() != null
+                        && o.getDirectionPredicted().equals(o.getDirectionRealized())
+                        && isFullyResolved(o.getPriceAtHorizon()))
                 .count();
+
+        Double resolutionAccuracyPct = alertsInResolutionZone == 0 ? null
+                : Math.round((double) resolutionCorrect / alertsInResolutionZone * 1000.0) / 10.0;
 
         return new StatsResponse(
                 marketsTracked,
@@ -129,6 +145,15 @@ public class StatsController {
                 ap1h.scoredSamples(),
                 ap15m.scoredSamples(),
                 marketsInResolutionZone,
-                alertsInResolutionZone);
+                alertsInResolutionZone,
+                resolutionCorrect,
+                resolutionAccuracyPct);
+    }
+
+    /** Returns true when priceAtHorizon is a decisive binary outcome (>= 0.99 or <= 0.01). */
+    private static boolean isFullyResolved(BigDecimal price) {
+        if (price == null) return false;
+        double v = price.doubleValue();
+        return v >= 0.99 || v <= 0.01;
     }
 }

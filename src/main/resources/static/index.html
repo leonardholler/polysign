@@ -158,7 +158,8 @@
         <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Recent Resolutions</h2>
         <span class="text-gray-700 text-xs">60s refresh</span>
       </div>
-      <div class="text-[10px] text-gray-600 mb-3">alerts scored against final market outcomes</div>
+      <div class="text-[10px] text-gray-600 mb-1">alerts scored against final market outcomes</div>
+      <div id="resolutions-summary" class="text-[10px] text-gray-500 mb-3">—</div>
       <div id="resolutions-list" class="space-y-1.5">
         <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
       </div>
@@ -552,15 +553,24 @@ async function loadWatchedMarkets() {
 // ── Stats row ─────────────────────────────────────────────────────────────────
 
 let lastPollTime = null;
+let lastStats    = null;
 
 async function loadStats() {
   try {
     const r = await fetch('/api/stats');
     if (!r.ok) return;
     const d = await r.json();
+    lastStats = d;
     document.getElementById('st-markets').textContent  = d.marketsTracked ?? '—';
     document.getElementById('st-alerts').textContent   = d.alertsFiredToday ?? '—';
-    document.getElementById('st-resolution').textContent = (d.marketsInResolutionZone ?? '—') + ' in resolution zone';
+
+    // Resolution zone: "N in resolution zone · M correct (P%)"
+    const mz  = d.marketsInResolutionZone ?? '—';
+    const pct = d.resolutionAccuracyPct;
+    const rc  = d.resolutionCorrect ?? 0;
+    document.getElementById('st-resolution').textContent = pct != null
+      ? `${mz} in resolution zone · ${rc} correct (${pct}%)`
+      : `${mz} in resolution zone`;
     document.getElementById('st-whale').textContent    = d.watchedWallets ?? '—';
     const prec1h = d.signalPrecision7d1h;
     document.getElementById('st-precision').textContent =
@@ -675,6 +685,17 @@ async function loadResolutions() {
     if (!r.ok) return;
     const items = await r.json();
     const el = document.getElementById('resolutions-list');
+
+    // Summary line — uses global lastStats (populated by loadStats)
+    const summaryEl = document.getElementById('resolutions-summary');
+    if (summaryEl && lastStats) {
+      const total   = lastStats.alertsInResolutionZone ?? 0;
+      const correct = lastStats.resolutionCorrect ?? 0;
+      const pct     = lastStats.resolutionAccuracyPct;
+      summaryEl.textContent = pct != null
+        ? `${total} resolved · ${correct} correct · ${pct}% accuracy`
+        : total > 0 ? `${total} resolved` : '—';
+    }
 
     if (!items || items.length === 0) {
       el.innerHTML = '<div class="text-gray-600 text-xs py-3 text-center">No resolutions yet — check back soon.</div>';
