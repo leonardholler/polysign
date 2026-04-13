@@ -179,6 +179,18 @@ function fmtPct(v) {
   return (v * 100).toFixed(0) + '%';
 }
 
+function fmtPrecisionStat(s) {
+  if (!s || s.denominator < 20) return '—';
+  return Math.round((s.precision ?? 0) * 100) + '% (' + s.numerator + '/' + s.denominator + ')';
+}
+
+function catSortValue(row, key) {
+  if (key === 'precisionT15m') return row.t15m?.precision ?? null;
+  if (key === 'precisionT1h')  return row.t1h?.precision  ?? null;
+  if (key === 'precisionT24h') return row.t24h?.precision ?? null;
+  return row[key] ?? null;
+}
+
 function precisionColor(v) {
   if (v == null)  return 'text-gray-500';
   if (v >= 0.60)  return 'text-emerald-400';
@@ -598,8 +610,8 @@ function renderCatTable() {
   });
 
   const sorted = [...catData].sort((a, b) => {
-    const va = a[catSortKey] ?? (catSortAsc ? Infinity : -Infinity);
-    const vb = b[catSortKey] ?? (catSortAsc ? Infinity : -Infinity);
+    const va = catSortValue(a, catSortKey) ?? (catSortAsc ? Infinity : -Infinity);
+    const vb = catSortValue(b, catSortKey) ?? (catSortAsc ? Infinity : -Infinity);
     if (typeof va === 'string') return catSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
     return catSortAsc ? va - vb : vb - va;
   });
@@ -611,17 +623,14 @@ function renderCatTable() {
   }
 
   tbody.innerHTML = sorted.map(c => {
-    const lowN = c.sampleCount < 30;
-    const rowCls = lowN ? 'opacity-50 italic' : '';
-    const nLabel = c.sampleCount + (lowN ? ' (low-n)' : '');
-    return `<tr class="border-t border-gray-800 hover:bg-gray-800/40 ${rowCls}">
+    return `<tr class="border-t border-gray-800 hover:bg-gray-800/40">
       <td class="px-4 py-1 text-left text-gray-300">${c.category ?? 'unknown'}</td>
       <td class="px-4 py-1 text-right text-gray-400">${c.alertCount}</td>
-      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT15m)}</td>
-      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT1h)}</td>
-      <td class="px-4 py-1 text-right">${fmtPct(c.precisionT24h)}</td>
+      <td class="px-4 py-1 text-right">${fmtPrecisionStat(c.t15m)}</td>
+      <td class="px-4 py-1 text-right">${fmtPrecisionStat(c.t1h)}</td>
+      <td class="px-4 py-1 text-right">${fmtPrecisionStat(c.t24h)}</td>
       <td class="px-4 py-1 text-right text-gray-400">${c.avgMagnitudePp != null ? (c.avgMagnitudePp * 100).toFixed(1) + 'pp' : '—'}</td>
-      <td class="px-4 py-1 text-right text-gray-500">${nLabel}</td>
+      <td class="px-4 py-1 text-right text-gray-500">${c.sampleCount}</td>
     </tr>`;
   }).join('');
 }

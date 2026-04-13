@@ -152,14 +152,14 @@ public class SignalPerformanceService {
                 .distinct()
                 .count();
 
-        // sampleCount: total non-flat outcomes across all horizons (used for low-n flag)
+        // sampleCount: total non-flat outcomes across all horizons (used for display)
         long sampleCount = outcomes.stream()
                 .filter(o -> o.getWasCorrect() != null)
                 .count();
 
-        Double precisionT15m = precisionForHorizon(outcomes, "t15m");
-        Double precisionT1h  = precisionForHorizon(outcomes, "t1h");
-        Double precisionT24h = precisionForHorizon(outcomes, "t24h");
+        PrecisionStat t15m = precisionForHorizon(outcomes, "t15m");
+        PrecisionStat t1h  = precisionForHorizon(outcomes, "t1h");
+        PrecisionStat t24h = precisionForHorizon(outcomes, "t24h");
 
         double avgMagnitudePp = outcomes.stream()
                 .filter(o -> o.getMagnitudePp() != null)
@@ -169,17 +169,95 @@ public class SignalPerformanceService {
 
         return new CategoryPerformance(
                 category, (int) alertCount, (int) sampleCount,
-                precisionT15m, precisionT1h, precisionT24h, avgMagnitudePp);
+                t15m, t1h, t24h, avgMagnitudePp);
     }
 
-    private static Double precisionForHorizon(List<AlertOutcome> outcomes, String horizon) {
+    private static PrecisionStat precisionForHorizon(List<AlertOutcome> outcomes, String horizon) {
         long correct = outcomes.stream()
                 .filter(o -> horizon.equals(o.getHorizon()) && Boolean.TRUE.equals(o.getWasCorrect()))
                 .count();
         long wrong = outcomes.stream()
                 .filter(o -> horizon.equals(o.getHorizon()) && Boolean.FALSE.equals(o.getWasCorrect()))
                 .count();
-        return (correct + wrong) == 0 ? null : (double) correct / (correct + wrong);
+        int den = (int) (correct + wrong);
+        return new PrecisionStat(den == 0 ? null : (double) correct / den, (int) correct, den);
+    }
+
+    /**
+     * Diagnostic: per-category resolution coverage for the last 7 days.
+     *
+     * <p>Returns, for each category observed in outcomes or markets:
+     * total markets, resolved markets (resolvedOutcomePrice != null),
+     * distinct markets that fired at least one signal, total signals,
+     * and signals whose wasCorrect label has been set.
+     *
+     * @param since look back from this instant (default 7 days ago)
+     */
+    public ResolutionCoverageResponse getResolutionCoverage(Instant since) {
+        if (since == null) since = clock.now().minus(Duration.ofDays(7));
+
+        List<AlertOutcome> outcomes = fetchOutcomes(null, since);
+
+        // resolve categories for pre-Phase-13 outcomes
+        Set<String> needsResolve = outcomes.stream()
+                .filter(o -> o.getCategory() == null && o.getMarketId() != null)
+                .map(AlertOutcome::getMarketId)
+                .collect(Collectors.toSet());
+        Map<String, String> categoryByMarketId = resolveMarketCategories(needsResolve);
+
+        // group outcomes by resolved category
+        Map<String, List<AlertOutcome>> outcomesByCategory = new LinkedHashMap<>();
+        for (AlertOutcome o : outcomes) {
+            String cat = o.getCategory();
+            if (cat == null) cat = categoryByMarketId.getOrDefault(o.getMarketId(), "unknown");
+            outcomesByCategory.computeIfAbsent(cat, k -> new ArrayList<>()).add(o);
+        }
+
+        // scan markets table for total/resolved counts per category
+        Map<String, Long> totalMarketsByCategory   = new HashMap<>();
+        Map<String, Long> resolvedMarketsByCategory = new HashMap<>();
+        if (marketsTable != null) {
+            try {
+                marketsTable.scan().items().forEach(m -> {
+                    String cat = m.getCategory() != null ? m.getCategory() : "unknown";
+                    totalMarketsByCategory.merge(cat, 1L, Long::sum);
+                    if (m.getResolvedOutcomePrice() != null) {
+                        resolvedMarketsByCategory.merge(cat, 1L, Long::sum);
+                    }
+                });
+            } catch (Exception e) {
+                log.warn("resolution_coverage_market_scan_failed error={}", e.getMessage());
+            }
+        }
+
+        Set<String> allCategories = new HashSet<>();
+        allCategories.addAll(outcomesByCategory.keySet());
+        allCategories.addAll(totalMarketsByCategory.keySet());
+
+        List<CategoryCoverage> categories = allCategories.stream()
+                .sorted()
+                .map(cat -> {
+                    List<AlertOutcome> catOutcomes = outcomesByCategory.getOrDefault(cat, List.of());
+                    long marketsWithSignal = catOutcomes.stream()
+                            .map(AlertOutcome::getMarketId)
+                            .filter(Objects::nonNull)
+                            .distinct()
+                            .count();
+                    long signalsTotal    = catOutcomes.size();
+                    long signalsResolved = catOutcomes.stream()
+                            .filter(o -> o.getWasCorrect() != null)
+                            .count();
+                    return new CategoryCoverage(
+                            cat,
+                            totalMarketsByCategory.getOrDefault(cat, 0L),
+                            resolvedMarketsByCategory.getOrDefault(cat, 0L),
+                            marketsWithSignal,
+                            signalsTotal,
+                            signalsResolved);
+                })
+                .toList();
+
+        return new ResolutionCoverageResponse(since.toString(), categories);
     }
 
     /**
@@ -315,6 +393,19 @@ public class SignalPerformanceService {
 
     public record CategoryPerformance(
             String category, int alertCount, int sampleCount,
-            Double precisionT15m, Double precisionT1h, Double precisionT24h,
+            PrecisionStat t15m, PrecisionStat t1h, PrecisionStat t24h,
             double avgMagnitudePp) {}
+
+    /** Numerator, denominator and derived precision for a single horizon bucket. */
+    public record PrecisionStat(Double precision, int numerator, int denominator) {}
+
+    public record ResolutionCoverageResponse(String since, List<CategoryCoverage> categories) {}
+
+    public record CategoryCoverage(
+            String category,
+            long totalMarkets,
+            long resolvedMarkets,
+            long marketsWithSignal,
+            long signalsTotal,
+            long signalsResolved) {}
 }
