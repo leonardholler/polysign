@@ -28,6 +28,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.stream.Collectors;
 
 /**
  * Rolling z-score anomaly detector with liquidity-adjusted thresholds.
@@ -86,6 +88,21 @@ public class StatisticalAnomalyDetector {
     private final Duration dedupeWindow;
     private final double minDeltaP;
 
+    // ── Diagnostic state ──────────────────────────────────────────────────────
+    private record FilterEvent(Instant ts, String reason) {}
+    private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
+    /** Near-miss: |z| >= threshold * 0.75 but below threshold. Reset each detect() run. */
+    private int nearMissInCurrentRun;
+    private volatile LastRunStats lastRunStats;
+
+    public record LastRunStats(int checked, int fired, int nearMiss, String runAt) {}
+
+    public record StatDetectorDiagnostics(
+            double zScoreTier1, double zScoreTier2, double zScoreTier3,
+            int minSnapshots, double minDeltaP,
+            int lastRunChecked, int lastRunFired, int lastRunNearMiss, String lastRunAt,
+            Map<String, Long> filterCountsLastHour) {}
+
     public StatisticalAnomalyDetector(
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<PriceSnapshot> snapshotsTable,
@@ -135,6 +152,7 @@ public class StatisticalAnomalyDetector {
         Instant now = clock.now();
         int checked = 0;
         int fired = 0;
+        nearMissInCurrentRun = 0;
 
         for (Market market : marketsTable.scan().items()) {
             try {
@@ -148,7 +166,29 @@ public class StatisticalAnomalyDetector {
             }
         }
 
+        lastRunStats = new LastRunStats(checked, fired, nearMissInCurrentRun, now.toString());
+        // Prune filter events older than 2 hours
+        Instant pruneBefor = now.minus(Duration.ofHours(2));
+        while (!filterEvents.isEmpty() && filterEvents.peekFirst().ts().isBefore(pruneBefor)) {
+            filterEvents.pollFirst();
+        }
+
         log.info("statistical_anomaly_detect_complete checked={} fired={}", checked, fired);
+    }
+
+    public StatDetectorDiagnostics getDiagnostics(Instant since) {
+        Map<String, Long> filterCounts = filterEvents.stream()
+                .filter(e -> e.ts().isAfter(since))
+                .collect(Collectors.groupingBy(FilterEvent::reason, Collectors.counting()));
+        LastRunStats stats = lastRunStats;
+        return new StatDetectorDiagnostics(
+                zScoreThresholdTier1, zScoreThresholdTier2, zScoreThresholdTier3,
+                minSnapshots, minDeltaP,
+                stats != null ? stats.checked() : 0,
+                stats != null ? stats.fired()   : 0,
+                stats != null ? stats.nearMiss(): 0,
+                stats != null ? stats.runAt()   : null,
+                filterCounts);
     }
 
     /**
@@ -166,6 +206,7 @@ public class StatisticalAnomalyDetector {
 
         List<PriceSnapshot> snapshots = querySnapshots(market.getMarketId(), now);
         if (snapshots.size() < minSnapshots) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_INSUFFICIENT_SNAPSHOTS"));
             return false;
         }
 
@@ -194,6 +235,7 @@ public class StatisticalAnomalyDetector {
 
         // If stddev is zero, we have no volatility information — skip
         if (stddev == 0.0) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_ZERO_STDDEV"));
             return false;
         }
 
@@ -203,6 +245,12 @@ public class StatisticalAnomalyDetector {
         double absZ = Math.abs(zScore);
 
         if (absZ < zScoreThreshold) {
+            if (absZ >= zScoreThreshold * 0.75) {
+                nearMissInCurrentRun++;
+                filterEvents.addLast(new FilterEvent(now, "NEAR_MISS_Z_SCORE"));
+            } else {
+                filterEvents.addLast(new FilterEvent(now, "FILTERED_BELOW_Z_THRESHOLD"));
+            }
             return false;
         }
 
@@ -211,6 +259,7 @@ public class StatisticalAnomalyDetector {
         BigDecimal prevPrice = snapshots.get(n - 2).getMidpoint();
         BigDecimal delta = lastPrice.subtract(prevPrice).abs();
         if (delta.compareTo(BigDecimal.valueOf(minDeltaP)) < 0) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_MIN_DELTA_P"));
             return false;
         }
 
@@ -218,6 +267,7 @@ public class StatisticalAnomalyDetector {
         double lastD = lastPrice.doubleValue();
         double prevD = prevPrice.doubleValue();
         if ((lastD < 0.05 && prevD < 0.05) || (lastD > 0.95 && prevD > 0.95)) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_EXTREME_ZONE"));
             return false;
         }
 
@@ -232,6 +282,7 @@ public class StatisticalAnomalyDetector {
                 OrderbookService.BookSnapshot snap = book.get();
                 if (snap.spreadBps() > maxSpreadBps) {
                     recordSuppression(ALERT_TYPE, tier, "spread");
+                    filterEvents.addLast(new FilterEvent(now, "FILTERED_THIN_BOOK"));
                     log.info("alert_suppressed_thin_book marketId={} tier={} spreadBps={} depthAtMid={} reason=spread",
                             market.getMarketId(), tier.label(),
                             String.format("%.2f", snap.spreadBps()),
@@ -240,6 +291,7 @@ public class StatisticalAnomalyDetector {
                 }
                 if (snap.depthAtMid() < minDepthAtMid) {
                     recordSuppression(ALERT_TYPE, tier, "depth");
+                    filterEvents.addLast(new FilterEvent(now, "FILTERED_THIN_BOOK"));
                     log.info("alert_suppressed_thin_book marketId={} tier={} spreadBps={} depthAtMid={} reason=depth",
                             market.getMarketId(), tier.label(),
                             String.format("%.2f", snap.spreadBps()),
@@ -293,7 +345,9 @@ public class StatisticalAnomalyDetector {
         alert.setLink(link);
         alert.setMetadata(metadata);
 
-        return alertService.tryCreate(alert);
+        boolean created = alertService.tryCreate(alert);
+        filterEvents.addLast(new FilterEvent(now, created ? "ALERT_FIRED" : "FILTERED_DEDUPE"));
+        return created;
     }
 
     /**

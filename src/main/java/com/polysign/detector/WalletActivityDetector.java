@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Fires an {@code info} alert of type {@code wallet_activity} when an individual
@@ -40,6 +41,31 @@ public class WalletActivityDetector {
     private final AppClock clock;
     private final double minTradeUsdc;
 
+    // ── Diagnostic counters (accumulated since process start) ─────────────────
+    private final AtomicLong totalAboveThreshold  = new AtomicLong();
+    private final AtomicLong totalAlertsFired     = new AtomicLong();
+    private final AtomicLong totalBelowThreshold  = new AtomicLong();
+    private final AtomicLong totalDuplicates      = new AtomicLong();
+    private volatile Instant lastTradeAt;
+
+    public record WhaleDetectorDiagnostics(
+            double minTradeUsdcThreshold,
+            long totalTradesAboveThreshold,
+            long totalAlertsFired,
+            long totalTradesBelowThreshold,
+            long totalDuplicates,
+            String lastTradeAt) {}
+
+    public WhaleDetectorDiagnostics getDiagnostics() {
+        return new WhaleDetectorDiagnostics(
+                minTradeUsdc,
+                totalAboveThreshold.get(),
+                totalAlertsFired.get(),
+                totalBelowThreshold.get(),
+                totalDuplicates.get(),
+                lastTradeAt != null ? lastTradeAt.toString() : null);
+    }
+
     public WalletActivityDetector(
             AlertService alertService,
             AppClock clock,
@@ -60,7 +86,12 @@ public class WalletActivityDetector {
         if (trade.getSizeUsdc() == null) return;
 
         double sizeUsdc = trade.getSizeUsdc().doubleValue();
-        if (sizeUsdc < minTradeUsdc) return;
+        lastTradeAt = clock.now();
+        if (sizeUsdc < minTradeUsdc) {
+            totalBelowThreshold.incrementAndGet();
+            return;
+        }
+        totalAboveThreshold.incrementAndGet();
 
         Instant now = clock.now();
 
@@ -120,9 +151,11 @@ public class WalletActivityDetector {
 
         boolean created = alertService.tryCreate(alert);
         if (created) {
+            totalAlertsFired.incrementAndGet();
             log.info("event=wallet_activity_alert_fired address={} alias={} sizeUsdc={} marketId={}",
                     trade.getAddress(), alias, String.format("%.2f", sizeUsdc), trade.getMarketId());
         } else {
+            totalDuplicates.incrementAndGet();
             log.debug("event=wallet_trade_skipped_duplicate txHash={} address={}",
                     txHash, trade.getAddress());
         }

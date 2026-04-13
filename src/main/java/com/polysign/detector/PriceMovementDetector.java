@@ -25,10 +25,13 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.stream.Collectors;
 
 /**
  * Threshold-based price movement detector with liquidity-adjusted thresholds.
@@ -101,6 +104,33 @@ public class PriceMovementDetector {
     private final double minDeltaP;
     private final int maxBypassPerHour;
 
+    // ── Diagnostic state ──────────────────────────────────────────────────────
+    private record FilterEvent(Instant ts, String reason) {}
+    private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
+    private volatile Map<String, MarketDiagnostic> lastMarketDiagnostics = Map.of();
+    private volatile int     lastRunChecked;
+    private volatile int     lastRunFired;
+    private volatile Instant lastRunAt;
+    /** Written only in detect() which runs serially via @Scheduled(fixedDelay). */
+    private final Map<String, MarketDiagnostic> runDiagBuffer = new HashMap<>();
+
+    /** Per-market state captured during the last detection run. */
+    public record MarketDiagnostic(
+            String marketId, String question,
+            double currentPrice, String zone,
+            double effectiveThresh, double recentMovePct,
+            String lastDecision, String lastCheckedAt) {}
+
+    /** Full diagnostics snapshot returned by {@link #getDiagnostics(Instant)}. */
+    public record PriceDetectorDiagnostics(
+            double thresholdTier1Pct, double thresholdTier2Pct, double thresholdTier3Pct,
+            double tier1MinVolume, double tier2MinVolume,
+            int windowMinutes, double midRangeMultiplier, double zoneEntryDiscount,
+            double minWindowVolume, double highVolumeWindowThreshold,
+            int lastRunChecked, int lastRunFired, String lastRunAt,
+            List<MarketDiagnostic> markets,
+            Map<String, Long> filterCountsLastHour) {}
+
     /** Zone transition classification for the price move. */
     enum ZoneTransition {
         ENTERED_BULLISH, ENTERED_BEARISH, DEEPENING_BULLISH, DEEPENING_BEARISH, MID_RANGE
@@ -168,12 +198,36 @@ public class PriceMovementDetector {
     }
 
     /**
+     * Returns a diagnostics snapshot for the last detection run.
+     *
+     * @param since filter-event look-back cut-off (typically {@code now - 1h})
+     */
+    public PriceDetectorDiagnostics getDiagnostics(Instant since) {
+        Map<String, Long> filterCounts = filterEvents.stream()
+                .filter(e -> e.ts().isAfter(since))
+                .collect(Collectors.groupingBy(FilterEvent::reason, Collectors.counting()));
+        List<MarketDiagnostic> markets = lastMarketDiagnostics.values().stream()
+                .sorted(Comparator.comparingDouble(MarketDiagnostic::recentMovePct).reversed())
+                .collect(Collectors.toList());
+        return new PriceDetectorDiagnostics(
+                thresholdPctTier1, thresholdPctTier2, thresholdPctTier3,
+                tier1MinVolume, tier2MinVolume,
+                windowMinutes, midRangeThresholdMultiplier, zoneEntryThresholdDiscount,
+                minWindowVolume, highVolumeWindowThreshold,
+                lastRunChecked, lastRunFired,
+                lastRunAt != null ? lastRunAt.toString() : null,
+                markets,
+                filterCounts);
+    }
+
+    /**
      * Core detection loop — public for direct invocation in integration tests.
      */
     public void detect() {
         Instant now = clock.now();
         int checked = 0;
         int fired = 0;
+        runDiagBuffer.clear();
 
         for (Market market : marketsTable.scan().items()) {
             try {
@@ -185,6 +239,17 @@ public class PriceMovementDetector {
                 log.warn("price_movement_check_failed marketId={} error={}",
                         market.getMarketId(), e.getMessage());
             }
+        }
+
+        // ── Swap diagnostic snapshot ──────────────────────────────────────────
+        lastMarketDiagnostics = Map.copyOf(runDiagBuffer);
+        lastRunChecked = checked;
+        lastRunFired   = fired;
+        lastRunAt      = now;
+        // Prune filter events older than 2 hours to bound memory
+        Instant pruneBefor = now.minus(Duration.ofHours(2));
+        while (!filterEvents.isEmpty() && filterEvents.peekFirst().ts().isBefore(pruneBefor)) {
+            filterEvents.pollFirst();
         }
 
         log.info("price_movement_detect_complete checked={} fired={}", checked, fired);
@@ -207,12 +272,14 @@ public class PriceMovementDetector {
         // Query snapshots for the last LOOKBACK_MINUTES
         List<PriceSnapshot> snapshots = querySnapshots(market.getMarketId(), now);
         if (snapshots.size() < 2) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_INSUFFICIENT_SNAPSHOTS"));
             return false;
         }
 
         // Find the maximum absolute move within any windowMinutes-minute span
         MoveResult move = findMaxMove(snapshots);
         if (move == null) {
+            filterEvents.addLast(new FilterEvent(now, "NO_MOVE_FOUND"));
             return false;
         }
 
@@ -221,6 +288,7 @@ public class PriceMovementDetector {
         // Minimum absolute probability delta: 0.0045→0.0055 is 22% but only 1bp of implied prob
         BigDecimal delta = move.toPrice.subtract(move.fromPrice).abs();
         if (delta.compareTo(BigDecimal.valueOf(minDeltaP)) < 0) {
+            filterEvents.addLast(new FilterEvent(now, "FILTERED_MIN_DELTA_P"));
             return false;
         }
 
@@ -391,7 +459,9 @@ public class PriceMovementDetector {
             }
         }
 
-        // ── Diagnostic log (fires when move is large enough to be interesting) ─
+        // ── Diagnostic log + state recording ─────────────────────────────────
+        String finalDecision = filterReason != null ? filterReason : "ALERT_FIRED";
+        filterEvents.addLast(new FilterEvent(now, finalDecision));
         if (movePct >= minDeltaP * 100) {
             log.debug("price_check marketId={} question={} from={} to={} movePct={}% zone={} momentum={} volWindow={} effectiveThresh={}% result={}",
                     market.getMarketId(),
@@ -405,7 +475,16 @@ public class PriceMovementDetector {
                     hasMomentum(snapshots, direction),
                     String.format("%.0f", volumeInWindow),
                     String.format("%.1f", effectiveThresholdPct),
-                    filterReason != null ? filterReason : "ALERT_FIRED");
+                    finalDecision);
+            runDiagBuffer.put(market.getMarketId(), new MarketDiagnostic(
+                    market.getMarketId(),
+                    market.getQuestion(),
+                    toD,
+                    zoneTransition.name(),
+                    effectiveThresholdPct,
+                    movePct,
+                    finalDecision,
+                    now.toString()));
         }
 
         return fired;
