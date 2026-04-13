@@ -167,7 +167,7 @@ public class PriceMovementDetector {
             @Value("${polysign.detectors.price.min-window-volume:5000}")             double minWindowVolume,
             @Value("${polysign.detectors.price.high-volume-window-threshold:20000}") double highVolumeWindowThreshold,
             @Value("${polysign.detectors.price.dedupe-window-minutes:30}")   int dedupeWindowMinutes,
-            @Value("${polysign.detectors.price.min-delta-p:0.03}")          double minDeltaP,
+            @Value("${polysign.detectors.price.min-delta-p:0.02}")          double minDeltaP,
             @Value("${polysign.detectors.price.max-bypass-per-hour:3}")     int maxBypassPerHour) {
         this.marketsTable                = marketsTable;
         this.snapshotsTable              = snapshotsTable;

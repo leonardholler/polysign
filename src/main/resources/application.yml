@@ -36,7 +36,8 @@ polysign:
       threshold-pct-tier3: 20.0
       window-minutes: 15
       dedupe-window-minutes: 30
-      min-delta-p: 0.03
+      # 2026-04-13: lowered from 0.03 after production diagnostic showed real moves cluster at 0.015-0.025, noise confined to 0.00-0.01 bucket
+      min-delta-p: 0.02
       max-bypass-per-hour: 3        # cap: at most 3 bypass-mode alerts per market per hour
       # Resolution zone config
       resolution-zone-high: 0.65    # above this, bullish resolution is interesting
