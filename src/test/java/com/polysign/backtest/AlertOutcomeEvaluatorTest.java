@@ -159,6 +159,57 @@ class AlertOutcomeEvaluatorTest {
         assertThat(outcome.getWasCorrect()).isTrue();
     }
 
+    // ── Test 6b: resolutionHorizon_bugScenario ───────────────────────────────
+    //
+    // The real-world failure: currentYesPrice is already 1.0 by the time
+    // ResolutionSweeper runs, so priceAtAlert = priceAtHorizon = 1.0 → rawDelta = 0
+    // → old code gave "flat". New code must give "up" from priceAtHorizon alone.
+
+    @Test
+    void resolutionHorizon_resolvedPrice_givesUpNotFlat() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        // Bug scenario: priceAtAlert already reflects the resolved price (1.0)
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-bug", "price_movement", "mkt-yes",
+                T, new BigDecimal("1.0"), new BigDecimal("1.0"),
+                "up", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getDirectionRealized())
+                .as("rawDelta=0 must not produce flat for resolution horizon")
+                .isEqualTo("up");
+        assertThat(outcome.getWasCorrect()).isTrue();
+    }
+
+    @Test
+    void resolutionHorizon_noResolved_givesDownNotFlat() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        // NO-resolved market: priceAtAlert=0.0, priceAtHorizon=0.0 → rawDelta=0
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-no", "price_movement", "mkt-no",
+                T, new BigDecimal("0.0"), new BigDecimal("0.0"),
+                "down", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getDirectionRealized())
+                .as("rawDelta=0 must not produce flat for NO-resolved resolution horizon")
+                .isEqualTo("down");
+        assertThat(outcome.getWasCorrect()).isTrue();
+    }
+
+    @Test
+    void resolutionHorizon_nullPrediction_stillResolvesDirection() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-null", "news_correlation", "mkt-yes",
+                T, new BigDecimal("1.0"), new BigDecimal("1.0"),
+                null, "resolution", NOW, Map.of());
+
+        assertThat(outcome.getDirectionRealized()).isEqualTo("up");
+        assertThat(outcome.getWasCorrect()).isNull(); // no prediction → no correctness score
+    }
+
     // ── Test 7: resolutionWrong ───────────────────────────────────────────────
 
     @Test

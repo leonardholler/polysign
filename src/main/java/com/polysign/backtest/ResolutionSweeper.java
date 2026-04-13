@@ -32,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Sweeps closed prediction markets and writes "resolution" outcome rows.
@@ -127,10 +128,69 @@ public class ResolutionSweeper {
     public void onApplicationReady() {
         log.info("resolution_sweeper_startup_run starting initial sweep after application ready");
         try {
+            backfillResolutionDirections();
             sweep();
         } catch (Exception e) {
             log.error("resolution_sweeper_startup_failed", e);
         }
+    }
+
+    /**
+     * One-time backfill: finds existing {@code horizon=resolution} rows where
+     * {@code directionRealized="flat"} and rewrites them using the price-based rule.
+     *
+     * <p>Pre-fix rows were scored with the magnitude dead-zone (±0.005), which
+     * always fires "flat" for resolution outcomes because {@code currentYesPrice}
+     * at sweep time already reflects the resolved price, making {@code rawDelta ≈ 0}.
+     * The new rule derives direction directly from {@code priceAtHorizon}.
+     *
+     * <p>Rows where {@code directionRealized} is already non-flat are skipped
+     * (they were either written by the corrected code or were genuinely non-flat).
+     * No-op when {@code alertOutcomesTable} is null (test mode).
+     */
+    void backfillResolutionDirections() {
+        if (alertOutcomesTable == null) return;
+
+        List<AlertOutcome> flatRows = new ArrayList<>();
+        try {
+            alertOutcomesTable.scan().items().forEach(o -> {
+                if ("resolution".equals(o.getHorizon()) && "flat".equals(o.getDirectionRealized())) {
+                    flatRows.add(o);
+                }
+            });
+        } catch (Exception e) {
+            log.warn("resolution_backfill_scan_failed error={}", e.getMessage());
+            return;
+        }
+
+        AtomicInteger count = new AtomicInteger(0);
+        for (AlertOutcome o : flatRows) {
+            BigDecimal price = o.getPriceAtHorizon();
+            if (price == null) continue;
+
+            String newDir;
+            if (price.compareTo(BigDecimal.valueOf(0.99)) >= 0) {
+                newDir = "up";
+            } else if (price.compareTo(BigDecimal.valueOf(0.01)) <= 0) {
+                newDir = "down";
+            } else {
+                continue; // still genuinely flat — leave it
+            }
+
+            o.setDirectionRealized(newDir);
+            String dp = o.getDirectionPredicted();
+            o.setWasCorrect(dp != null ? dp.equals(newDir) : null);
+
+            try {
+                alertOutcomesTable.putItem(o);
+                count.incrementAndGet();
+            } catch (Exception e) {
+                log.warn("resolution_backfill_write_failed alertId={} error={}",
+                        o.getAlertId(), e.getMessage());
+            }
+        }
+
+        log.info("resolution_backfill_complete count={}", count.get());
     }
 
     /** @Scheduled interval: every 2 minutes. Sweep is cheap (~3 s, 5 Gamma pages) so frequent runs are safe. */

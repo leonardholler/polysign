@@ -208,7 +208,22 @@ public class AlertOutcomeEvaluator {
         String  directionRealized;
         Boolean wasCorrect;
 
-        if (directionPredicted == null) {
+        if ("resolution".equals(horizon)) {
+            // For resolution horizon, derive directionRealized from the final market price.
+            // Magnitude thresholds must NOT be used here: by the time the sweeper runs,
+            // currentYesPrice has already settled at 1.0 or 0.0, so rawDelta ≈ 0 and
+            // every row would be scored "flat" by the normal dead-zone check.
+            if (priceAtHorizon.compareTo(BigDecimal.valueOf(0.99)) >= 0) {
+                directionRealized = "up";
+            } else if (priceAtHorizon.compareTo(BigDecimal.valueOf(0.01)) <= 0) {
+                directionRealized = "down";
+            } else {
+                directionRealized = "flat"; // price stuck mid-range — not yet decisive
+            }
+            wasCorrect = (directionPredicted != null && !"flat".equals(directionRealized))
+                    ? directionPredicted.equals(directionRealized)
+                    : null;
+        } else if (directionPredicted == null) {
             directionRealized = null;
             wasCorrect        = null;
         } else if (rawDelta.compareTo(BigDecimal.valueOf(0.005)) > 0) {
