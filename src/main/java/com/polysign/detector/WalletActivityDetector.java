@@ -18,7 +18,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -60,8 +59,10 @@ public class WalletActivityDetector {
     // ── Per-hour time-windowed tracking ──────────────────────────────────────
     private final ConcurrentLinkedDeque<Instant> rawAboveThresholdEvents  = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Instant> uniqueAboveThresholdEvents = new ConcurrentLinkedDeque<>();
-    /** Counts the total number of dedup decisions logged at INFO to cap noise. */
-    private final AtomicInteger dupInfoLogCount = new AtomicInteger(0);
+    /** Wall-clock time this bean was constructed — used for the 10-minute INFO logging window. */
+    private final Instant bootTime;
+    /** Guards the one-time first-trade sample log. */
+    private volatile boolean firstTradeSeen = false;
 
     public record WhaleDetectorDiagnostics(
             double minTradeUsdcThreshold,
@@ -101,6 +102,7 @@ public class WalletActivityDetector {
         this.alertService  = alertService;
         this.clock         = clock;
         this.minTradeUsdc  = minTradeUsdc;
+        this.bootTime      = clock.now();
     }
 
     /**
@@ -112,6 +114,17 @@ public class WalletActivityDetector {
      */
     public void checkTrade(WalletTrade trade, String alias, String slug) {
         if (trade.getSizeUsdc() == null) return;
+
+        // Log first received trade to verify all DTO fields are populated from the API mapping.
+        if (!firstTradeSeen) {
+            firstTradeSeen = true;
+            log.info("wallet_first_trade_sample address={} txHash={} marketId={} side={} outcome={} sizeUsdc={} price={} timestamp={}",
+                    trade.getAddress(), trade.getTxHash(), trade.getMarketId(),
+                    trade.getSide(), trade.getOutcome(),
+                    trade.getSizeUsdc() != null ? trade.getSizeUsdc().toPlainString() : "null",
+                    trade.getPrice() != null ? trade.getPrice().toPlainString() : "null",
+                    trade.getTimestamp());
+        }
 
         double sizeUsdc = trade.getSizeUsdc().doubleValue();
         lastTradeAt = clock.now();
@@ -179,20 +192,22 @@ public class WalletActivityDetector {
         alert.setMetadata(metadata);
 
         boolean created = alertService.tryCreate(alert);
+        // Log every dedup decision at INFO for the first 10 minutes after boot to surface
+        // field-mapping bugs, then drop to DEBUG to avoid noise in steady state.
+        boolean inInfoWindow = Duration.between(bootTime, now).toMinutes() < 10;
         if (created) {
             totalAlertsFired.incrementAndGet();
             uniqueAboveThresholdEvents.addLast(now);
-            log.info("event=wallet_activity_alert_fired address={} alias={} sizeUsdc={} marketId={}",
-                    trade.getAddress(), alias, String.format("%.2f", sizeUsdc), trade.getMarketId());
+            log.info("wallet_dedup_decision address={} txHash={} computedKey={} alertId={} result=FIRED marketId={}",
+                    trade.getAddress(), txHash, dedupeKey, alertId, trade.getMarketId());
         } else {
             totalDuplicates.incrementAndGet();
-            int logNum = dupInfoLogCount.incrementAndGet();
-            if (logNum <= 10) {
-                log.info("event=wallet_trade_deduplicated#{} dedupeKey={} address={} txHash={} marketId={}",
-                        logNum, dedupeKey, trade.getAddress(), txHash, trade.getMarketId());
+            if (inInfoWindow) {
+                log.info("wallet_dedup_decision address={} txHash={} computedKey={} alertId={} result=DEDUPED marketId={}",
+                        trade.getAddress(), txHash, dedupeKey, alertId, trade.getMarketId());
             } else {
-                log.debug("event=wallet_trade_skipped_duplicate txHash={} address={}",
-                        txHash, trade.getAddress());
+                log.debug("wallet_dedup_decision address={} txHash={} computedKey={} alertId={} result=DEDUPED marketId={}",
+                        trade.getAddress(), txHash, dedupeKey, alertId, trade.getMarketId());
             }
         }
     }

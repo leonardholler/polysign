@@ -85,6 +85,9 @@ public class WalletPoller {
     /** conditionId (hex) → marketId (Gamma numeric string). Thread-safe, bounded by market count. */
     private final ConcurrentHashMap<String, String> conditionToMarketId = new ConcurrentHashMap<>();
 
+    /** Guards the one-time raw API response sample log. */
+    private volatile boolean firstRawTradeLogged = false;
+
     public WalletPoller(
             @Qualifier("dataApiClient") WebClient dataApiClient,
             DynamoDbTable<Market> marketsTable,
@@ -327,14 +330,26 @@ public class WalletPoller {
      * @return true if a trade was written (new or idempotent overwrite of same data)
      */
     private boolean writeTrade(Map<String, Object> raw, WatchedWallet wallet) {
+        // Log raw API field names+values on first ever trade to confirm DTO mapping correctness.
+        if (!firstRawTradeLogged) {
+            firstRawTradeLogged = true;
+            log.info("wallet_raw_trade_sample address={} fields={}",
+                    wallet.getAddress(), raw);
+        }
+
         String txHash      = str(raw, "transactionHash");
         String conditionId = str(raw, "conditionId");
         String slug        = str(raw, "slug");
         String proxyWallet = str(raw, "proxyWallet");
         Object tsObj       = raw.get("timestamp");
 
-        if (txHash == null || conditionId == null || tsObj == null) {
-            log.debug("wallet_trade_malformed address={} txHash={}", wallet.getAddress(), txHash);
+        if (txHash == null || txHash.isBlank() || conditionId == null || tsObj == null) {
+            if (txHash != null && txHash.isBlank()) {
+                log.warn("wallet_trade_blank_txhash address={} conditionId={} raw_keys={}",
+                        wallet.getAddress(), conditionId, raw.keySet());
+            } else {
+                log.debug("wallet_trade_malformed address={} txHash={}", wallet.getAddress(), txHash);
+            }
             return false;
         }
 

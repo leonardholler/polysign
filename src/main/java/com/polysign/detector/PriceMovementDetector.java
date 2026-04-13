@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -193,6 +194,13 @@ public class PriceMovementDetector {
         this.dedupeWindow                = Duration.ofMinutes(dedupeWindowMinutes);
         this.minDeltaP                   = minDeltaP;
         this.maxBypassPerHour            = maxBypassPerHour;
+    }
+
+    @PostConstruct
+    void logConfig() {
+        log.info("price_detector_config min_delta_p={} tier1_pct={} tier2_pct={} tier3_pct={} tier1_min_volume={} tier2_min_volume={} window_minutes={} min_window_volume={}",
+                minDeltaP, thresholdPctTier1, thresholdPctTier2, thresholdPctTier3,
+                tier1MinVolume, tier2MinVolume, windowMinutes, minWindowVolume);
     }
 
     @Scheduled(fixedDelayString = "${polysign.detectors.price.interval-ms:60000}",
