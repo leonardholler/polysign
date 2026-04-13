@@ -24,6 +24,8 @@ import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -64,6 +66,13 @@ public class MarketPoller {
 
     private static final int    PAGE_LIMIT = 200;
     private static final String CB_NAME    = "polymarket-gamma";
+
+    /**
+     * Gamma API returns gameStartTime as "2026-04-13 15:00:00+00" — space-separated with
+     * a short zone offset (+00) that isn't valid ISO-8601. Pattern 'x' handles +HH offsets.
+     */
+    private static final DateTimeFormatter GAME_START_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssx");
 
     /**
      * Holds a market that has passed all quality gates, along with its parsed
@@ -394,6 +403,25 @@ public class MarketPoller {
         Object closedVal = item.get("closed");
         market.setClosed(closedVal != null ? Boolean.parseBoolean(closedVal.toString()) : null);
 
+        // ── Resolution-detection fields ───────────────────────────────────────
+        Object activeVal = item.get("active");
+        market.setActive(activeVal != null ? Boolean.parseBoolean(activeVal.toString()) : null);
+
+        Object acceptingOrdersVal = item.get("acceptingOrders");
+        market.setAcceptingOrders(acceptingOrdersVal != null ? Boolean.parseBoolean(acceptingOrdersVal.toString()) : null);
+
+        // outcomePrices arrives as a JSON-string array: '["0.9995","0.0005"]'
+        market.setOutcomePrices(parseJsonStringList(item, "outcomePrices"));
+
+        // gameStartTime is in non-ISO format; parseGameStartTime returns null on failure
+        market.setGameStartTime(parseGameStartTime(stringOrNull(item, "gameStartTime")));
+
+        // resolvedBy is an Ethereum address string, may be empty "" or absent
+        market.setResolvedBy(stringOrNull(item, "resolvedBy"));
+
+        // umaResolutionStatuses arrives as a JSON-string array: '[]'
+        market.setUmaResolutionStatuses(parseJsonStringList(item, "umaResolutionStatuses"));
+
         marketsTable.putItem(market);
         log.debug("market_upserted marketId={} category={}", marketId, category);
     }
@@ -429,6 +457,19 @@ public class MarketPoller {
     private static String stringOrNull(Map<String, Object> item, String key) {
         Object v = item.get(key);
         return v == null ? null : v.toString();
+    }
+
+    /**
+     * Parses Gamma's non-standard {@code gameStartTime} format {@code "2026-04-13 15:00:00+00"}
+     * into an {@link Instant}. Returns {@code null} if the value is absent, blank, or unparseable.
+     */
+    private static Instant parseGameStartTime(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return OffsetDateTime.parse(s, GAME_START_FMT).toInstant();
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
 }

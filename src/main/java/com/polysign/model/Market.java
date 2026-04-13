@@ -3,6 +3,7 @@ package com.polysign.model;
 import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -38,6 +39,14 @@ public class Market {
     private Boolean    closed;              // true when market has resolved; populated by closed-market poll (Phase 12+)
     private BigDecimal resolvedOutcomePrice; // final resolved price (0.0 or 1.0); set on resolution
 
+    // ── Resolution-detection fields (added Phase 13) ──────────────────────────
+    private Boolean      active;                // Gamma "active" — false when market is paused
+    private Boolean      acceptingOrders;       // Gamma "acceptingOrders" — false when CLOB frozen
+    private List<String> outcomePrices;         // Gamma "outcomePrices" JSON-array: ["<yes>","<no>"] (order preserved)
+    private Instant      gameStartTime;         // Gamma "gameStartTime" — actual match/game start; null for non-sports
+    private String       resolvedBy;            // Gamma "resolvedBy" — UMA oracle address; non-empty when resolution initiated
+    private List<String> umaResolutionStatuses; // Gamma "umaResolutionStatuses" JSON-array; empty until UMA dispute phase
+
     // ── Key / index getters (annotated) ───────────────────────────────────────
 
     @DynamoDbPartitionKey
@@ -66,6 +75,12 @@ public class Market {
     public BigDecimal   getCurrentYesPrice()    { return currentYesPrice;    }
     public Boolean      getClosed()             { return closed;             }
     public BigDecimal   getResolvedOutcomePrice() { return resolvedOutcomePrice; }
+    public Boolean      getActive()                   { return active;                   }
+    public Boolean      getAcceptingOrders()           { return acceptingOrders;          }
+    public List<String> getOutcomePrices()             { return outcomePrices;            }
+    public Instant      getGameStartTime()             { return gameStartTime;            }
+    public String       getResolvedBy()                { return resolvedBy;               }
+    public List<String> getUmaResolutionStatuses()     { return umaResolutionStatuses;    }
 
     // ── Setters ───────────────────────────────────────────────────────────────
 
@@ -86,4 +101,10 @@ public class Market {
     public void setCurrentYesPrice(BigDecimal currentYesPrice)         { this.currentYesPrice        = currentYesPrice;        }
     public void setClosed(Boolean closed)                               { this.closed                = closed;                }
     public void setResolvedOutcomePrice(BigDecimal resolvedOutcomePrice) { this.resolvedOutcomePrice  = resolvedOutcomePrice;  }
+    public void setActive(Boolean active)                                    { this.active                = active;               }
+    public void setAcceptingOrders(Boolean acceptingOrders)                  { this.acceptingOrders       = acceptingOrders;      }
+    public void setOutcomePrices(List<String> outcomePrices)                 { this.outcomePrices         = outcomePrices;        }
+    public void setGameStartTime(Instant gameStartTime)                      { this.gameStartTime         = gameStartTime;        }
+    public void setResolvedBy(String resolvedBy)                             { this.resolvedBy            = resolvedBy;           }
+    public void setUmaResolutionStatuses(List<String> umaResolutionStatuses) { this.umaResolutionStatuses = umaResolutionStatuses; }
 }
