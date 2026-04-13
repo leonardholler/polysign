@@ -32,6 +32,9 @@
 
     <!-- Suppress noisy AWS SDK INFO logs in production -->
     <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="software.amazon.awssdk.request" level="WARN"/>
     <logger name="io.netty" level="WARN"/>
     <logger name="reactor.netty" level="WARN"/>
+    <logger name="org.apache.http" level="WARN"/>
+    <logger name="org.apache.hc" level="WARN"/>
 </configuration>

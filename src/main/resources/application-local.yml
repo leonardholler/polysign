@@ -17,5 +17,5 @@ aws:
 
 logging:
   level:
-    com.polysign: DEBUG
-    software.amazon.awssdk.request: DEBUG
+    com.polysign: INFO
+    software.amazon.awssdk.request: WARN

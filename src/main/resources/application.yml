@@ -127,7 +127,12 @@ springdoc:
 
 logging:
   level:
-    com.polysign.detector.PriceMovementDetector: DEBUG
+    root: INFO
+    com.polysign: INFO
+    software.amazon.awssdk: WARN
+    software.amazon.awssdk.request: WARN
+    org.apache.http: WARN
+    org.apache.hc: WARN
 
 
 # ── Resilience4j ─────────────────────────────────────────────────────────────
