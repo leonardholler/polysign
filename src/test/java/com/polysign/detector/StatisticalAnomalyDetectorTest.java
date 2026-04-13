@@ -561,7 +561,8 @@ class StatisticalAnomalyDetectorTest {
                     TIER1_MIN_VOLUME, TIER2_MIN_VOLUME,
                     MAX_SPREAD_BPS, MIN_DEPTH_AT_MID,
                     DEDUPE_WINDOW_MINUTES,
-                    MIN_DELTA_P
+                    MIN_DELTA_P,
+                    new com.polysign.config.CommonDetectorProperties()
             );
             this.cannedSnapshots = snapshots;
             this.bookService = bookService;

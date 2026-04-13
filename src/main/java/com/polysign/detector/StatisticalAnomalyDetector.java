@@ -3,6 +3,7 @@ package com.polysign.detector;
 import com.polysign.alert.AlertIdFactory;
 import com.polysign.alert.AlertService;
 import com.polysign.common.AppClock;
+import com.polysign.config.CommonDetectorProperties;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Alert;
 import com.polysign.model.LiquidityTier;
@@ -10,6 +11,7 @@ import com.polysign.model.Market;
 import com.polysign.model.PriceSnapshot;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -88,6 +90,10 @@ public class StatisticalAnomalyDetector {
     private final Duration dedupeWindow;
     private final double minDeltaP;
 
+    // Extreme-zone filter cutoffs (tunable via CommonDetectorProperties)
+    private final double extremeZoneLow;
+    private final double extremeZoneHigh;
+
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
@@ -123,7 +129,8 @@ public class StatisticalAnomalyDetector {
             @Value("${polysign.detectors.orderbook-gate.max-spread-bps:500}")       double maxSpreadBps,
             @Value("${polysign.detectors.orderbook-gate.min-depth-at-mid:100.0}")   double minDepthAtMid,
             @Value("${polysign.detectors.statistical.dedupe-window-minutes:30}")    int dedupeWindowMinutes,
-            @Value("${polysign.detectors.statistical.min-delta-p:0.03}")           double minDeltaP) {
+            @Value("${polysign.detectors.statistical.min-delta-p:0.03}")           double minDeltaP,
+            CommonDetectorProperties commonProps) {
         this.marketsTable          = marketsTable;
         this.snapshotsTable        = snapshotsTable;
         this.alertService          = alertService;
@@ -140,6 +147,15 @@ public class StatisticalAnomalyDetector {
         this.minDepthAtMid         = minDepthAtMid;
         this.dedupeWindow          = Duration.ofMinutes(dedupeWindowMinutes);
         this.minDeltaP             = minDeltaP;
+        this.extremeZoneLow        = commonProps.getExtremeZoneLow();
+        this.extremeZoneHigh       = commonProps.getExtremeZoneHigh();
+    }
+
+    @PostConstruct
+    void logConfig() {
+        log.info("statistical_anomaly_detector_config z_score_tier1={} z_score_tier2={} z_score_tier3={} min_snapshots={} min_delta_p={} extreme_zone_low={} extreme_zone_high={}",
+                zScoreThresholdTier1, zScoreThresholdTier2, zScoreThresholdTier3,
+                minSnapshots, minDeltaP, extremeZoneLow, extremeZoneHigh);
     }
 
     @Scheduled(fixedDelayString = "${polysign.detectors.statistical.interval-ms:60000}",
@@ -289,7 +305,7 @@ public class StatisticalAnomalyDetector {
         // Extreme-zone filter
         double lastD = lastPrice.doubleValue();
         double prevD = prevPrice.doubleValue();
-        if ((lastD < 0.05 && prevD < 0.05) || (lastD > 0.95 && prevD > 0.95)) {
+        if ((lastD < extremeZoneLow && prevD < extremeZoneLow) || (lastD > extremeZoneHigh && prevD > extremeZoneHigh)) {
             filterEvents.addLast(new FilterEvent(now, "FILTERED_EXTREME_ZONE"));
             return false;
         }

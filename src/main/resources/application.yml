@@ -59,6 +59,9 @@ polysign:
       min-delta-p: 0.03
       interval-ms: 60000
       initial-delay-ms: 70000
+    common:
+      extreme-zone-low: 0.05     # price below this → extreme tail (0–5¢); filtered by all detectors
+      extreme-zone-high: 0.95    # price above this → extreme tail (95–100¢); filtered by all detectors
     orderbook-gate:
       max-spread-bps: 500        # Tier 2/3 alerts dropped if spread exceeds this
       min-depth-at-mid: 100.0    # Tier 2/3 alerts dropped if depth below this (USDC)

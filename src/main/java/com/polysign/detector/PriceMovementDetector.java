@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.polysign.config.CommonDetectorProperties;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -105,6 +106,10 @@ public class PriceMovementDetector {
     private final double minDeltaP;
     private final int maxBypassPerHour;
 
+    // Extreme-zone filter cutoffs (tunable via CommonDetectorProperties)
+    private final double extremeZoneLow;
+    private final double extremeZoneHigh;
+
     // ── Diagnostic state ──────────────────────────────────────────────────────
     private record FilterEvent(Instant ts, String reason) {}
     private final ConcurrentLinkedDeque<FilterEvent> filterEvents = new ConcurrentLinkedDeque<>();
@@ -169,7 +174,8 @@ public class PriceMovementDetector {
             @Value("${polysign.detectors.price.high-volume-window-threshold:20000}") double highVolumeWindowThreshold,
             @Value("${polysign.detectors.price.dedupe-window-minutes:30}")   int dedupeWindowMinutes,
             @Value("${polysign.detectors.price.min-delta-p:0.02}")          double minDeltaP,
-            @Value("${polysign.detectors.price.max-bypass-per-hour:3}")     int maxBypassPerHour) {
+            @Value("${polysign.detectors.price.max-bypass-per-hour:3}")     int maxBypassPerHour,
+            CommonDetectorProperties commonProps) {
         this.marketsTable                = marketsTable;
         this.snapshotsTable              = snapshotsTable;
         this.alertsTable                 = alertsTable;
@@ -194,13 +200,16 @@ public class PriceMovementDetector {
         this.dedupeWindow                = Duration.ofMinutes(dedupeWindowMinutes);
         this.minDeltaP                   = minDeltaP;
         this.maxBypassPerHour            = maxBypassPerHour;
+        this.extremeZoneLow              = commonProps.getExtremeZoneLow();
+        this.extremeZoneHigh             = commonProps.getExtremeZoneHigh();
     }
 
     @PostConstruct
     void logConfig() {
-        log.info("price_detector_config min_delta_p={} tier1_pct={} tier2_pct={} tier3_pct={} tier1_min_volume={} tier2_min_volume={} window_minutes={} min_window_volume={}",
+        log.info("price_detector_config min_delta_p={} tier1_pct={} tier2_pct={} tier3_pct={} tier1_min_volume={} tier2_min_volume={} window_minutes={} min_window_volume={} extreme_zone_low={} extreme_zone_high={}",
                 minDeltaP, thresholdPctTier1, thresholdPctTier2, thresholdPctTier3,
-                tier1MinVolume, tier2MinVolume, windowMinutes, minWindowVolume);
+                tier1MinVolume, tier2MinVolume, windowMinutes, minWindowVolume,
+                extremeZoneLow, extremeZoneHigh);
     }
 
     @Scheduled(fixedDelayString = "${polysign.detectors.price.interval-ms:60000}",
@@ -355,7 +364,7 @@ public class PriceMovementDetector {
 
         // ── Extreme-zone filter ───────────────────────────────────────────────
         // Tail markets produce huge pct moves from tiny absolute moves.
-        } else if ((fromD < 0.05 && toD < 0.05) || (fromD > 0.95 && toD > 0.95)) {
+        } else if ((fromD < extremeZoneLow && toD < extremeZoneLow) || (fromD > extremeZoneHigh && toD > extremeZoneHigh)) {
             filterReason = "FILTERED_EXTREME_ZONE";
 
         } else {
