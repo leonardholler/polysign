@@ -137,18 +137,6 @@
   <!-- Right: Smart Money + Watched Markets (35%) -->
   <div class="md:w-[35%] flex flex-col">
 
-    <!-- Whale Leaderboard -->
-    <div class="border-b border-gray-800 px-4 py-4">
-      <div class="flex items-center justify-between mb-1">
-        <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Whale Leaderboard</h2>
-        <button id="wallet-show-all-btn" class="text-xs text-blue-400 hover:underline hidden" onclick="toggleShowAllWallets()">Show all</button>
-      </div>
-      <div class="text-[10px] text-gray-600 mb-3">tracked wallets ranked by recent activity</div>
-      <div id="wallet-list" class="space-y-2">
-        <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
-      </div>
-    </div>
-
     <!-- Watched Markets -->
     <div class="px-4 py-4">
       <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3">Watched Markets</h2>
@@ -426,92 +414,6 @@ async function loadAlerts() {
   } catch (_) {}
 }
 
-// ── Smart Money Tracker ───────────────────────────────────────────────────────
-
-let showAllWallets = false;
-const MAX_WALLETS_DEFAULT = 10;
-
-function toggleShowAllWallets() {
-  showAllWallets = !showAllWallets;
-  renderWallets(lastWalletData);
-}
-
-let lastWalletData = [];
-
-async function loadWallets() {
-  try {
-    const r = await fetch('/api/wallets');
-    if (!r.ok) return;
-    lastWalletData = await r.json();
-    renderWallets(lastWalletData);
-  } catch (_) {}
-}
-
-function renderWallets(wallets) {
-  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-  const filtered = wallets
-    .filter(w => w.address && !w.address.startsWith('0x0000')
-              && w.address !== '_comment'
-              && !(w.alias || '').startsWith('PLACEHOLDER')
-              && w.lastTradeAt && new Date(w.lastTradeAt).getTime() > cutoff24h
-              && !(w.lastSizeUsdc == null && w.recentDirection == null))
-    .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
-
-  if (filtered.length === 0) {
-    document.getElementById('wallet-list').innerHTML =
-      '<div class="text-gray-600 text-xs py-3 text-center">No trades in the last 24h</div>';
-    document.getElementById('wallet-show-all-btn').classList.add('hidden');
-    return;
-  }
-
-  const shown = showAllWallets ? filtered : filtered.slice(0, MAX_WALLETS_DEFAULT);
-  const btn = document.getElementById('wallet-show-all-btn');
-  if (filtered.length > MAX_WALLETS_DEFAULT) {
-    btn.classList.remove('hidden');
-    btn.textContent = showAllWallets ? 'Show less' : `Show all (${filtered.length})`;
-  } else {
-    btn.classList.add('hidden');
-  }
-
-  const html = shown.map(w => {
-    const dir     = (w.recentDirection || '').toUpperCase();
-    const outcome = (w.lastOutcome || '').toUpperCase();
-    const isBuy     = dir === 'BUY';
-    const borderCol = isBuy ? 'border-l-emerald-600' : 'border-l-red-700';
-    const dirCol    = isBuy ? 'text-emerald-400'     : 'text-red-400';
-    const sizeStr  = w.lastSizeUsdc ? ' — ' + fmtUsd(parseFloat(w.lastSizeUsdc)) : '';
-    const priceStr = w.lastTradePrice
-      ? ` <span class="text-gray-500">@ ${(parseFloat(w.lastTradePrice)*100).toFixed(1)}¢</span>` : '';
-    let tradeInfo;
-    if (!dir) {
-      tradeInfo = '—';
-    } else if (outcome && outcome !== 'YES' && outcome !== 'NO') {
-      // Named outcome (e.g. "ARIZONA DIAMONDBACKS") — outcome IS the useful info, skip question
-      tradeInfo = `${dir} ${outcome}${sizeStr}${priceStr}`;
-    } else {
-      // YES/NO binary market — show market question for context
-      const q = w.lastMarketQuestion ? truncate(w.lastMarketQuestion, 70) : '—';
-      tradeInfo = `${dir}${outcome ? ' ' + outcome : ''} on "${q}"${sizeStr}${priceStr}`;
-    }
-    const tradeInfoEl = w.lastMarketLink
-      ? `<a href="${w.lastMarketLink}" target="_blank" rel="noopener" class="text-xs ${dirCol} mt-0.5 leading-tight hover:underline block">${tradeInfo}</a>`
-      : `<div class="text-xs ${dirCol} mt-0.5 leading-tight">${tradeInfo}</div>`;
-    return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
-      <div class="flex items-center justify-between gap-2">
-        <a href="https://polymarket.com/profile/${w.address}" target="_blank" rel="noopener"
-           class="font-bold text-gray-200 hover:text-blue-400 hover:underline text-xs">🐋 ${w.alias || w.address.slice(0,10)}</a>
-        <span class="text-gray-600 text-[10px] shrink-0">${relativeTime(w.lastTradeAt)}</span>
-      </div>
-      ${tradeInfoEl}
-      <div class="flex items-center justify-end mt-0.5">
-        <span class="text-gray-600 text-[10px]">${w.tradeCount != null ? w.tradeCount + ' trades' : ''}</span>
-      </div>
-    </div>`;
-  }).join('');
-
-  document.getElementById('wallet-list').innerHTML = html;
-}
-
 // ── Watched Markets ───────────────────────────────────────────────────────────
 
 async function loadWatchedMarkets() {
@@ -773,14 +675,13 @@ async function loadResolutions() {
 // ── Bootstrap & polling ───────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadWallets(), loadResolutions()]);
+  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadResolutions()]);
 }
 
 init();
 setInterval(loadAlerts,         10_000);
 setInterval(loadStats,          30_000);
 setInterval(loadWatchedMarkets, 60_000);
-setInterval(loadWallets,        60_000);
 setInterval(loadResolutions,    60_000);
 </script>
 </body>
