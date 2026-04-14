@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.polysign.common.AppClock;
 import com.polysign.common.CorrelationId;
 import com.polysign.detector.MarketLivenessGate;
-import com.polysign.detector.WalletActivityDetector;
 import com.polysign.model.Market;
 import com.polysign.model.WalletTrade;
 import com.polysign.model.WatchedWallet;
@@ -77,7 +76,6 @@ public class WalletPoller {
     private final DynamoDbTable<WatchedWallet>  watchedWalletsTable;
     private final DynamoDbTable<WalletTrade>    walletTradesTable;
     private final MarketLivenessGate             livenessGate;
-    private final WalletActivityDetector         activityDetector;
     private final AppClock                      clock;
     private final ObjectMapper                  mapper;
     private final CircuitBreaker                circuitBreaker;
@@ -95,7 +93,6 @@ public class WalletPoller {
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<WatchedWallet> watchedWalletsTable,
             DynamoDbTable<WalletTrade> walletTradesTable,
-            WalletActivityDetector activityDetector,
             AppClock clock,
             ObjectMapper mapper,
             CircuitBreakerRegistry cbRegistry,
@@ -109,7 +106,6 @@ public class WalletPoller {
         this.marketsTable        = marketsTable;
         this.watchedWalletsTable = watchedWalletsTable;
         this.walletTradesTable   = walletTradesTable;
-        this.activityDetector    = activityDetector;
         this.clock               = clock;
         this.livenessGate        = livenessGate;
         this.mapper              = mapper;
@@ -128,9 +124,8 @@ public class WalletPoller {
      */
     @EventListener(ApplicationReadyEvent.class)
     void buildCache() {
-        // ApplicationReadyEvent fires after BootstrapRunner (Order=1) and WalletBootstrap
-        // (Order=2) have both completed, so the markets table and watched_wallets table
-        // exist on a fresh LocalStack or first-ever deployment.
+        // ApplicationReadyEvent fires after BootstrapRunner (Order=1) has completed,
+        // so the markets table exists on a fresh LocalStack or first-ever deployment.
         try {
             int count = 0;
             for (Market m : marketsTable.scan().items()) {
@@ -176,7 +171,7 @@ public class WalletPoller {
             if (totalTrades == 0) {
                 consecutiveZeroCycles++;
                 if (consecutiveZeroCycles >= STALL_THRESHOLD) {
-                    log.error("PIPELINE STALL: No wallet trades ingested in {} consecutive cycles — consensus alerts cannot fire",
+                    log.error("PIPELINE STALL: No wallet trades ingested in {} consecutive cycles",
                             consecutiveZeroCycles);
                 }
             } else {
@@ -407,17 +402,6 @@ public class WalletPoller {
         walletTradesTable.putItem(trade);
         log.debug("wallet_trade_written address={} txHash={} marketId={} sizeUsdc={}",
                 wallet.getAddress(), txHash, marketId, sizeUsdc);
-
-        // Fire detectors synchronously. Per-item catch: a detector error never kills the poll loop.
-        // Liveness gate: skip wallet detector if the market has ended or halted. Fail-open when
-        // market is null (shouldn't happen — marketId was resolved above — but be defensive).
-        if (market == null || livenessGate.isLive(market)) {
-            try {
-                activityDetector.checkTrade(trade, wallet.getAlias(), detectorSlug);
-            } catch (Exception e) {
-                log.warn("wallet_activity_check_failed txHash={} error={}", txHash, e.getMessage());
-            }
-        }
 
         return true;
     }

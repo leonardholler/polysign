@@ -57,21 +57,26 @@
 <div class="pt-16">
 
 <!-- ── Stats row ─────────────────────────────────────────────────────────── -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-800 border-b border-gray-800">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-px bg-gray-800 border-b border-gray-800">
   <div class="bg-gray-900 px-4 py-3">
     <div class="text-xs text-gray-500 mb-0.5">Markets Tracked</div>
     <div class="text-2xl font-bold text-gray-100" id="st-markets">—</div>
     <div class="text-xs text-gray-600" id="st-watched">— watched</div>
   </div>
-  <div class="bg-gray-900 px-4 py-3">
+  <div class="bg-gray-900 px-4 py-3" title="Alerts fired in the last 24 hours.">
     <div class="text-xs text-gray-500 mb-0.5">Alerts Today</div>
     <div class="text-2xl font-bold text-gray-100" id="st-alerts">—</div>
-    <div class="text-xs text-gray-600" id="st-resolution">— in resolution zone</div>
+    <div class="text-xs text-gray-600" id="st-alerts-sub">— scored this week</div>
   </div>
-  <div class="bg-gray-900 px-4 py-3">
+  <div class="bg-gray-900 px-4 py-3" title="Of alerts on markets that reached full resolution (0% or 100%), the % where predicted direction matched the final outcome. Easier test than short-horizon precision — detectors often fire when the outcome is already near-certain.">
+    <div class="text-xs text-gray-500 mb-0.5">Resolution Accuracy</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-res-acc">—</div>
+    <div class="text-xs text-gray-600" id="st-res-acc-sub">no resolved alerts yet</div>
+  </div>
+  <div class="bg-gray-900 px-4 py-3" title="Of alerts fired in the last 7 days, the % where price moved in the predicted direction within 1 hour. Short-horizon detector quality.">
     <div class="text-xs text-gray-500 mb-0.5">Signal Precision</div>
     <div class="text-2xl font-bold text-gray-100" id="st-precision">—</div>
-    <div class="text-xs text-gray-600" id="st-precision-samples">7-day, 1h horizon</div>
+    <div class="text-xs text-gray-600" id="st-precision-samples">no scored alerts yet</div>
   </div>
   <div class="bg-gray-900 px-4 py-3">
     <div class="text-xs text-gray-500 mb-0.5">Whale Activity</div>
@@ -82,7 +87,7 @@
 
 <!-- ── Signal Quality row ─────────────────────────────────────────────────── -->
 <div class="border-b border-gray-800 px-4 py-1.5">
-  <span class="text-xs text-gray-500">Signal Quality (7d, 1h) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · whale —%</span></span>
+  <span class="text-xs text-gray-500">Signal Quality (1h eval · 7-day window) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · whale —%</span></span>
 </div>
 
 <!-- ── Signal Performance by Category ───────────────────────────────────── -->
@@ -121,7 +126,7 @@
       <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Live Events</h2>
       <span class="text-gray-700 text-xs">grouped by market · 10s refresh</span>
     </div>
-    <div class="text-[10px] text-gray-600 mb-3">every whale trade, price move, and news match as it happens</div>
+    <div class="text-[10px] text-gray-600 mb-3">every whale trade and price move as it happens</div>
     <div id="alert-feed-container">
       <div id="alert-feed" class="space-y-1.5">
         <div class="text-gray-600 text-xs py-4 text-center">Loading…</div>
@@ -563,21 +568,26 @@ async function loadStats() {
     lastStats = d;
     document.getElementById('st-markets').textContent  = d.marketsTracked ?? '—';
     document.getElementById('st-alerts').textContent   = d.alertsFiredToday ?? '—';
+    const samples1h = d.scoredSamples7d1h ?? 0;
+    document.getElementById('st-alerts-sub').textContent =
+        samples1h > 0 ? samples1h + ' scored this week' : '— scored this week';
 
-    // Resolution zone: "N in resolution zone · M correct (P%)"
-    const mz  = d.marketsInResolutionZone ?? '—';
-    const pct = d.resolutionAccuracyPct;
+    // Resolution Accuracy card
+    const arz = d.alertsInResolutionZone ?? 0;
     const rc  = d.resolutionCorrect ?? 0;
-    document.getElementById('st-resolution').textContent = pct != null
-      ? `${mz} in resolution zone · ${rc} correct (${pct}%)`
-      : `${mz} in resolution zone`;
+    const mz  = d.marketsInResolutionZone ?? 0;
+    const pct = d.resolutionAccuracyPct;
+    document.getElementById('st-res-acc').textContent = arz === 0 ? '—' : (pct != null ? pct + '%' : '—');
+    document.getElementById('st-res-acc-sub').textContent = arz === 0
+      ? 'no resolved alerts yet'
+      : `${rc}/${arz} correct · ${mz} markets at resolution · all time`;
+
     document.getElementById('st-whale').textContent    = d.watchedWallets ?? '—';
     const prec1h = d.signalPrecision7d1h;
     document.getElementById('st-precision').textContent =
-        prec1h != null ? (prec1h * 100).toFixed(1) + '%' : '—';
-    const samples1h = d.scoredSamples7d1h ?? 0;
+        samples1h > 0 ? (prec1h != null ? (prec1h * 100).toFixed(1) + '%' : '—') : '—';
     document.getElementById('st-precision-samples').textContent =
-        samples1h > 0 ? samples1h + ' samples · 7d 1h' : '7-day, 1h horizon';
+        samples1h > 0 ? samples1h + ' alerts · 1h eval · 7-day window' : 'no scored alerts yet';
     document.getElementById('h-markets').textContent   = d.marketsTracked ?? '—';
     document.getElementById('h-topic').textContent     = d.ntfyTopic ?? '—';
     lastPollTime = d.lastPollTime || null;

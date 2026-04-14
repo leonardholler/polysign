@@ -5,7 +5,6 @@ import com.polysign.backtest.SignalPerformanceService.ResolutionCoverageResponse
 import com.polysign.common.AppClock;
 import com.polysign.detector.PriceMovementDetector;
 import com.polysign.detector.StatisticalAnomalyDetector;
-import com.polysign.detector.WalletActivityDetector;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,25 +29,21 @@ public class DiagnosticsEndpoint {
     private final AppClock                   clock;
     private final PriceMovementDetector      priceDetector;
     private final StatisticalAnomalyDetector statDetector;
-    private final WalletActivityDetector     whaleDetector;
 
     public DiagnosticsEndpoint(SignalPerformanceService service,
                                 AppClock clock,
                                 PriceMovementDetector priceDetector,
-                                StatisticalAnomalyDetector statDetector,
-                                WalletActivityDetector whaleDetector) {
+                                StatisticalAnomalyDetector statDetector) {
         this.service       = service;
         this.clock         = clock;
         this.priceDetector = priceDetector;
         this.statDetector  = statDetector;
-        this.whaleDetector = whaleDetector;
     }
 
     /** Top-level response for {@code GET /actuator/diagnostics/detector-thresholds}. */
     record DetectorThresholdsResponse(
             PriceMovementDetector.PriceDetectorDiagnostics priceMovement,
             StatisticalAnomalyDetector.StatDetectorDiagnostics statisticalAnomaly,
-            WalletActivityDetector.WhaleDetectorDiagnostics whale,
             Map<String, Long> combinedFilterCountsLastHour) {}
 
     /**
@@ -72,9 +67,9 @@ public class DiagnosticsEndpoint {
     /**
      * GET /actuator/diagnostics/detector-thresholds
      *
-     * <p>Returns the current effective configuration and last-run stats for all three
-     * detectors, plus per-reason filter counts aggregated over the last hour.
-     * Use this to understand why alerts are (or aren't) firing.
+     * <p>Returns the current effective configuration and last-run stats for price and
+     * statistical anomaly detectors, plus per-reason filter counts aggregated over the
+     * last hour. Use this to understand why alerts are (or aren't) firing.
      */
     @GetMapping("/detector-thresholds")
     public ResponseEntity<DetectorThresholdsResponse> detectorThresholds() {
@@ -82,12 +77,10 @@ public class DiagnosticsEndpoint {
 
         PriceMovementDetector.PriceDetectorDiagnostics price = priceDetector.getDiagnostics(since);
         StatisticalAnomalyDetector.StatDetectorDiagnostics stat = statDetector.getDiagnostics(since);
-        WalletActivityDetector.WhaleDetectorDiagnostics whale = whaleDetector.getDiagnostics(since);
 
-        // Merge filter counts from price + stat detectors into one map
         Map<String, Long> combined = new HashMap<>(price.filterCountsLastHour());
         stat.filterCountsLastHour().forEach((k, v) -> combined.merge(k, v, Long::sum));
 
-        return ResponseEntity.ok(new DetectorThresholdsResponse(price, stat, whale, combined));
+        return ResponseEntity.ok(new DetectorThresholdsResponse(price, stat, combined));
     }
 }

@@ -38,8 +38,6 @@ class DiagnosticsEndpointIT extends AbstractIntegrationIT {
                 .andExpect(jsonPath("$.priceMovement.thresholdTier1Pct").isNumber())
                 .andExpect(jsonPath("$.statisticalAnomaly").exists())
                 .andExpect(jsonPath("$.statisticalAnomaly.zScoreTier1").isNumber())
-                .andExpect(jsonPath("$.whale").exists())
-                .andExpect(jsonPath("$.whale.minTradeUsdcThreshold").isNumber())
                 .andExpect(jsonPath("$.combinedFilterCountsLastHour").exists());
     }
 }
