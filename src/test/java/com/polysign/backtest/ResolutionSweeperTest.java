@@ -43,10 +43,11 @@ class ResolutionSweeperTest {
     @Test
     void closedMarket_upAlert_resolutionRowCorrect() {
         Alert alert = priceMovementAlert("alert-r1", "mkt-r1", "up", T);
+        alert.setPriceAtAlert(new BigDecimal("0.50")); // pre-move price stored at fire time
         BigDecimal resolutionPrice = BigDecimal.ONE; // YES resolved = 1.0
 
         TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
-        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-r1", "0.50", resolutionPrice));
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-r1", "0.99", resolutionPrice));
         sweeper.alertsByMarket.put("mkt-r1", List.of(alert));
 
         sweeper.sweep();
@@ -55,6 +56,7 @@ class ResolutionSweeperTest {
         AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
         assertThat(outcome.getHorizon()).isEqualTo("resolution");
         assertThat(outcome.getPriceAtHorizon()).isEqualByComparingTo("1.0");
+        assertThat(outcome.getPriceAtAlert()).isEqualByComparingTo("0.50"); // from alert, not cm
         assertThat(outcome.getMagnitudePp()).isEqualByComparingTo("0.50");  // rawDelta=+0.50, direction=up
         assertThat(outcome.getWasCorrect()).isTrue();
     }
@@ -64,17 +66,19 @@ class ResolutionSweeperTest {
     @Test
     void closedMarket_downAlert_resolutionRowWrong() {
         Alert alert = priceMovementAlert("alert-r2", "mkt-r2", "down", T);
+        alert.setPriceAtAlert(new BigDecimal("0.50")); // pre-move price stored at fire time
         BigDecimal resolutionPrice = BigDecimal.ONE; // YES resolved = 1.0
 
         TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
-        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-r2", "0.50", resolutionPrice));
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-r2", "0.99", resolutionPrice));
         sweeper.alertsByMarket.put("mkt-r2", List.of(alert));
 
         sweeper.sweep();
 
         assertThat(sweeper.writtenOutcomes).hasSize(1);
         AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
-        // rawDelta = 1.0 - 0.50 = +0.50; direction="down" → magnitudePp = -rawDelta = -0.50
+        // priceAtAlert=0.50 (from alert), rawDelta = 1.0 - 0.50 = +0.50
+        // direction="down" → magnitudePp = -rawDelta = -0.50
         assertThat(outcome.getMagnitudePp()).isEqualByComparingTo("-0.50");
         assertThat(outcome.getDirectionRealized()).isEqualTo("up");
         assertThat(outcome.getWasCorrect()).isFalse();
@@ -97,11 +101,12 @@ class ResolutionSweeperTest {
     @Test
     void effectiveResolution_upAlert_resolutionRowCorrect() {
         Alert alert = priceMovementAlert("alert-eff1", "mkt-eff1", "up", T);
+        alert.setPriceAtAlert(new BigDecimal("0.40")); // pre-move price stored at fire time
         BigDecimal resolutionPrice = BigDecimal.ONE; // YES resolved
 
         TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
         // No formal closedMarket — only effectivelyResolved
-        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-eff1", "0.40", resolutionPrice));
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-eff1", "0.99", resolutionPrice));
         sweeper.alertsByMarket.put("mkt-eff1", List.of(alert));
 
         sweeper.sweep();
@@ -110,6 +115,7 @@ class ResolutionSweeperTest {
         AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
         assertThat(outcome.getHorizon()).isEqualTo("resolution");
         assertThat(outcome.getPriceAtHorizon()).isEqualByComparingTo("1.0");
+        assertThat(outcome.getPriceAtAlert()).isEqualByComparingTo("0.40"); // from alert, not cm
         assertThat(outcome.getWasCorrect()).isTrue();
     }
 
@@ -118,10 +124,11 @@ class ResolutionSweeperTest {
     @Test
     void effectiveResolution_secondSweep_doesNotWriteDuplicate() {
         Alert alert = priceMovementAlert("alert-idem1", "mkt-idem1", "up", T);
+        alert.setPriceAtAlert(new BigDecimal("0.50"));
         BigDecimal resolutionPrice = BigDecimal.ONE;
 
         TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
-        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-idem1", "0.50", resolutionPrice));
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-idem1", "0.99", resolutionPrice));
         sweeper.alertsByMarket.put("mkt-idem1", List.of(alert));
 
         // First sweep — outcome is written
@@ -139,14 +146,15 @@ class ResolutionSweeperTest {
     @Test
     void phaseA_takesPresedenceOverPhaseB_sameMarket() {
         Alert alert = priceMovementAlert("alert-prec1", "mkt-prec1", "down", T);
+        alert.setPriceAtAlert(new BigDecimal("0.50"));
         // Phase A sees YES resolved (price = 1.0)
         BigDecimal formalPrice    = BigDecimal.ONE;
         // Phase B also fires with the same derived price — but should be skipped
         BigDecimal effectivePrice = BigDecimal.ONE;
 
         TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
-        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.50", formalPrice));
-        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.50", effectivePrice));
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.99", formalPrice));
+        sweeper.effectiveMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-prec1", "0.99", effectivePrice));
         sweeper.alertsByMarket.put("mkt-prec1", List.of(alert));
 
         sweeper.sweep();
@@ -154,6 +162,59 @@ class ResolutionSweeperTest {
         // Phase A writes one outcome; Phase B sees it exists and skips
         assertThat(sweeper.writtenOutcomes).hasSize(1);
         assertThat(sweeper.writtenOutcomes.get(0).getAlertId()).isEqualTo("alert-prec1");
+    }
+
+    // ── Test 7: resolution-tick price (cm) does NOT overwrite correct priceAtAlert ───
+
+    @Test
+    void priceAtAlert_fromAlert_notFromResolutionTickPrice() {
+        // Alert has priceAtAlert=0.40 (the pre-move price, set at fire time).
+        // cm has a resolution-tick price of 0.0065 (market resolved NO at sweep time).
+        // The sweeper must use alert.getPriceAtAlert() = 0.40, ignoring cm entirely.
+        Alert alert = priceMovementAlert("alert-tick1", "mkt-tick1", "up", T);
+        alert.setPriceAtAlert(new BigDecimal("0.40"));
+        BigDecimal resolutionTickPrice = new BigDecimal("0.0065"); // market resolved NO
+
+        TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-tick1", "0.0065", resolutionTickPrice));
+        sweeper.alertsByMarket.put("mkt-tick1", List.of(alert));
+
+        sweeper.sweep();
+
+        assertThat(sweeper.writtenOutcomes).hasSize(1);
+        AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
+        assertThat(outcome.getPriceAtAlert())
+                .as("priceAtAlert must come from alert row (0.40), not the resolution-tick cm price (0.0065)")
+                .isEqualByComparingTo("0.40");
+        // magnitudePp = priceAtHorizon - priceAtAlert = 0.0065 - 0.40 = -0.3935; direction=up → negative
+        assertThat(outcome.getMagnitudePp()).isEqualByComparingTo("-0.3935");
+        assertThat(outcome.getWasCorrect()).isFalse(); // predicted up, realized down
+    }
+
+    // ── Test 8: pre-deploy alert (null priceAtAlert) → outcome.priceAtAlert is null ─
+
+    @Test
+    void priceAtAlert_isNull_forPreDeployAlert() {
+        // Pre-deploy alert: priceAtAlert was never set (null).
+        // cm has a resolution-tick price of 0.9945 (market resolved YES).
+        // The sweeper must leave priceAtAlert null — no fallback to cm.
+        Alert alert = priceMovementAlert("alert-pre1", "mkt-pre1", "up", T);
+        // intentionally NOT calling alert.setPriceAtAlert(...) → stays null
+        BigDecimal resolutionTickPrice = new BigDecimal("0.9945"); // market resolved YES
+
+        TestableSweeper sweeper = new TestableSweeper(clock, evaluator);
+        sweeper.closedMarkets.add(new ResolutionSweeper.ClosedMarket("mkt-pre1", "0.9945", resolutionTickPrice));
+        sweeper.alertsByMarket.put("mkt-pre1", List.of(alert));
+
+        sweeper.sweep();
+
+        assertThat(sweeper.writtenOutcomes).hasSize(1);
+        AlertOutcome outcome = sweeper.writtenOutcomes.get(0);
+        assertThat(outcome.getPriceAtAlert())
+                .as("priceAtAlert must be null for pre-deploy alerts — no fallback to cm resolution-tick price")
+                .isNull();
+        // magnitudePp is null when priceAtAlert is null (null-safe evaluator)
+        assertThat(outcome.getMagnitudePp()).isNull();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

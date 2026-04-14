@@ -624,13 +624,18 @@ class StatisticalAnomalyDetectorTest {
     // ── priceAtAlert is populated at fire time ────────────────────────────────
 
     @Test
-    void priceAtAlert_isSetToLastSnapshotPrice() {
+    void priceAtAlert_isSetToPreSpikeSnapshotPrice() {
         // 29 tiny ±0.0001 oscillations then a 0.04 spike → fires on Tier 1
+        // priceAtAlert must be the PRE-SPIKE price (snapshots[n-2] = prices[28]),
+        // not the spike price (snapshots[n-1] = prices[29]).
         double[] prices = new double[30];
         for (int i = 0; i < 29; i++) {
             prices[i] = 0.50 + (i % 2 == 0 ? 0.0001 : -0.0001);
         }
-        prices[29] = 0.54; // last snapshot price — priceAtAlert should equal this
+        prices[29] = 0.54; // spike snapshot — priceAtAlert should NOT be this
+
+        // prices[28]: i=28, 28%2==0 → 0.50 + 0.0001 = 0.5001 (pre-spike price)
+        BigDecimal expectedPreSpikePrice = BigDecimal.valueOf(0.5001);
 
         Market m = market("m1", "300000");
         AlertService spy = mock(AlertService.class);
@@ -645,6 +650,6 @@ class StatisticalAnomalyDetectorTest {
 
         assertThat(alert.getPriceAtAlert())
                 .isNotNull()
-                .isEqualByComparingTo(new BigDecimal("0.54")); // last snapshot = prices[29]
+                .isEqualByComparingTo(expectedPreSpikePrice); // prevPrice = pre-spike snapshot
     }
 }

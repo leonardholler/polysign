@@ -882,8 +882,9 @@ class PriceMovementDetectorTest {
     // ── priceAtAlert is populated at fire time ────────────────────────────────
 
     @Test
-    void priceAtAlert_isSetToMoveToPrice() {
+    void priceAtAlert_isSetToMoveFromPrice() {
         // 0.50 → 0.60: 20% move in resolution zone (Tier 1, threshold 8%) → fires
+        // priceAtAlert must be the PRE-MOVE price (fromPrice = 0.50), not the post-move price.
         List<PriceSnapshot> snapshots = List.of(
                 snap("m1", NOW.minus(Duration.ofMinutes(12)), "0.50"),
                 snap("m1", NOW.minus(Duration.ofMinutes(6)),  "0.55"),
@@ -904,6 +905,6 @@ class PriceMovementDetectorTest {
 
         assertThat(alert.getPriceAtAlert())
                 .isNotNull()
-                .isEqualByComparingTo(new BigDecimal("0.60")); // toPrice of the detected move
+                .isEqualByComparingTo(new BigDecimal("0.50")); // fromPrice = pre-move price
     }
 }

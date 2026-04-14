@@ -112,13 +112,10 @@ public class ResolutionController {
                             }
                         }
                     } catch (Exception ignored) {}
-                    // Fallback: AlertOutcome carries priceAtAlert stored by the sweeper/evaluator.
-                    // For post-deploy alerts the sweeper now writes alert.getPriceAtAlert() there;
-                    // for pre-deploy rows it is the market's current YES price at sweep time —
-                    // not ideal but non-null and better than returning null to the UI.
-                    if (priceAtAlert == null) {
-                        priceAtAlert = o.getPriceAtAlert();
-                    }
+                    // Intentionally no fallback to o.getPriceAtAlert():
+                    // that field carries the resolution-tick price for pre-deploy rows,
+                    // which is wrong. Null is the correct display for pre-deploy alerts
+                    // until they roll off (~7 days).
 
                     return new ResolutionItemDto(
                             o.getAlertId(),

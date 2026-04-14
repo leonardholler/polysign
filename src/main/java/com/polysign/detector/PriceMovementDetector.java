@@ -513,7 +513,7 @@ public class PriceMovementDetector {
                             }
                             alert.setLink(link);
                             alert.setMetadata(metadata);
-                            alert.setPriceAtAlert(move.toPrice);
+                            alert.setPriceAtAlert(move.fromPrice);
 
                             fired = alertService.tryCreate(alert);
                             filterReason = fired ? "ALERT_FIRED" : "FILTERED_DEDUPE";

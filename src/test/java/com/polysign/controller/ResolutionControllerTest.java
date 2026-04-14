@@ -209,18 +209,19 @@ class ResolutionControllerTest {
         assertThat(result.get(0).title()).isEqualTo("Price spike alert");
     }
 
-    // ── Test 10: priceAtAlert falls back to AlertOutcome when Alert has none ──
+    // ── Test 10: priceAtAlert is null for pre-deploy alerts (no fallback) ──────
 
     @Test
-    void priceAtAlert_fromAlertOutcome_whenAlertPriceIsNull() {
+    void priceAtAlert_isNull_whenAlertPriceIsNull() {
         AlertOutcome res = outcomeOf("alert-y", "resolution", "2026-04-10T12:00:00Z");
-        // AlertOutcome.priceAtAlert = 0.55 (set in helper); Alert has null priceAtAlert (pre-deploy row)
+        // AlertOutcome.priceAtAlert = 0.55 in the helper, but the controller no longer reads it.
+        // Alert has null priceAtAlert (pre-deploy row written before the field existed).
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
 
         Alert alert = new Alert();
         alert.setAlertId(res.getAlertId());
         alert.setTitle("Pre-deploy alert");
-        // priceAtAlert intentionally NOT set → remains null
+        // priceAtAlert intentionally NOT set → remains null; no fallback in controller
         when(alertsTable.query(any(QueryConditional.class)).items().stream())
                 .thenReturn(Stream.of(alert));
 
@@ -228,8 +229,8 @@ class ResolutionControllerTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).priceAtAlert())
-                .as("priceAtAlert should fall back to AlertOutcome value when Alert.priceAtAlert is null")
-                .isEqualByComparingTo("0.55");
+                .as("priceAtAlert is null for pre-deploy alerts — null is correct, no fallback to AlertOutcome")
+                .isNull();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

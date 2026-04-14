@@ -393,7 +393,7 @@ public class StatisticalAnomalyDetector {
         }
         alert.setLink(link);
         alert.setMetadata(metadata);
-        alert.setPriceAtAlert(lastPrice);
+        alert.setPriceAtAlert(prevPrice);
 
         boolean created = alertService.tryCreate(alert);
         filterEvents.addLast(new FilterEvent(now, created ? "ALERT_FIRED" : "FILTERED_DEDUPE"));

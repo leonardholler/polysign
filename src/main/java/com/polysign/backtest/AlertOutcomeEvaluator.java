@@ -191,11 +191,16 @@ public class AlertOutcomeEvaluator {
                                 String horizon, Instant evaluatedAt,
                                 Map<String, String> alertMetadata) {
 
-        BigDecimal rawDelta = priceAtHorizon.subtract(priceAtAlert);
+        // priceAtAlert may be null for pre-deploy resolution rows where the alert was written
+        // before the field existed. In that case rawDelta and magnitudePp are unavailable;
+        // direction scoring still works for the resolution horizon (based on priceAtHorizon only).
+        BigDecimal rawDelta = (priceAtAlert != null) ? priceAtHorizon.subtract(priceAtAlert) : null;
 
         // Decision 4: magnitudePp formula
         BigDecimal magnitudePp;
-        if (directionPredicted == null) {
+        if (rawDelta == null) {
+            magnitudePp = null;
+        } else if (directionPredicted == null) {
             magnitudePp = rawDelta.abs();
         } else if ("up".equals(directionPredicted)) {
             magnitudePp = rawDelta;
@@ -223,7 +228,7 @@ public class AlertOutcomeEvaluator {
             wasCorrect = (directionPredicted != null && !"flat".equals(directionRealized))
                     ? directionPredicted.equals(directionRealized)
                     : null;
-        } else if (directionPredicted == null) {
+        } else if (rawDelta == null || directionPredicted == null) {
             directionRealized = null;
             wasCorrect        = null;
         } else if (rawDelta.compareTo(BigDecimal.valueOf(0.005)) > 0) {

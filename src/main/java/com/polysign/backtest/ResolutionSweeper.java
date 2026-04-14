@@ -278,12 +278,10 @@ public class ResolutionSweeper {
     private void processResolutionOutcome(Alert alert, ClosedMarket cm, Instant now) {
         String alertId = alert.getAlertId();
 
-        // Prefer the price stored on the Alert (set by detectors since the priceAtAlert deploy).
-        // Fall back to the market's current YES price from the Markets table for pre-deploy alerts
-        // that were written before the field existed.
-        BigDecimal priceAtAlert = alert.getPriceAtAlert() != null
-                ? alert.getPriceAtAlert()
-                : cm.priceAtAlert();
+        // Use the pre-move price stored on the Alert at fire time.
+        // Pre-deploy alerts (written before this field existed) will have null here;
+        // null is correct — better than leaking the resolution-tick price from cm.priceAtAlert().
+        BigDecimal priceAtAlert = alert.getPriceAtAlert();
         String directionPredicted = extractDirectionFromAlert(alert);
 
         AlertOutcome outcome = evaluator.computeOutcome(
