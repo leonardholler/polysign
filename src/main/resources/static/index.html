@@ -26,7 +26,6 @@
       0%, 100% { opacity: 1; }
       50%       { opacity: 0.4; }
     }
-    .progress-bar-fill { transition: width 0.4s ease; }
   </style>
 </head>
 <body class="text-gray-100 min-h-screen font-mono text-sm">
@@ -94,7 +93,7 @@
 <div class="border-b border-gray-800">
   <button id="cat-toggle" onclick="toggleCatPanel()"
           class="w-full flex items-center justify-between px-4 py-2 text-xs text-gray-400 hover:text-gray-200 focus:outline-none">
-    <span>Signal Performance by Category (7d)</span>
+    <span>Signal Performance by Category (last 7 days)</span>
     <span id="cat-chevron" class="transition-transform duration-200">▲</span>
   </button>
   <div id="cat-panel">
@@ -114,6 +113,7 @@
         <tr><td colspan="7" class="px-4 py-2 text-gray-600">Loading…</td></tr>
       </tbody>
     </table>
+    <div class="px-4 pb-2 text-[10px] text-gray-600">counts are 7-day totals, not today's</div>
   </div>
 </div>
 
@@ -137,16 +137,8 @@
   <!-- Right: Smart Money + Watched Markets (35%) -->
   <div class="md:w-[35%] flex flex-col">
 
-    <!-- Watched Markets -->
-    <div class="px-4 py-4">
-      <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3">Watched Markets</h2>
-      <div id="markets-list" class="space-y-2">
-        <div class="text-gray-600 text-xs py-2 text-center">Loading…</div>
-      </div>
-    </div>
-
     <!-- Recent Resolutions -->
-    <div class="border-t border-gray-800 px-4 py-4">
+    <div class="px-4 py-4">
       <div class="flex items-center gap-2 mb-1">
         <h2 class="text-xs font-bold uppercase tracking-widest text-gray-500">Recent Resolutions</h2>
         <span class="text-gray-700 text-xs">60s refresh</span>
@@ -436,58 +428,6 @@ async function loadAlerts() {
   } catch (_) {}
 }
 
-// ── Watched Markets ───────────────────────────────────────────────────────────
-
-async function loadWatchedMarkets() {
-  try {
-    const r = await fetch('/api/markets?watchedOnly=true&limit=50');
-    if (!r.ok) return;
-    const markets = await r.json();
-
-    const sorted = [...markets].sort((a, b) => {
-      const va = parseFloat(a.volume24h || a.volume24Hr || 0);
-      const vb = parseFloat(b.volume24h || b.volume24Hr || 0);
-      return vb - va;
-    });
-
-    if (sorted.length === 0) {
-      document.getElementById('markets-list').innerHTML =
-        '<div class="text-gray-600 text-xs py-3 text-center">Auto-watch populates within 2 min</div>';
-      document.getElementById('st-watched').textContent = '— watched';
-      return;
-    }
-
-    document.getElementById('st-watched').textContent = sorted.length + ' watched';
-
-    const html = sorted.map(m => {
-      const p = m.currentYesPrice != null ? m.currentYesPrice : null;
-      const pct = p != null ? Math.round(p * 100) : null;
-      const pStr = p != null ? `<span class="font-bold ${priceColor(p)}">${(p*100).toFixed(1)}¢</span>` : '<span class="text-gray-600">—</span>';
-      const vol = parseFloat(m.volume24h || m.volume24Hr || 0);
-      const barWidth = pct != null ? pct : 0;
-      const pmLink = m.eventSlug
-        ? 'https://polymarket.com/event/' + m.eventSlug
-        : (m.question ? `https://polymarket.com/search?query=${encodeURIComponent(m.question)}` : 'https://polymarket.com');
-      return `<div class="rounded border border-gray-800 bg-gray-900/50 px-3 py-2.5 space-y-1.5">
-        <div class="text-xs text-gray-200 leading-tight font-medium">${truncate(m.question || m.marketId, 70)}</div>
-        <div class="flex items-center gap-3">
-          ${pStr}
-          <div class="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-            <div class="h-full bg-blue-600 progress-bar-fill rounded-full" style="width:${barWidth}%"></div>
-          </div>
-          <span class="text-gray-500 text-[10px] shrink-0">Vol: ${fmt(vol)}</span>
-        </div>
-        <div class="flex items-center justify-between text-[10px]">
-          <span class="text-gray-600">Updated ${relativeTime(m.updatedAt)}</span>
-          <a href="${pmLink}" target="_blank" rel="noopener" class="text-blue-400 hover:underline">Polymarket ↗</a>
-        </div>
-      </div>`;
-    }).join('');
-
-    document.getElementById('markets-list').innerHTML = html;
-  } catch (_) {}
-}
-
 // ── Stats row ─────────────────────────────────────────────────────────────────
 
 let lastPollTime = null;
@@ -705,14 +645,13 @@ async function loadResolutions() {
 // ── Bootstrap & polling ───────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadStats(), loadAlerts(), loadWatchedMarkets(), loadResolutions()]);
+  await Promise.all([loadStats(), loadAlerts(), loadResolutions()]);
 }
 
 init();
-setInterval(loadAlerts,         10_000);
-setInterval(loadStats,          30_000);
-setInterval(loadWatchedMarkets, 60_000);
-setInterval(loadResolutions,    60_000);
+setInterval(loadAlerts,      10_000);
+setInterval(loadStats,       30_000);
+setInterval(loadResolutions, 60_000);
 </script>
 </body>
 </html>
