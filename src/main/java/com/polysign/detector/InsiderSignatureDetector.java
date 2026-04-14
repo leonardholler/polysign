@@ -18,8 +18,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
+import software.amazon.awssdk.enhanced.dynamodb.Expression;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
+import software.amazon.awssdk.enhanced.dynamodb.model.QueryEnhancedRequest;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -44,10 +47,12 @@ import java.util.Map;
  *   <li>Trade size ≥ max($10K, 2% of market volume24h)</li>
  *   <li>Wallet qualifies as a "burner": age ≤ 14d OR lifetime trades ≤ 10 OR
  *       this trade ≥ 40% of lifetime volume</li>
- *   <li>Wallet has NOT bought the opposite outcome in the last 24h (no hedge)</li>
+ *   <li>Wallet has NOT bought the opposite outcome in the last 2h (no hedge)</li>
  * </ol>
  *
  * <p>Alerts are deduplicated per (wallet, market) within a 24-hour window.
+ * Hedge exclusion window is 2h (a contradictory bet &ge;2h after the signal trade
+ * is treated as a reversal, not a hedge).
  */
 @Component
 public class InsiderSignatureDetector {
@@ -61,6 +66,9 @@ public class InsiderSignatureDetector {
     static final int      MAX_BURNER_LIFETIME_TRADES    = 10;
     static final double   BURNER_TRADE_VOLUME_PCT       = 0.40;
     static final Duration DEDUPE_WINDOW                 = Duration.ofHours(24);
+    static final Duration HEDGE_WINDOW                  = Duration.ofHours(2);
+    /** Safety valve: max trades evaluated in a single run() invocation. */
+    static final int      MAX_TRADES_PER_RUN            = 500;
     static final String   ALERT_TYPE                    = "insider_signature";
 
     private final DynamoDbTable<Market>      marketsTable;
@@ -112,6 +120,8 @@ public class InsiderSignatureDetector {
             int marketsScanned = 0;
             int tradesEvaluated = 0;
             int alertsCreated = 0;
+            boolean capped = false;
+            int marketsRemaining = 0;
 
             for (Market market : marketsTable.scan().items()) {
                 // Volume gate
@@ -124,6 +134,12 @@ public class InsiderSignatureDetector {
                 // conditionId required for GSI query
                 if (market.getConditionId() == null) continue;
 
+                // Fix C: safety valve — count remaining qualifying markets after cap fires
+                if (capped) {
+                    marketsRemaining++;
+                    continue;
+                }
+
                 marketsScanned++;
 
                 // Query trades since last run via marketId-timestamp-index GSI
@@ -135,11 +151,16 @@ public class InsiderSignatureDetector {
                                             .partitionValue(market.getMarketId())
                                             .sortValue(lastRanAtIso)
                                             .build()));
+                    pageLoop:
                     for (var page : pages) {
                         for (WalletTrade trade : page.items()) {
                             tradesEvaluated++;
                             boolean fired = evaluateTrade(trade, market);
                             if (fired) alertsCreated++;
+                            if (tradesEvaluated >= MAX_TRADES_PER_RUN) {
+                                capped = true;
+                                break pageLoop;
+                            }
                         }
                     }
                 } catch (Exception e) {
@@ -148,6 +169,10 @@ public class InsiderSignatureDetector {
                 }
             }
 
+            if (capped) {
+                log.warn("insider_detector_capped tradesEvaluated={} marketsRemaining={}",
+                        tradesEvaluated, marketsRemaining);
+            }
             lastRanAtIso = runStart.toString();
             log.info("insider_detector_complete marketsScanned={} tradesEvaluated={} alertsCreated={}",
                     marketsScanned, tradesEvaluated, alertsCreated);
@@ -187,21 +212,33 @@ public class InsiderSignatureDetector {
 
         if (!(isBurnerByAge || isBurnerByCount || isBurnerByVolume)) return false;
 
-        // Step 4: Hedge exclusion — if wallet bought the opposite outcome in last 24h, skip
+        // Step 4: Hedge exclusion — if wallet bought the opposite outcome in last 2h, skip.
+        // Server-side filter pushes address + side to DynamoDB, minimising page allocation.
         try {
-            String since24hIso = clock.now().minus(Duration.ofHours(24)).toString();
-            boolean hedged = walletTradesTable
-                    .index("marketId-timestamp-index")
-                    .query(QueryConditional.sortGreaterThanOrEqualTo(
+            String hedgeWindowIso = clock.now().minus(HEDGE_WINDOW).toString();
+            Expression hedgeFilter = Expression.builder()
+                    .expression("#addr = :addr AND #side = :side")
+                    .expressionNames(Map.of("#addr", "address", "#side", "side"))
+                    .expressionValues(Map.of(
+                            ":addr", AttributeValue.fromS(trade.getAddress()),
+                            ":side", AttributeValue.fromS("BUY")))
+                    .build();
+            QueryEnhancedRequest hedgeRequest = QueryEnhancedRequest.builder()
+                    .queryConditional(QueryConditional.sortGreaterThanOrEqualTo(
                             Key.builder()
                                     .partitionValue(market.getMarketId())
-                                    .sortValue(since24hIso)
+                                    .sortValue(hedgeWindowIso)
                                     .build()))
+                    .filterExpression(hedgeFilter)
+                    .build();
+            boolean hedged = walletTradesTable
+                    .index("marketId-timestamp-index")
+                    .query(hedgeRequest)
                     .stream()
                     .flatMap(p -> p.items().stream())
-                    .filter(t -> trade.getAddress().equalsIgnoreCase(t.getAddress()))
-                    .filter(t -> "BUY".equalsIgnoreCase(t.getSide()))
-                    .anyMatch(t -> trade.getOutcome() != null && !trade.getOutcome().equalsIgnoreCase(t.getOutcome()));
+                    .filter(t -> trade.getOutcome() != null && !trade.getOutcome().equalsIgnoreCase(t.getOutcome()))
+                    .findFirst()
+                    .isPresent();
             if (hedged) return false;
         } catch (Exception e) {
             log.warn("insider_hedge_check_failed address={} marketId={} error={}",

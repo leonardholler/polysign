@@ -11,10 +11,15 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbIndex;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
+import software.amazon.awssdk.enhanced.dynamodb.model.PageIterable;
+import software.amazon.awssdk.enhanced.dynamodb.model.QueryEnhancedRequest;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -23,6 +28,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Iterator;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -61,11 +67,10 @@ class InsiderSignatureDetectorTest {
         when(mockClock.nowIso()).thenReturn(NOW.toString());
         when(mockAlertService.tryCreate(any())).thenReturn(true);
 
-        // Default: no hedge trades found
+        // Default: no hedge trades found (hedge query now uses QueryEnhancedRequest after Fix B)
         DynamoDbIndex<WalletTrade> mockIndex = mock(DynamoDbIndex.class);
         when(mockWalletTradesTable.index("marketId-timestamp-index")).thenReturn(mockIndex);
-        when(mockIndex.query(any(software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional.class)))
-                .thenReturn(emptySdkIterable());
+        when(mockIndex.query(any(QueryEnhancedRequest.class))).thenReturn(emptySdkIterable());
 
         detector = new InsiderSignatureDetector(
                 mockMarketsTable,
@@ -247,19 +252,21 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void directionFilter_hedgedTrade_noAlert() {
-        // Wallet also bought NO in the last 24h — hedge detected, skip
+        // Wallet also bought NO — hedge detected, skip.
+        // After Fix B the hedge query uses QueryEnhancedRequest; the mock simulates DynamoDB
+        // returning only this wallet's BUY trades (address+side already filtered server-side).
         Market m = market("m8", "400000", 0.50);
         WalletTrade buyYes = trade("0xhedger", "m8", 15_000.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 30_000);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
-        // Seed a BUY NO trade from the same wallet in the GSI result
+        // DynamoDB returns the opposing BUY NO trade from the same wallet
         WalletTrade buyNo = trade("0xhedger", "m8", 14_000.0, "NO");
         Page<WalletTrade> hedgePage = mock(Page.class);
-        when(hedgePage.items()).thenReturn(List.of(buyYes, buyNo));
+        when(hedgePage.items()).thenReturn(List.of(buyNo));
         DynamoDbIndex<WalletTrade> mockIndex = mock(DynamoDbIndex.class);
         when(mockWalletTradesTable.index("marketId-timestamp-index")).thenReturn(mockIndex);
-        when(mockIndex.query(any(software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional.class)))
+        when(mockIndex.query(any(QueryEnhancedRequest.class)))
                 .thenReturn(sdkIterable(List.of(hedgePage)));
 
         boolean fired = detector.evaluateTrade(buyYes, m);
@@ -314,5 +321,122 @@ class InsiderSignatureDetectorTest {
         assertThat(first).isTrue();
         assertThat(second).isFalse();
         verify(mockAlertService, times(2)).tryCreate(any(Alert.class));
+    }
+
+    // ── Fix A+B: hedge-window tests ───────────────────────────────────────────
+
+    @Test
+    void hedgeWithin2hWindow_30min_blocksAlert() {
+        // Wallet made a contradictory BUY NO 30 minutes ago — within the new 2h window.
+        // DynamoDB (mocked) returns that trade; hedge is detected; alert must NOT fire.
+        Market m = market("m13", "400000", 0.50);
+        WalletTrade buyYes = trade("0xhedger2", "m13", 15_000.0, "YES");
+        WalletMetadata meta = burnerByAge(5, 3, 30_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        // Simulate DynamoDB returning the hedge trade (BUY NO, 30 min ago, same wallet).
+        // After Fix B the DynamoDB filter already restricts to address+side=BUY, so only
+        // the opposite-outcome trade is in the result.
+        WalletTrade hedgeNo = trade("0xhedger2", "m13", 12_000.0, "NO");
+        hedgeNo.setTimestamp(NOW.minus(Duration.ofMinutes(30)).toString());
+        Page<WalletTrade> hedgePage = mock(Page.class);
+        when(hedgePage.items()).thenReturn(List.of(hedgeNo));
+        DynamoDbIndex<WalletTrade> mockIndex = mock(DynamoDbIndex.class);
+        when(mockWalletTradesTable.index("marketId-timestamp-index")).thenReturn(mockIndex);
+        when(mockIndex.query(any(QueryEnhancedRequest.class)))
+                .thenReturn(sdkIterable(List.of(hedgePage)));
+
+        boolean fired = detector.evaluateTrade(buyYes, m);
+
+        assertThat(fired).isFalse();
+    }
+
+    @Test
+    void hedgeOutside2hWindow_4h_firesAlert() {
+        // Wallet made a contradictory BUY NO 4 hours ago — outside the new 2h window.
+        // The GSI range query with a 2h lookback would exclude that trade. We simulate
+        // this by having the hedge mock return empty (as DynamoDB would with a 2h SK filter).
+        // The alert must fire because no in-window hedge is detected.
+        Market m = market("m14", "400000", 0.50);
+        WalletTrade buyYes = trade("0xreversal", "m14", 15_000.0, "YES");
+        WalletMetadata meta = burnerByAge(5, 3, 30_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+        // Hedge mock is already empty from @BeforeEach — no in-window hedge trade returned.
+
+        boolean fired = detector.evaluateTrade(buyYes, m);
+
+        assertThat(fired).isTrue();
+        verify(mockAlertService).tryCreate(any(Alert.class));
+    }
+
+    // ── Fix C: MAX_TRADES_PER_RUN cap test ───────────────────────────────────
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void maxTradesPerRun_capsAt500AndLogsWarn() {
+        // 6 qualifying markets × 101 trades each = 606 total qualifying trades.
+        // The cap (MAX_TRADES_PER_RUN=500) must fire mid-way through the 5th market.
+        // Assert: exactly 500 metadata lookups, "insider_detector_capped" warn logged.
+
+        Logger detectorLogger = (Logger) org.slf4j.LoggerFactory.getLogger(InsiderSignatureDetector.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        detectorLogger.addAppender(appender);
+
+        try {
+            WalletMetadata burner = burnerByAge(5, 3, 30_000);
+            when(mockMetadataService.get(any())).thenReturn(burner);
+            when(mockAlertService.tryCreate(any())).thenReturn(false);
+
+            // 101 BUY YES trades at $15K — all pass size gate on a $400K market
+            List<WalletTrade> trades101 = IntStream.range(0, 101)
+                    .mapToObj(i -> {
+                        WalletTrade t = new WalletTrade();
+                        t.setAddress("0xburner" + i);
+                        t.setTxHash("0xtx-cap-" + i);
+                        t.setTimestamp(NOW.minus(Duration.ofSeconds(30)).toString());
+                        t.setMarketId("cap-market");
+                        t.setSide("BUY");
+                        t.setOutcome("YES");
+                        t.setSizeUsdc(BigDecimal.valueOf(15_000));
+                        t.setPrice(BigDecimal.valueOf(0.50));
+                        return t;
+                    })
+                    .toList();
+
+            // 6 qualifying markets
+            List<Market> capMarkets = IntStream.range(0, 6)
+                    .mapToObj(i -> market("cap-" + i, "400000", 0.50))
+                    .toList();
+
+            PageIterable<Market> mockScan = mock(PageIterable.class);
+            when(mockScan.items()).thenReturn(() -> capMarkets.iterator());
+            when(mockMarketsTable.scan()).thenReturn(mockScan);
+
+            // Shared index: QueryConditional → 101 trades; QueryEnhancedRequest → empty (no hedge)
+            DynamoDbIndex<WalletTrade> capIndex = mock(DynamoDbIndex.class);
+            when(mockWalletTradesTable.index("marketId-timestamp-index")).thenReturn(capIndex);
+
+            Page<WalletTrade> tradePage = mock(Page.class);
+            when(tradePage.items()).thenReturn(trades101);
+            SdkIterable<Page<WalletTrade>> tradePages =
+                    () -> List.<Page<WalletTrade>>of(tradePage).iterator();
+            when(capIndex.query(any(software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional.class)))
+                    .thenReturn(tradePages);
+            when(capIndex.query(any(QueryEnhancedRequest.class))).thenReturn(emptySdkIterable());
+
+            detector.run();
+
+            // Cap must have fired — warn log present
+            boolean cappedLogged = appender.list.stream()
+                    .anyMatch(e -> e.getFormattedMessage().contains("insider_detector_capped"));
+            assertThat(cappedLogged).isTrue();
+
+            // Exactly 500 trades evaluated (all reach metadata lookup: BUY + size gate pass)
+            verify(mockMetadataService, times(500)).get(any());
+
+        } finally {
+            detectorLogger.detachAppender(appender);
+        }
     }
 }
