@@ -29,12 +29,8 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standal
 /**
  * Unit tests for {@link ResolutionController}.
  *
- * Verifies:
- * 1. Empty list returned gracefully when alert_outcomes table has no resolution rows.
- * 2. Items sorted by evaluatedAt descending.
- * 3. Non-resolution horizon rows are excluded.
- * 4. marketQuestion is populated from the markets table.
- * 5. marketQuestion is null when market is not found.
+ * § Endpoint tests — verify DynamoDB wiring, filtering, ordering, and enrichment.
+ * § groupByMarket tests — pure logic unit tests on the grouping method.
  */
 @ExtendWith(MockitoExtension.class)
 class ResolutionControllerTest {
@@ -57,122 +53,110 @@ class ResolutionControllerTest {
         mvc = standaloneSetup(controller).build();
     }
 
-    // ── Test 1: empty table ───────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // Endpoint tests
+    // ════════════════════════════════════════════════════════════════════════
 
     @Test
     void emptyList_whenTableHasNoResolutionRows() {
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of());
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).isEmpty();
     }
 
-    // ── Test 2: non-resolution horizons excluded ──────────────────────────────
-
     @Test
     void nonResolutionRows_areExcluded() {
-        AlertOutcome t1h = outcomeOf("alert-a", "t1h",        "2026-04-10T10:00:00Z");
-        AlertOutcome t24 = outcomeOf("alert-b", "t24h",       "2026-04-10T11:00:00Z");
-        AlertOutcome res = outcomeOf("alert-c", "resolution",  "2026-04-10T12:00:00Z");
+        AlertOutcome t1h = outcomeOf("alert-a", "mkt-1", "t1h",        "2026-04-10T10:00:00Z", true);
+        AlertOutcome t24 = outcomeOf("alert-b", "mkt-2", "t24h",       "2026-04-10T11:00:00Z", true);
+        AlertOutcome res = outcomeOf("alert-c", "mkt-3", "resolution",  "2026-04-10T12:00:00Z", true);
 
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(t1h, t24, res));
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).alertId()).isEqualTo("alert-c");
+        assertThat(result.get(0).alerts()).hasSize(1);
+        assertThat(result.get(0).alerts().get(0).alertId()).isEqualTo("alert-c");
     }
 
-    // ── Test 3: items sorted by evaluatedAt descending ────────────────────────
-
     @Test
-    void items_sortedByEvaluatedAtDescending() {
-        AlertOutcome older  = outcomeOf("alert-1", "resolution", "2026-04-09T08:00:00Z");
-        AlertOutcome newest = outcomeOf("alert-2", "resolution", "2026-04-10T14:00:00Z");
-        AlertOutcome middle = outcomeOf("alert-3", "resolution", "2026-04-10T10:00:00Z");
+    void cards_sortedByResolvedAtDescending() {
+        AlertOutcome older  = outcomeOf("alert-1", "mkt-1", "resolution", "2026-04-09T08:00:00Z", true);
+        AlertOutcome newest = outcomeOf("alert-2", "mkt-2", "resolution", "2026-04-10T14:00:00Z", true);
+        AlertOutcome middle = outcomeOf("alert-3", "mkt-3", "resolution", "2026-04-10T10:00:00Z", true);
 
-        // Feed in non-sorted order
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(older, newest, middle));
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(3);
-        assertThat(result.get(0).alertId()).isEqualTo("alert-2"); // newest first
-        assertThat(result.get(1).alertId()).isEqualTo("alert-3");
-        assertThat(result.get(2).alertId()).isEqualTo("alert-1"); // oldest last
+        assertThat(result.get(0).alerts().get(0).alertId()).isEqualTo("alert-2"); // newest first
+        assertThat(result.get(1).alerts().get(0).alertId()).isEqualTo("alert-3");
+        assertThat(result.get(2).alerts().get(0).alertId()).isEqualTo("alert-1"); // oldest last
     }
 
-    // ── Test 4: limit is respected ────────────────────────────────────────────
-
     @Test
-    void limit_appliedAfterSort() {
-        AlertOutcome r1 = outcomeOf("alert-1", "resolution", "2026-04-09T01:00:00Z");
-        AlertOutcome r2 = outcomeOf("alert-2", "resolution", "2026-04-09T02:00:00Z");
-        AlertOutcome r3 = outcomeOf("alert-3", "resolution", "2026-04-09T03:00:00Z");
+    void limit_appliedBeforeGrouping() {
+        AlertOutcome r1 = outcomeOf("alert-1", "mkt-1", "resolution", "2026-04-09T01:00:00Z", true);
+        AlertOutcome r2 = outcomeOf("alert-2", "mkt-2", "resolution", "2026-04-09T02:00:00Z", true);
+        AlertOutcome r3 = outcomeOf("alert-3", "mkt-3", "resolution", "2026-04-09T03:00:00Z", true);
 
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(r1, r2, r3));
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(2);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(2);
 
         assertThat(result).hasSize(2);
-        assertThat(result.get(0).alertId()).isEqualTo("alert-3"); // most recent first
-        assertThat(result.get(1).alertId()).isEqualTo("alert-2");
+        assertThat(result.get(0).alerts().get(0).alertId()).isEqualTo("alert-3"); // most recent first
+        assertThat(result.get(1).alerts().get(0).alertId()).isEqualTo("alert-2");
     }
 
-    // ── Test 5: marketQuestion populated from markets table ───────────────────
-
     @Test
-    void marketQuestion_populatedFromMarketTable() {
-        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+    void marketTitle_populatedFromMarketTable() {
+        AlertOutcome res = outcomeOf("alert-c", "mkt-x", "resolution", "2026-04-10T12:00:00Z", true);
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
 
         Market market = new Market();
-        market.setMarketId(res.getMarketId());
+        market.setMarketId("mkt-x");
         market.setQuestion("Will the test pass?");
         when(marketsTable.getItem(any(Key.class))).thenReturn(market);
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).marketQuestion()).isEqualTo("Will the test pass?");
+        assertThat(result.get(0).marketTitle()).isEqualTo("Will the test pass?");
     }
 
-    // ── Test 6: marketQuestion null when market not found ─────────────────────
-
     @Test
-    void marketQuestion_nullWhenMarketNotFound() {
-        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+    void marketTitle_nullWhenMarketNotFound() {
+        AlertOutcome res = outcomeOf("alert-c", "mkt-x", "resolution", "2026-04-10T12:00:00Z", true);
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
         when(marketsTable.getItem(any(Key.class))).thenReturn(null);
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).marketQuestion()).isNull();
+        // marketQuestion=null, title=null (alert not found via deep stub) → marketTitle=null
+        assertThat(result.get(0).marketTitle()).isNull();
     }
-
-    // ── Test 7: long marketQuestion is truncated to 80 chars ─────────────────
 
     @Test
-    void marketQuestion_truncatedAt80Chars() {
-        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+    void marketTitle_truncatedAt80Chars() {
+        AlertOutcome res = outcomeOf("alert-c", "mkt-x", "resolution", "2026-04-10T12:00:00Z", true);
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
 
-        String longQuestion = "A".repeat(100); // 100 chars
         Market market = new Market();
-        market.setMarketId(res.getMarketId());
-        market.setQuestion(longQuestion);
+        market.setMarketId("mkt-x");
+        market.setQuestion("A".repeat(100));
         when(marketsTable.getItem(any(Key.class))).thenReturn(market);
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).marketQuestion()).hasSize(81); // 80 chars + "…"
-        assertThat(result.get(0).marketQuestion()).endsWith("…");
+        assertThat(result.get(0).marketTitle()).hasSize(81); // 80 chars + "…"
+        assertThat(result.get(0).marketTitle()).endsWith("…");
     }
-
-    // ── Test 8: HTTP route — GET /api/resolutions/recent?limit=5 returns 200 JSON ──
 
     @Test
     void http_getRecentResolutions_returns200WithJsonArray() throws Exception {
@@ -184,69 +168,186 @@ class ResolutionControllerTest {
                 .andExpect(jsonPath("$").isArray());
     }
 
-    // ── Test 9: priceAtAlert populated from the Alert row ────────────────────
-
     @Test
-    void priceAtAlert_fromAlertRow_whenAlertHasPriceAtAlert() {
-        AlertOutcome res = outcomeOf("alert-x", "resolution", "2026-04-10T12:00:00Z");
-        // AlertOutcome has 0.55 (set in helper), Alert has 0.63 — Alert value wins
+    void priceAtAlert_fromAlertRow_appearsInAlertRowDto() {
+        AlertOutcome res = outcomeOf("alert-x", "mkt-x", "resolution", "2026-04-10T12:00:00Z", true);
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
 
         Alert alert = new Alert();
-        alert.setAlertId(res.getAlertId());
+        alert.setAlertId("alert-x");
         alert.setTitle("Price spike alert");
         alert.setLink("https://polymarket.com/event/test");
         alert.setPriceAtAlert(new BigDecimal("0.63"));
         when(alertsTable.query(any(QueryConditional.class)).items().stream())
                 .thenReturn(Stream.of(alert));
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).priceAtAlert())
-                .as("priceAtAlert should come from the Alert row when it is populated")
+        assertThat(result.get(0).alerts()).hasSize(1);
+        assertThat(result.get(0).alerts().get(0).priceAtAlert())
+                .as("priceAtAlert should come from the Alert row")
                 .isEqualByComparingTo("0.63");
-        assertThat(result.get(0).title()).isEqualTo("Price spike alert");
     }
 
-    // ── Test 10: priceAtAlert is null for pre-deploy alerts (no fallback) ──────
-
     @Test
-    void priceAtAlert_isNull_whenAlertPriceIsNull() {
-        AlertOutcome res = outcomeOf("alert-y", "resolution", "2026-04-10T12:00:00Z");
-        // AlertOutcome.priceAtAlert = 0.55 in the helper, but the controller no longer reads it.
-        // Alert has null priceAtAlert (pre-deploy row written before the field existed).
+    void priceAtAlert_isNull_forPreDeployAlerts() {
+        AlertOutcome res = outcomeOf("alert-y", "mkt-y", "resolution", "2026-04-10T12:00:00Z", true);
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
 
         Alert alert = new Alert();
-        alert.setAlertId(res.getAlertId());
+        alert.setAlertId("alert-y");
         alert.setTitle("Pre-deploy alert");
-        // priceAtAlert intentionally NOT set → remains null; no fallback in controller
+        // priceAtAlert intentionally NOT set → null; no fallback in controller
         when(alertsTable.query(any(QueryConditional.class)).items().stream())
                 .thenReturn(Stream.of(alert));
 
-        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+        List<ResolutionController.ResolvedMarketCard> result = controller.getRecentResolutions(20);
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).priceAtAlert())
-                .as("priceAtAlert is null for pre-deploy alerts — null is correct, no fallback to AlertOutcome")
+        assertThat(result.get(0).alerts().get(0).priceAtAlert())
+                .as("priceAtAlert is null for pre-deploy alerts — no fallback to AlertOutcome")
                 .isNull();
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════════
+    // groupByMarket unit tests
+    // ════════════════════════════════════════════════════════════════════════
 
-    private static AlertOutcome outcomeOf(String alertId, String horizon, String evaluatedAt) {
+    @Test
+    void groupByMarket_emptyInput_returnsEmpty() {
+        assertThat(ResolutionController.groupByMarket(List.of())).isEmpty();
+    }
+
+    @Test
+    void groupByMarket_3SameMarket_2CorrectAnd1Wrong_singleCardMarketCorrectTrue() {
+        List<ResolutionController.ResolvedOutcome> outcomes = List.of(
+                outcome("a", "mkt1", "2026-04-10T01:00:00Z", "2026-04-11T10:00:00Z", true),
+                outcome("b", "mkt1", "2026-04-10T03:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("c", "mkt1", "2026-04-10T02:00:00Z", "2026-04-11T10:00:00Z", true)
+        );
+
+        List<ResolutionController.ResolvedMarketCard> cards =
+                ResolutionController.groupByMarket(outcomes);
+
+        assertThat(cards).hasSize(1);
+        assertThat(cards.get(0).marketCorrect()).isTrue();
+        assertThat(cards.get(0).alerts()).hasSize(3);
+        // alerts sorted by firedAt ASC: a (T+1), c (T+2), b (T+3)
+        assertThat(cards.get(0).alerts().get(0).alertId()).isEqualTo("a");
+        assertThat(cards.get(0).alerts().get(1).alertId()).isEqualTo("c");
+        assertThat(cards.get(0).alerts().get(2).alertId()).isEqualTo("b");
+    }
+
+    @Test
+    void groupByMarket_3SameMarket_allIncorrect_singleCardMarketCorrectFalse() {
+        List<ResolutionController.ResolvedOutcome> outcomes = List.of(
+                outcome("a", "mkt1", "2026-04-10T01:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("b", "mkt1", "2026-04-10T02:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("c", "mkt1", "2026-04-10T03:00:00Z", "2026-04-11T10:00:00Z", false)
+        );
+
+        List<ResolutionController.ResolvedMarketCard> cards =
+                ResolutionController.groupByMarket(outcomes);
+
+        assertThat(cards).hasSize(1);
+        assertThat(cards.get(0).marketCorrect()).isFalse();
+        assertThat(cards.get(0).alerts()).hasSize(3);
+    }
+
+    @Test
+    void groupByMarket_3distinctMarkets_3cardsOneAlertEach() {
+        List<ResolutionController.ResolvedOutcome> outcomes = List.of(
+                outcome("a", "mkt1", "2026-04-10T01:00:00Z", "2026-04-11T10:00:00Z", true),
+                outcome("b", "mkt2", "2026-04-10T02:00:00Z", "2026-04-11T11:00:00Z", false),
+                outcome("c", "mkt3", "2026-04-10T03:00:00Z", "2026-04-11T12:00:00Z", true)
+        );
+
+        List<ResolutionController.ResolvedMarketCard> cards =
+                ResolutionController.groupByMarket(outcomes);
+
+        assertThat(cards).hasSize(3);
+        assertThat(cards).allSatisfy(card -> assertThat(card.alerts()).hasSize(1));
+    }
+
+    @Test
+    void groupByMarket_mixed5OutcomesAcross3Markets_correctnessPerMarket() {
+        // mkt1: 3 outcomes, all wrong; mkt2: 1 correct; mkt3: 1 correct
+        // Input sorted by evaluatedAt desc (as the endpoint would pass them)
+        List<ResolutionController.ResolvedOutcome> outcomes = List.of(
+                outcome("a1", "mkt1", "2026-04-10T01:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("a2", "mkt1", "2026-04-10T02:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("a3", "mkt1", "2026-04-10T03:00:00Z", "2026-04-11T10:00:00Z", false),
+                outcome("b1", "mkt2", "2026-04-10T04:00:00Z", "2026-04-11T11:00:00Z", true),
+                outcome("c1", "mkt3", "2026-04-10T05:00:00Z", "2026-04-11T12:00:00Z", true)
+        );
+
+        List<ResolutionController.ResolvedMarketCard> cards =
+                ResolutionController.groupByMarket(outcomes);
+
+        // 3 cards sorted by evaluatedAt desc: mkt3 (T+12), mkt2 (T+11), mkt1 (T+10)
+        assertThat(cards).hasSize(3);
+        assertThat(cards.get(0).marketId()).isEqualTo("mkt3");
+        assertThat(cards.get(0).marketCorrect()).isTrue();
+        assertThat(cards.get(1).marketId()).isEqualTo("mkt2");
+        assertThat(cards.get(1).marketCorrect()).isTrue();
+        assertThat(cards.get(2).marketId()).isEqualTo("mkt1");
+        assertThat(cards.get(2).marketCorrect()).isFalse();
+        assertThat(cards.get(2).alerts()).hasSize(3);
+    }
+
+    @Test
+    void groupByMarket_cardOrdering_latestEvaluatedAtFirst() {
+        List<ResolutionController.ResolvedOutcome> outcomes = List.of(
+                outcome("a", "mkt1", "2026-04-10T01:00:00Z", "2026-04-11T08:00:00Z", true),
+                outcome("b", "mkt2", "2026-04-10T01:00:00Z", "2026-04-12T09:00:00Z", false)
+        );
+
+        List<ResolutionController.ResolvedMarketCard> cards =
+                ResolutionController.groupByMarket(outcomes);
+
+        assertThat(cards).hasSize(2);
+        assertThat(cards.get(0).marketId()).isEqualTo("mkt2"); // later evaluatedAt first
+        assertThat(cards.get(1).marketId()).isEqualTo("mkt1");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helpers
+    // ════════════════════════════════════════════════════════════════════════
+
+    /** Build an AlertOutcome stub (for endpoint tests that go through DynamoDB mocks). */
+    private static AlertOutcome outcomeOf(
+            String alertId, String marketId, String horizon, String evaluatedAt, boolean correct) {
         AlertOutcome o = new AlertOutcome();
         o.setAlertId(alertId);
         o.setHorizon(horizon);
         o.setEvaluatedAt(evaluatedAt);
-        o.setMarketId("mkt-" + alertId);
+        o.setMarketId(marketId);
         o.setFiredAt("2026-04-08T00:00:00Z");
         o.setType("price_movement");
         o.setPriceAtAlert(new BigDecimal("0.55"));
         o.setPriceAtHorizon(new BigDecimal("1.00"));
-        o.setDirectionPredicted("up");
+        o.setDirectionPredicted(correct ? "up" : "down");
         o.setDirectionRealized("up");
         return o;
+    }
+
+    /** Build a ResolvedOutcome for groupByMarket unit tests. */
+    private static ResolutionController.ResolvedOutcome outcome(
+            String alertId, String marketId, String firedAt, String evaluatedAt, boolean correct) {
+        return new ResolutionController.ResolvedOutcome(
+                alertId,
+                marketId,
+                firedAt,
+                evaluatedAt,
+                correct ? "up" : "down",
+                "up",   // realized — correct when matches predicted
+                new BigDecimal("0.50"),
+                new BigDecimal("1.00"),
+                "price_movement",
+                "title-" + alertId,
+                "https://polymarket.com/" + alertId,
+                "Market Q for " + marketId,
+                correct);
     }
 }

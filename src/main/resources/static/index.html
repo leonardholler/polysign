@@ -567,76 +567,75 @@ async function loadResolutions() {
   try {
     const r = await fetch('/api/resolutions/recent?limit=20');
     if (!r.ok) return;
-    const items = await r.json();
+    const cards = await r.json();
     const el = document.getElementById('resolutions-list');
 
-    // Summary line — uses global lastStats (populated by loadStats)
+    // Summary — distinct markets counted directly from the grouped response
     const summaryEl = document.getElementById('resolutions-summary');
-    if (summaryEl && lastStats) {
-      const total   = lastStats.alertsInResolutionZone ?? 0;
-      const correct = lastStats.resolutionCorrect ?? 0;
-      const pct     = lastStats.resolutionAccuracyPct;
+    if (summaryEl) {
+      const total   = cards.length;
+      const correct = cards.filter(c => c.marketCorrect).length;
+      const pct     = total > 0 ? Math.round(correct / total * 100) : null;
       summaryEl.textContent = pct != null
         ? `${total} resolved · ${correct} correct · ${pct}% accuracy`
         : total > 0 ? `${total} resolved` : '—';
     }
 
-    if (!items || items.length === 0) {
+    if (!cards || cards.length === 0) {
       el.innerHTML = '<div class="text-gray-600 text-xs py-3 text-center">No resolutions yet — check back soon.</div>';
       return;
     }
 
-    el.innerHTML = items.map(item => {
-      const dp = item.directionPredicted;
-      const dr = item.directionRealized;
-      const correct = dp && dr && dp === dr;
-      const flat = dr === 'flat';
+    el.innerHTML = cards.map(card => {
+      const borderCol = card.marketCorrect ? 'border-l-emerald-600' : 'border-l-red-700';
+      const labelCol  = card.marketCorrect ? 'text-emerald-400'     : 'text-red-400';
+      const badge     = card.marketCorrect ? '✓ CORRECT'            : '✗ WRONG';
 
-      let borderCol, labelCol, resultLabel;
-      if (flat || !dr) {
-        borderCol  = 'border-l-gray-600';
-        labelCol   = 'text-gray-500';
-        resultLabel = 'FLAT';
-      } else if (correct) {
-        borderCol  = 'border-l-emerald-600';
-        labelCol   = 'text-emerald-400';
-        resultLabel = '✓ CORRECT';
-      } else {
-        borderCol  = 'border-l-red-700';
-        labelCol   = 'text-red-400';
-        resultLabel = '✗ WRONG';
-      }
+      const title = card.marketTitle || card.marketId || '—';
+      const pHorizon = card.resolutionPrice != null ? (card.resolutionPrice * 100).toFixed(1) + '¢' : '—';
+      const titleEl = card.link
+        ? `<a href="${card.link}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline leading-tight">${escapeHtml(truncate(title, 60))}</a>`
+        : `<span class="text-gray-200 leading-tight">${escapeHtml(truncate(title, 60))}</span>`;
 
-      // Primary row title: market question (new), fall back to alert title
-      const question  = item.marketQuestion || item.title || item.marketId || '—';
-      const signalTag = item.marketQuestion && item.title
-        ? `<div class="text-[10px] text-gray-500 mt-0.5 truncate">${escapeHtml(truncate(item.title, 60))}</div>`
-        : '';
-      const link = item.link;
-      const titleEl = link
-        ? `<a href="${link}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline leading-tight">${escapeHtml(truncate(question, 60))}</a>`
-        : `<span class="text-gray-200 leading-tight">${escapeHtml(truncate(question, 60))}</span>`;
-
-      const pAlert   = item.priceAtAlert   != null ? (item.priceAtAlert   * 100).toFixed(1) + '¢' : '—';
-      const pHorizon = item.priceAtHorizon != null ? (item.priceAtHorizon * 100).toFixed(1) + '¢' : '—';
-      const elapsed  = resolutionElapsed(item.firedAt, item.evaluatedAt);
-
-      const dpLabel = dp ? (dp === 'up' ? '↑' : '↓') : '—';
-      const drLabel = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
+      const alertRows = (card.alerts || []).map(a => {
+        const dp = a.directionPredicted;
+        const dr = a.directionRealized;
+        const flat = dr === 'flat';
+        let alertCol, alertIcon;
+        if (flat || !dr) {
+          alertCol  = 'text-gray-500';
+          alertIcon = '→';
+        } else if (a.alertCorrect) {
+          alertCol  = 'text-emerald-400';
+          alertIcon = '✓';
+        } else {
+          alertCol  = 'text-red-400';
+          alertIcon = '✗';
+        }
+        const dpLabel  = dp ? (dp === 'up' ? '↑' : '↓') : '—';
+        const drLabel  = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
+        const pAlert   = a.priceAtAlert != null ? (a.priceAtAlert * 100).toFixed(1) + '¢' : '—';
+        const movePp   = a.priceAtAlert != null && a.priceAtHorizon != null
+          ? ((a.priceAtHorizon - a.priceAtAlert) / a.priceAtAlert * 100).toFixed(1) + '%'
+          : null;
+        const elapsed  = resolutionElapsed(a.firedAt, a.evaluatedAt);
+        const detType  = a.type ? a.type.replace(/_/g, ' ') : '—';
+        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0 text-[10px] text-gray-500 mt-0.5 pl-2 border-l border-gray-700">
+          <span class="${alertCol} font-bold">${alertIcon}</span>
+          <span class="text-gray-400">${escapeHtml(detType)}</span>
+          <span>at <span class="text-gray-300">${pAlert}</span>${movePp ? ' → <span class="text-gray-300">' + movePp + '</span>' : ''}</span>
+          <span>pred <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
+          ${elapsed ? `<span class="text-gray-600">${elapsed} before res.</span>` : ''}
+        </div>`;
+      }).join('');
 
       return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
         <div class="flex items-start justify-between gap-2 mb-0.5">
           <div class="text-xs flex-1 min-w-0 truncate">${titleEl}</div>
-          <span class="text-[10px] font-bold shrink-0 ${labelCol}">${resultLabel}</span>
+          <span class="text-[10px] font-bold shrink-0 ${labelCol}">${badge}</span>
         </div>
-        ${signalTag}
-        <div class="flex items-center gap-3 text-[10px] text-gray-500 mt-0.5">
-          <span class="text-gray-600">fired at <span class="text-gray-400">${pAlert}</span> → resolved at <span class="text-gray-400">${pHorizon}</span>${elapsed ? ' · ' + elapsed + ' later' : ''}</span>
-          <span class="ml-auto shrink-0">${relativeTime(item.evaluatedAt)}</span>
-        </div>
-        <div class="flex items-center gap-3 text-[10px] text-gray-500 mt-0.5">
-          <span>predicted <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
-        </div>
+        <div class="text-[10px] text-gray-600 mt-0.5">resolved at <span class="text-gray-400">${pHorizon}</span> · ${relativeTime(card.resolvedAt)}</div>
+        ${alertRows}
       </div>`;
     }).join('');
   } catch (_) {}

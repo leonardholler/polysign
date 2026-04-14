@@ -12,11 +12,7 @@ import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -24,13 +20,12 @@ import java.util.stream.Collectors;
  *
  * GET /api/resolutions/recent?limit=20
  *
- * Scans alert_outcomes for horizon="resolution" rows, sorts by evaluatedAt
- * descending, and enriches each with:
- *   - title / link / priceAtAlert  from the alerts table (query by alertId)
- *   - marketQuestion               from the markets table (getItem by marketId)
+ * Returns one {@link ResolvedMarketCard} per distinct marketId. Each card contains
+ * all alerts that fired on that market, sorted by firedAt ASC. Cards are sorted by
+ * max(evaluatedAt) DESC so the most recently resolved market appears first.
  *
- * If either join misses (alert TTL'd, market not found), the field is null and
- * the dashboard renders "—".
+ * The {@link #groupByMarket} method is package-private so it can be unit-tested
+ * independently of the DynamoDB layer.
  */
 @RestController
 @RequestMapping("/api/resolutions")
@@ -49,7 +44,13 @@ public class ResolutionController {
         this.marketsTable       = marketsTable;
     }
 
-    public record ResolutionItemDto(
+    // ── DTOs ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Enriched per-alert data after joining with the alerts and markets tables.
+     * This is the input type for {@link #groupByMarket}.
+     */
+    public record ResolvedOutcome(
             String     alertId,
             String     marketId,
             String     firedAt,
@@ -61,10 +62,97 @@ public class ResolutionController {
             String     type,
             String     title,
             String     link,
-            String     marketQuestion) {}
+            String     marketQuestion,
+            boolean    alertCorrect) {}
+
+    /** One alert row rendered inside a market card. */
+    public record AlertRow(
+            String     alertId,
+            String     type,
+            BigDecimal priceAtAlert,
+            BigDecimal priceAtHorizon,
+            String     firedAt,
+            String     evaluatedAt,
+            String     directionPredicted,
+            String     directionRealized,
+            boolean    alertCorrect) {}
+
+    /** One card per resolved market, containing all alerts that fired on it. */
+    public record ResolvedMarketCard(
+            String         marketId,
+            String         marketTitle,
+            String         link,
+            BigDecimal     resolutionPrice,
+            String         resolvedAt,
+            boolean        marketCorrect,
+            List<AlertRow> alerts) {}
+
+    // ── Grouping ──────────────────────────────────────────────────────────────
+
+    /**
+     * Groups a flat list of enriched per-alert outcomes into one card per market.
+     *
+     * <ul>
+     *   <li>Cards are sorted by max(evaluatedAt) DESC.</li>
+     *   <li>Alerts within each card are sorted by firedAt ASC.</li>
+     *   <li>{@code marketCorrect} is true if ANY alert in the group is correct.</li>
+     * </ul>
+     */
+    static List<ResolvedMarketCard> groupByMarket(List<ResolvedOutcome> outcomes) {
+        // LinkedHashMap preserves insertion order while we build groups
+        Map<String, List<ResolvedOutcome>> byMarket = new LinkedHashMap<>();
+        for (ResolvedOutcome o : outcomes) {
+            String key = o.marketId() != null ? o.marketId() : "";
+            byMarket.computeIfAbsent(key, k -> new ArrayList<>()).add(o);
+        }
+
+        return byMarket.values().stream()
+                .map(group -> {
+                    List<AlertRow> alertRows = group.stream()
+                            .sorted(Comparator.comparing(ResolvedOutcome::firedAt,
+                                    Comparator.nullsLast(Comparator.naturalOrder())))
+                            .map(o -> new AlertRow(
+                                    o.alertId(),
+                                    o.type(),
+                                    o.priceAtAlert(),
+                                    o.priceAtHorizon(),
+                                    o.firedAt(),
+                                    o.evaluatedAt(),
+                                    o.directionPredicted(),
+                                    o.directionRealized(),
+                                    o.alertCorrect()))
+                            .toList();
+
+                    ResolvedOutcome representative = group.stream()
+                            .max(Comparator.comparing(ResolvedOutcome::evaluatedAt,
+                                    Comparator.nullsLast(Comparator.naturalOrder())))
+                            .orElseThrow();
+
+                    boolean marketCorrect = group.stream().anyMatch(ResolvedOutcome::alertCorrect);
+
+                    String marketTitle = representative.marketQuestion() != null
+                            ? representative.marketQuestion()
+                            : representative.title();
+
+                    return new ResolvedMarketCard(
+                            representative.marketId(),
+                            marketTitle,
+                            representative.link(),
+                            representative.priceAtHorizon(),
+                            representative.evaluatedAt(),
+                            marketCorrect,
+                            alertRows);
+                })
+                .sorted(Comparator.comparing(
+                        card -> card.resolvedAt() == null ? "" : card.resolvedAt(),
+                        Comparator.reverseOrder()))
+                .toList();
+    }
+
+    // ── Endpoint ──────────────────────────────────────────────────────────────
 
     @GetMapping("/recent")
-    public List<ResolutionItemDto> getRecentResolutions(
+    public List<ResolvedMarketCard> getRecentResolutions(
             @RequestParam(defaultValue = "20") int limit) {
 
         List<AlertOutcome> outcomes = alertOutcomesTable.scan().items().stream()
@@ -74,7 +162,7 @@ public class ResolutionController {
                 .limit(limit)
                 .toList();
 
-        // ── Batch-load markets for unique marketIds (one getItem each, bounded by limit) ──
+        // Batch-load markets for unique marketIds
         Set<String> marketIds = outcomes.stream()
                 .map(AlertOutcome::getMarketId)
                 .filter(id -> id != null && !id.isBlank())
@@ -90,7 +178,8 @@ public class ResolutionController {
             } catch (Exception ignored) {}
         }
 
-        return outcomes.stream()
+        // Enrich each outcome with alert-row data
+        List<ResolvedOutcome> resolved = outcomes.stream()
                 .map(o -> {
                     String title = null, link = null;
                     BigDecimal priceAtAlert = null;
@@ -112,25 +201,30 @@ public class ResolutionController {
                             }
                         }
                     } catch (Exception ignored) {}
-                    // Intentionally no fallback to o.getPriceAtAlert():
-                    // that field carries the resolution-tick price for pre-deploy rows,
-                    // which is wrong. Null is the correct display for pre-deploy alerts
-                    // until they roll off (~7 days).
+                    // No fallback to o.getPriceAtAlert(): pre-deploy rows carry the
+                    // resolution-tick price there, which is wrong. Null is correct.
 
-                    return new ResolutionItemDto(
+                    String dp = o.getDirectionPredicted();
+                    String dr = o.getDirectionRealized();
+                    boolean alertCorrect = dp != null && dr != null && dp.equals(dr);
+
+                    return new ResolvedOutcome(
                             o.getAlertId(),
                             o.getMarketId(),
                             o.getFiredAt(),
                             o.getEvaluatedAt(),
-                            o.getDirectionPredicted(),
-                            o.getDirectionRealized(),
+                            dp,
+                            dr,
                             priceAtAlert,
                             o.getPriceAtHorizon(),
                             o.getType(),
                             title,
                             link,
-                            marketQuestions.get(o.getMarketId()));
+                            marketQuestions.get(o.getMarketId()),
+                            alertCorrect);
                 })
                 .toList();
+
+        return groupByMarket(resolved);
     }
 }
