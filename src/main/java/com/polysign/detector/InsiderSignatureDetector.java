@@ -55,8 +55,8 @@ public class InsiderSignatureDetector {
     private static final Logger log = LoggerFactory.getLogger(InsiderSignatureDetector.class);
 
     static final double   MIN_MARKET_VOLUME_24H         = 100_000.0;
-    static final double   MIN_TRADE_SIZE_USD_ABSOLUTE   = 10_000.0;
-    static final double   MIN_TRADE_SIZE_PCT_OF_VOLUME  = 0.02;
+    static final double   MIN_TRADE_SIZE_USD_ABSOLUTE   = 1_000.0;
+    static final double   MIN_TRADE_SIZE_PCT_OF_VOLUME  = 0.005;
     static final int      MAX_BURNER_WALLET_AGE_DAYS    = 14;
     static final int      MAX_BURNER_LIFETIME_TRADES    = 10;
     static final double   BURNER_TRADE_VOLUME_PCT       = 0.40;
@@ -151,8 +151,8 @@ public class InsiderSignatureDetector {
             lastRanAtIso = runStart.toString();
             log.info("insider_detector_complete marketsScanned={} tradesEvaluated={} alertsCreated={}",
                     marketsScanned, tradesEvaluated, alertsCreated);
-        } catch (Exception e) {
-            log.error("insider_detector_error error={}", e.getMessage(), e);
+        } catch (Throwable t) {
+            log.error("insider_detector_error error={}", t.getMessage(), t);
         }
     }
 

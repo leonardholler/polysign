@@ -111,7 +111,7 @@ public class WalletPoller {
 
                 marketsPolled++;
                 long cursor = marketCursors.getOrDefault(
-                        conditionId, now.minusSeconds(5 * 60).getEpochSecond());
+                        conditionId, now.minusSeconds(90).getEpochSecond());
 
                 try {
                     List<Map<String, Object>> trades = fetchTradesByMarket(conditionId, cursor);

@@ -131,9 +131,10 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void tradeSize_belowAbsoluteThreshold_noAlert() {
-        // $9,999 < $10,000 absolute min
-        Market m = market("m1", "10000000", 0.50);
-        WalletTrade t = trade("0xwallet", "m1", 9_999.0, "YES");
+        // $150K market: max($1K, 0.5%×$150K=$750) = $1K absolute floor
+        // Trade = $999 < $1,000 → no alert
+        Market m = market("m1", "150000", 0.50);
+        WalletTrade t = trade("0xwallet", "m1", 999.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 20_000);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
@@ -145,8 +146,8 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void tradeSize_aboveAbsoluteThreshold_withBurnerWallet_firesAlert() {
-        // Market vol = $400K; 2% = $8K; absolute min = $10K; max = $10K
-        // Trade = $15K > $10K; wallet age 5 days = burner
+        // Market vol = $400K; max($1K, 0.5%×$400K=$2K) = $2K threshold
+        // Trade = $15K > $2K; wallet age 5 days = burner
         Market m = market("m1", "400000", 0.50);
         WalletTrade t = trade("0xburner", "m1", 15_000.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 30_000);
@@ -160,11 +161,10 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void tradeSize_belowPctThreshold_noAlert() {
-        // market vol = $300K; 2% = $6K; trade = $5K < $6K
-        // absolute min = $10K, pct min = $6K → max is $10K
-        // $5K < $10K → no alert
+        // market vol = $300K; max($1K, 0.5%×$300K=$1.5K) = $1.5K threshold
+        // trade = $1,200 < $1,500 → no alert (below pct floor)
         Market m = market("m2", "300000", 0.50);
-        WalletTrade t = trade("0xwallet", "m2", 5_000.0, "YES");
+        WalletTrade t = trade("0xwallet", "m2", 1_200.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 20_000);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
@@ -175,8 +175,8 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void tradeSize_abovePctThreshold_withBurnerWallet_firesAlert() {
-        // market vol = $300K; 2% = $6K; absolute min = $10K; max = $10K
-        // trade = $11K > $10K and wallet is a fresh burner
+        // market vol = $300K; max($1K, 0.5%×$300K=$1.5K) = $1.5K threshold
+        // trade = $11K > $1.5K and wallet is a fresh burner
         Market m = market("m3", "300000", 0.50);
         WalletTrade t = trade("0xburner2", "m3", 11_000.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 25_000);
@@ -191,7 +191,7 @@ class InsiderSignatureDetectorTest {
     @Test
     void burnerFilter_oldWallet_highTradeCount_lowVolumePct_noAlert() {
         // age=30d (> 14d), trades=50 (> 10), trade is 1% of vol → none of the three burner criteria
-        // Use $400K market so $15K passes the size gate (max(10K, 2%*400K=8K) = 10K < 15K)
+        // $400K market: max($1K, 0.5%×$400K=$2K) = $2K; $15K passes size gate
         Market m = market("m4", "400000", 0.50);
         WalletTrade t = trade("0xold", "m4", 15_000.0, "YES");
         // lifetimeVolumeUsd = $1.5M, trade = 1% of that (below 40%)
@@ -206,7 +206,7 @@ class InsiderSignatureDetectorTest {
     @Test
     void burnerFilter_freshWallet_fires() {
         // wallet age = 5 days → isBurnerByAge = true
-        // Use $400K market so $15K passes the size gate
+        // $400K market: max($1K, $2K) = $2K; $15K passes size gate
         Market m = market("m5", "400000", 0.50);
         WalletTrade t = trade("0xfresh", "m5", 15_000.0, "YES");
         WalletMetadata meta = burnerByAge(5, 100, 1_500_000.0);
@@ -220,7 +220,7 @@ class InsiderSignatureDetectorTest {
     @Test
     void burnerFilter_lowTradeCount_fires() {
         // 8 lifetime trades ≤ 10 → isBurnerByCount = true
-        // Use $400K market so $15K passes the size gate
+        // $400K market: max($1K, $2K) = $2K; $15K passes size gate
         Market m = market("m6", "400000", 0.50);
         WalletTrade t = trade("0xlowcount", "m6", 15_000.0, "YES");
         WalletMetadata meta = burnerByAge(60, 8, 1_500_000.0);
@@ -234,7 +234,7 @@ class InsiderSignatureDetectorTest {
     @Test
     void burnerFilter_highVolumePct_fires() {
         // trade = $12K; wallet vol = $20K → 60% ≥ 40% → isBurnerByVolume = true
-        // Use $400K market so $12K passes the size gate (max(10K, 8K) = 10K < 12K)
+        // $400K market: max($1K, $2K) = $2K; $12K passes size gate
         Market m = market("m7", "400000", 0.50);
         WalletTrade t = trade("0xhighvol", "m7", 12_000.0, "YES");
         WalletMetadata meta = burnerByAge(60, 100, 20_000.0);
@@ -268,9 +268,39 @@ class InsiderSignatureDetectorTest {
     }
 
     @Test
+    void tradeSize_1200_on_200kMarket_firesAlert() {
+        // $200K market: max($1K, 0.5%×$200K=$1K) = $1K threshold
+        // Trade = $1,200 > $1,000; wallet is 3 days old → isBurnerByAge → should fire
+        Market m = market("m10", "200000", 0.50);
+        WalletTrade t = trade("0xnewwallet", "m10", 1_200.0, "YES");
+        WalletMetadata meta = burnerByAge(3, 2, 2_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        boolean fired = detector.evaluateTrade(t, m);
+
+        assertThat(fired).isTrue();
+        verify(mockAlertService).tryCreate(any(Alert.class));
+    }
+
+    @Test
+    void tradeSize_1200_on_500kMarket_noAlert() {
+        // $500K market: max($1K, 0.5%×$500K=$2.5K) = $2.5K threshold
+        // Trade = $1,200 < $2,500 → below sliding floor → no alert even with fresh wallet
+        Market m = market("m11", "500000", 0.50);
+        WalletTrade t = trade("0xnewwallet2", "m11", 1_200.0, "YES");
+        WalletMetadata meta = burnerByAge(3, 2, 2_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        boolean fired = detector.evaluateTrade(t, m);
+
+        assertThat(fired).isFalse();
+        verifyNoInteractions(mockAlertService);
+    }
+
+    @Test
     void cooldown_sameWalletSameMarket_24h_noSecondAlert() {
         // First alert fires; second call returns false (deduplicated by AlertService)
-        // Use $400K market so $15K passes the size gate
+        // $400K market: max($1K, $2K) = $2K; $15K passes size gate
         Market m = market("m9", "400000", 0.50);
         WalletTrade t = trade("0xcooldown", "m9", 15_000.0, "YES");
         WalletMetadata meta = burnerByAge(5, 3, 30_000);

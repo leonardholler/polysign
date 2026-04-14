@@ -50,7 +50,7 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       # JVM flags: cap heap, dump on OOM, and exit the JVM (not just the thread)
       # so Docker detects the crash and autoheal can restart the container.
-      - JAVA_OPTS=-Xmx512m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError
+      - JAVA_OPTS=-Xmx1g -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError
     env_file:
       - path: .env
         required: false   # .env is optional; defaults above are used if absent
