@@ -284,11 +284,13 @@ function renderAlertDetail(a) {
     const age = m.walletAgeDays === 'unknown' ? '?' : (m.walletAgeDays + 'd');
     const sz = m.tradeSizeUsd ? fmtUsd(parseFloat(m.tradeSizeUsd)) : (m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '');
     const outcome = m.outcomeSide || '';
+    const tc = m.walletLifetimeTrades != null ? m.walletLifetimeTrades + ' trades' : '';
     const pct = m.tradeSizeAsPctOfWalletVolume ? m.tradeSizeAsPctOfWalletVolume + '% of wallet vol' : '';
     const col = 'text-orange-400';
     return `<span class="${col}">BUY ${outcome}</span>` +
            (sz ? ` <span class="text-gray-400">${sz}</span>` : '') +
            ` <span class="text-gray-600">age ${age}` +
+           (tc ? ` · ${tc}` : '') +
            (pct ? ` · ${pct}` : '') + `</span>`;
   }
   return a.title || '';

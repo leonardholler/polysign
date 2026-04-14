@@ -44,9 +44,10 @@ import java.util.Map;
  *   <li>Market volume24h ≥ $100K and not effectively resolved</li>
  *   <li>Market price is not extreme (0.01 – 0.99)</li>
  *   <li>Trade is a BUY (not a SELL hedge)</li>
- *   <li>Trade size ≥ max($10K, 2% of market volume24h)</li>
- *   <li>Wallet qualifies as a "burner": age ≤ 14d OR lifetime trades ≤ 10 OR
- *       this trade ≥ 40% of lifetime volume</li>
+ *   <li>Trade timestamp is within the last 24h (TRADE_MAX_AGE)</li>
+ *   <li>Trade size ≥ max($1K, 0.5% of market volume24h)</li>
+ *   <li>Wallet qualifies as a "burner": age ≤ 7d OR lifetime trades ≤ 5 OR
+ *       this trade ≥ 70% of lifetime volume</li>
  *   <li>Wallet has NOT bought the opposite outcome in the last 2h (no hedge)</li>
  * </ol>
  *
@@ -62,9 +63,13 @@ public class InsiderSignatureDetector {
     static final double   MIN_MARKET_VOLUME_24H         = 100_000.0;
     static final double   MIN_TRADE_SIZE_USD_ABSOLUTE   = 1_000.0;
     static final double   MIN_TRADE_SIZE_PCT_OF_VOLUME  = 0.005;
-    static final int      MAX_BURNER_WALLET_AGE_DAYS    = 14;
-    static final int      MAX_BURNER_LIFETIME_TRADES    = 10;
-    static final double   BURNER_TRADE_VOLUME_PCT       = 0.40;
+    // Matches observed insider patterns (Iran strikes, ceasefire bets): wallets were days old,
+    // <=5 lifetime trades, near-100% of volume on one bet. Looser thresholds fire on mid-size
+    // legitimate traders.
+    static final int      MAX_BURNER_WALLET_AGE_DAYS    = 7;
+    static final int      MAX_BURNER_LIFETIME_TRADES    = 5;
+    static final double   BURNER_TRADE_VOLUME_PCT       = 0.70;
+    static final Duration TRADE_MAX_AGE                 = Duration.ofHours(24);
     static final Duration DEDUPE_WINDOW                 = Duration.ofHours(24);
     static final Duration HEDGE_WINDOW                  = Duration.ofHours(2);
     /** Safety valve: max trades evaluated in a single run() invocation. */
@@ -78,6 +83,7 @@ public class InsiderSignatureDetector {
     private final AppClock                   clock;
     private final MarketLivenessGate         livenessGate;
     private final Counter                    alertsFired;
+    private final Counter                    staleTradesFiltered;
 
     /** ISO-8601 of last successful run — trades after this instant are considered new. Package-private for testability. */
     volatile String lastRanAtIso;
@@ -98,6 +104,9 @@ public class InsiderSignatureDetector {
         this.livenessGate         = livenessGate;
         this.alertsFired = Counter.builder("polysign.insider.alerts.fired")
                 .description("Insider signature alerts fired")
+                .register(meterRegistry);
+        this.staleTradesFiltered = Counter.builder("polysign.insider.stale.filtered")
+                .description("Trades dropped because timestamp exceeded TRADE_MAX_AGE")
                 .register(meterRegistry);
     }
 
@@ -186,6 +195,23 @@ public class InsiderSignatureDetector {
     boolean evaluateTrade(WalletTrade trade, Market market) {
         // Step 1: BUY side only
         if (!"BUY".equalsIgnoreCase(trade.getSide())) return false;
+
+        // Step 1.5: Trade recency — reject stale trades before touching DynamoDB metadata.
+        // Cheapest check; eliminates backfilled or re-queried historical trades fast.
+        if (trade.getTimestamp() != null) {
+            try {
+                Instant tradeTime = Instant.parse(trade.getTimestamp());
+                if (tradeTime.isBefore(clock.now().minus(TRADE_MAX_AGE))) {
+                    log.debug("FILTERED_STALE_TRADE address={} marketId={} timestamp={}",
+                            trade.getAddress(), trade.getMarketId(), trade.getTimestamp());
+                    staleTradesFiltered.increment();
+                    return false;
+                }
+            } catch (Exception e) {
+                log.warn("insider_stale_parse_failed address={} timestamp={}",
+                        trade.getAddress(), trade.getTimestamp());
+            }
+        }
 
         // Step 2: Trade size gate
         double marketVol24h = parseDouble(market.getVolume24h());

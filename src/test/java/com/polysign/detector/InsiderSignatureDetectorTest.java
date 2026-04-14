@@ -195,11 +195,11 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void burnerFilter_oldWallet_highTradeCount_lowVolumePct_noAlert() {
-        // age=30d (> 14d), trades=50 (> 10), trade is 1% of vol → none of the three burner criteria
+        // age=30d (> 7d), trades=50 (> 5), trade is 1% of vol (< 70%) → none of the three burner criteria
         // $400K market: max($1K, 0.5%×$400K=$2K) = $2K; $15K passes size gate
         Market m = market("m4", "400000", 0.50);
         WalletTrade t = trade("0xold", "m4", 15_000.0, "YES");
-        // lifetimeVolumeUsd = $1.5M, trade = 1% of that (below 40%)
+        // lifetimeVolumeUsd = $1.5M, trade = 1% of that (below 70%)
         WalletMetadata meta = burnerByAge(30, 50, 1_500_000.0);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
@@ -224,11 +224,11 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void burnerFilter_lowTradeCount_fires() {
-        // 8 lifetime trades ≤ 10 → isBurnerByCount = true
+        // 4 lifetime trades ≤ 5 → isBurnerByCount = true
         // $400K market: max($1K, $2K) = $2K; $15K passes size gate
         Market m = market("m6", "400000", 0.50);
         WalletTrade t = trade("0xlowcount", "m6", 15_000.0, "YES");
-        WalletMetadata meta = burnerByAge(60, 8, 1_500_000.0);
+        WalletMetadata meta = burnerByAge(60, 4, 1_500_000.0);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
         boolean fired = detector.evaluateTrade(t, m);
@@ -238,11 +238,11 @@ class InsiderSignatureDetectorTest {
 
     @Test
     void burnerFilter_highVolumePct_fires() {
-        // trade = $12K; wallet vol = $20K → 60% ≥ 40% → isBurnerByVolume = true
+        // trade = $12K; wallet vol = $15K → 80% ≥ 70% → isBurnerByVolume = true
         // $400K market: max($1K, $2K) = $2K; $12K passes size gate
         Market m = market("m7", "400000", 0.50);
         WalletTrade t = trade("0xhighvol", "m7", 12_000.0, "YES");
-        WalletMetadata meta = burnerByAge(60, 100, 20_000.0);
+        WalletMetadata meta = burnerByAge(60, 100, 15_000.0);
         when(mockMetadataService.get(any())).thenReturn(meta);
 
         boolean fired = detector.evaluateTrade(t, m);
@@ -367,6 +367,60 @@ class InsiderSignatureDetectorTest {
 
         assertThat(fired).isTrue();
         verify(mockAlertService).tryCreate(any(Alert.class));
+    }
+
+    // ── Fix 2: Trade recency filter tests ────────────────────────────────────
+
+    @Test
+    void staleTrade_olderThan24h_noAlert() {
+        // Trade timestamp is 25 hours ago — exceeds TRADE_MAX_AGE (24h) → must be rejected.
+        Market m = market("m15", "400000", 0.50);
+        WalletTrade t = trade("0xstale", "m15", 15_000.0, "YES");
+        t.setTimestamp(NOW.minus(Duration.ofHours(25)).toString());
+        WalletMetadata meta = burnerByAge(3, 2, 20_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        boolean fired = detector.evaluateTrade(t, m);
+
+        assertThat(fired).isFalse();
+        verifyNoInteractions(mockAlertService);
+        // Metadata service must NOT be called (recency check is before size gate)
+        verifyNoInteractions(mockMetadataService);
+    }
+
+    @Test
+    void staleTrade_at23h59m_firesAlert() {
+        // Trade timestamp is 23h59m ago — just inside the 24h TRADE_MAX_AGE window → must fire.
+        Market m = market("m16", "400000", 0.50);
+        WalletTrade t = trade("0xedge", "m16", 15_000.0, "YES");
+        t.setTimestamp(NOW.minus(Duration.ofHours(23).plusMinutes(59)).toString());
+        WalletMetadata meta = burnerByAge(3, 2, 20_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        boolean fired = detector.evaluateTrade(t, m);
+
+        assertThat(fired).isTrue();
+        verify(mockAlertService).tryCreate(any(Alert.class));
+    }
+
+    @Test
+    void regression_prodBadAlert_36dWallet_8trades_22pctVol_noAlert() {
+        // Regression for the real prod alert that incorrectly fired:
+        //   $43.4K trade, 36-day-old wallet, 8 lifetime trades, 22.4% of wallet volume.
+        // With tightened thresholds none of the three burner conditions passes:
+        //   isBurnerByAge:    36d > 7d  → false
+        //   isBurnerByCount:  8   > 5   → false
+        //   isBurnerByVolume: 22.4% < 70% → false
+        Market m = market("prod-bad", "400000", 0.55);
+        WalletTrade t = trade("0xprod-bad", "prod-bad", 43_400.0, "YES");
+        // lifetime vol ≈ $193,750 → 43_400 / 193_750 ≈ 22.4%
+        WalletMetadata meta = burnerByAge(36, 8, 193_750.0);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        boolean fired = detector.evaluateTrade(t, m);
+
+        assertThat(fired).isFalse();
+        verifyNoInteractions(mockAlertService);
     }
 
     // ── Fix C: MAX_TRADES_PER_RUN cap test ───────────────────────────────────
