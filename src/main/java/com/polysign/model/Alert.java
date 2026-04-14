@@ -49,6 +49,7 @@ public class Alert {
     public String              getTitle()       { return title;       }
     public String              getDescription() { return description; }
     public Map<String, String> getMetadata()    { return metadata;    }
+    @DynamoDbAttribute("priceAtAlert")
     public BigDecimal          getPriceAtAlert() { return priceAtAlert; }
     public Boolean             getWasNotified()  { return wasNotified;  }
     public Boolean             getPhoneWorthy()  { return phoneWorthy;  }
