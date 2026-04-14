@@ -9,6 +9,7 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
+import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -35,10 +36,12 @@ import java.time.Duration;
  * <p>S3 uses path-style access ({@code forcePathStyle=true}) which is required
  * by LocalStack and harmless on real AWS when an endpoint override is set.
  *
- * <p>DynamoDB and SQS clients use an Apache HTTP client pool tuned to evict
- * idle/stale connections via {@code useIdleConnectionReaper}. This prevents
- * "Connection pool shut down" IllegalStateExceptions from dead connections
- * poisoning the pool on long-running deployments.
+ * <p>DynamoDB and SQS clients share a single {@link SdkHttpClient} built once
+ * via {@link #awsHttpClient()}. Sharing prevents the SDK from creating separate
+ * connection pools per client and eliminates "Connection pool shut down"
+ * IllegalStateExceptions caused by one client's lifecycle closing the pool used
+ * by the other. The bean is declared with {@code destroyMethod = ""} so Spring
+ * does not auto-close it on context refresh; the JVM shutdown hook handles cleanup.
  */
 @Configuration
 public class AwsConfig {
@@ -67,12 +70,31 @@ public class AwsConfig {
         return DefaultCredentialsProvider.create();
     }
 
+    /**
+     * Single shared Apache HTTP client pool used by both {@link DynamoDbClient} and
+     * {@link SqsClient}. {@code destroyMethod = ""} prevents Spring from auto-closing
+     * it on context refresh events; the JVM shutdown hook handles the final cleanup.
+     */
+    @Bean(destroyMethod = "")
+    public SdkHttpClient awsHttpClient() {
+        return ApacheHttpClient.builder()
+                .maxConnections(100)
+                .connectionMaxIdleTime(Duration.ofSeconds(30))
+                .connectionTimeToLive(Duration.ofMinutes(5))
+                .socketTimeout(Duration.ofSeconds(30))
+                .connectionTimeout(Duration.ofSeconds(5))
+                .connectionAcquisitionTimeout(Duration.ofSeconds(10))
+                .useIdleConnectionReaper(true)
+                .build();
+    }
+
     @Bean
-    public DynamoDbClient dynamoDbClient(AwsCredentialsProvider awsCredentialsProvider) {
+    public DynamoDbClient dynamoDbClient(AwsCredentialsProvider awsCredentialsProvider,
+                                         SdkHttpClient awsHttpClient) {
         var builder = DynamoDbClient.builder()
                 .region(Region.of(region))
                 .credentialsProvider(awsCredentialsProvider)
-                .httpClientBuilder(pooledHttpClientBuilder());
+                .httpClient(awsHttpClient);
         applyEndpointOverride(builder);
         return builder.build();
     }
@@ -85,11 +107,12 @@ public class AwsConfig {
     }
 
     @Bean
-    public SqsClient sqsClient(AwsCredentialsProvider awsCredentialsProvider) {
+    public SqsClient sqsClient(AwsCredentialsProvider awsCredentialsProvider,
+                                SdkHttpClient awsHttpClient) {
         var builder = SqsClient.builder()
                 .region(Region.of(region))
                 .credentialsProvider(awsCredentialsProvider)
-                .httpClientBuilder(pooledHttpClientBuilder());
+                .httpClient(awsHttpClient);
         applyEndpointOverride(builder);
         return builder.build();
     }
@@ -105,26 +128,6 @@ public class AwsConfig {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Apache HTTP client pool shared by DynamoDB and SQS clients.
-     *
-     * Key settings:
-     * - {@code useIdleConnectionReaper}: evicts idle/stale connections so they
-     *   cannot re-enter the pool in a broken state (root cause of
-     *   "Connection pool shut down" crashes).
-     * - {@code connectionTimeToLive}: hard cap on connection age, preventing
-     *   connections that outlive NAT/firewall idle timeouts from being reused.
-     */
-    private ApacheHttpClient.Builder pooledHttpClientBuilder() {
-        return ApacheHttpClient.builder()
-                .maxConnections(50)
-                .connectionMaxIdleTime(Duration.ofSeconds(30))
-                .connectionTimeToLive(Duration.ofMinutes(5))
-                .socketTimeout(Duration.ofSeconds(30))
-                .connectionTimeout(Duration.ofSeconds(10))
-                .useIdleConnectionReaper(true);
-    }
 
     private <B extends software.amazon.awssdk.awscore.client.builder.AwsClientBuilder<B, ?>>
     void applyEndpointOverride(B builder) {
