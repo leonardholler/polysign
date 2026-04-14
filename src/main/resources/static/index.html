@@ -67,10 +67,10 @@
     <div class="text-2xl font-bold text-gray-100" id="st-alerts">—</div>
     <div class="text-xs text-gray-600" id="st-alerts-sub">— scored this week</div>
   </div>
-  <div class="bg-gray-900 px-4 py-3" title="Of alerts on markets that reached full resolution (0% or 100%), the % where predicted direction matched the final outcome. Easier test than short-horizon precision — detectors often fire when the outcome is already near-certain.">
-    <div class="text-xs text-gray-500 mb-0.5">Resolution Accuracy</div>
+  <div class="bg-gray-900 px-4 py-3" title="Skill measures whether PolySign's predictions beat the market's own implied probability. Positive = added information. Excludes alerts in the 0–10% / 90–100% dead zone.">
+    <div class="text-xs text-gray-500 mb-0.5">Signal Skill</div>
     <div class="text-2xl font-bold text-gray-100" id="st-res-acc">—</div>
-    <div class="text-xs text-gray-600" id="st-res-acc-sub">no resolved alerts yet</div>
+    <div class="text-xs text-gray-600" id="st-res-acc-sub">no skill data yet</div>
   </div>
   <div class="bg-gray-900 px-4 py-3" title="Of alerts fired in the last 7 days, the % where price moved in the predicted direction within 1 hour. Short-horizon detector quality.">
     <div class="text-xs text-gray-500 mb-0.5">Signal Precision</div>
@@ -175,6 +175,11 @@ function fmtUsd(n) {
 function fmtPct(v) {
   if (v == null) return '—';
   return (v * 100).toFixed(0) + '%';
+}
+
+function fmtSkill(v) {
+  if (v == null) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(3);
 }
 
 function fmtPrecisionStat(s) {
@@ -445,15 +450,15 @@ async function loadStats() {
     document.getElementById('st-alerts-sub').textContent =
         samples1h > 0 ? samples1h + ' scored this week' : '— scored this week';
 
-    // Resolution Accuracy card
-    const arz = d.alertsInResolutionZone ?? 0;
-    const rc  = d.resolutionCorrect ?? 0;
-    const mz  = d.marketsInResolutionZone ?? 0;
-    const pct = d.resolutionAccuracyPct;
-    document.getElementById('st-res-acc').textContent = arz === 0 ? '—' : (pct != null ? pct + '%' : '—');
-    document.getElementById('st-res-acc-sub').textContent = arz === 0
-      ? 'no resolved alerts yet'
-      : `${rc}/${arz} correct · ${mz} markets at resolution · all time`;
+    // Signal Skill card (resolution horizon, core zone)
+    const skillCore  = d.meanBrierSkillResolutionCore;
+    const skillCount = d.brierCountResolutionCore ?? 0;
+    const precRes    = d.resolutionAccuracyPct;
+    document.getElementById('st-res-acc').textContent =
+        skillCount === 0 ? '—' : (skillCore != null ? fmtSkill(skillCore) + ' Brier' : '—');
+    document.getElementById('st-res-acc-sub').textContent = skillCount === 0
+      ? 'no skill data yet'
+      : `${skillCount} scorable alerts · core zone · precision ${precRes != null ? precRes + '%' : '—'}`;
 
     document.getElementById('st-insider').textContent  = d.insiderSignatureCount ?? '—';
     document.getElementById('st-insider-sub').textContent = d.walletsSeenToday != null ? d.walletsSeenToday + ' wallets seen 24h' : '— wallets 24h';
@@ -492,7 +497,7 @@ async function loadStats() {
     const idx = {};
     (d.detectors || []).forEach(x => { idx[x.type] = x; });
     document.getElementById('sq-summary').textContent =
-      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · insider ${fmtPct(idx.insider_signature?.precision)}`;
+      `price ${fmtSkill(idx.price_movement?.coreZone?.meanBrierSkill)} · anomaly ${fmtSkill(idx.statistical_anomaly?.coreZone?.meanBrierSkill)} · insider ${fmtSkill(idx.insider_signature?.coreZone?.meanBrierSkill)}`;
   } catch (_) {}
 })();
 
@@ -573,12 +578,12 @@ async function loadResolutions() {
     // Summary — distinct markets counted directly from the grouped response
     const summaryEl = document.getElementById('resolutions-summary');
     if (summaryEl) {
-      const total   = cards.length;
-      const correct = cards.filter(c => c.marketCorrect).length;
-      const pct     = total > 0 ? Math.round(correct / total * 100) : null;
-      summaryEl.textContent = pct != null
-        ? `${total} resolved · ${correct} correct · ${pct}% accuracy`
-        : total > 0 ? `${total} resolved` : '—';
+      const total       = cards.length;
+      const informative = cards.filter(c => c.marketInformative).length;
+      const skills      = cards.map(c => c.meanBrierSkill).filter(v => v != null);
+      const meanSkill   = skills.length > 0 ? skills.reduce((a, b) => a + b, 0) / skills.length : null;
+      summaryEl.textContent = total === 0 ? '—'
+        : `${total} markets · ${informative} informative · mean skill ${meanSkill != null ? fmtSkill(meanSkill) : '—'}`;
     }
 
     if (!cards || cards.length === 0) {
@@ -587,9 +592,9 @@ async function loadResolutions() {
     }
 
     el.innerHTML = cards.map(card => {
-      const borderCol = card.marketCorrect ? 'border-l-emerald-600' : 'border-l-red-700';
-      const labelCol  = card.marketCorrect ? 'text-emerald-400'     : 'text-red-400';
-      const badge     = card.marketCorrect ? '✓ CORRECT'            : '✗ WRONG';
+      const borderCol = card.marketInformative ? 'border-l-emerald-600' : 'border-l-red-700';
+      const labelCol  = card.marketInformative ? 'text-emerald-400'     : 'text-red-400';
+      const badge     = card.marketInformative ? '✓ INFORMATIVE'        : '✗ NOT INFORMATIVE';
 
       const title = card.marketTitle || card.marketId || '—';
       const pHorizon = card.resolutionPrice != null ? (card.resolutionPrice * 100).toFixed(1) + '¢' : '—';
@@ -598,33 +603,40 @@ async function loadResolutions() {
         : `<span class="text-gray-200 leading-tight">${escapeHtml(truncate(title, 60))}</span>`;
 
       const alertRows = (card.alerts || []).map(a => {
-        const dp = a.directionPredicted;
-        const dr = a.directionRealized;
-        const flat = dr === 'flat';
+        const dp      = a.directionPredicted;
+        const dr      = a.directionRealized;
+        const flat    = dr === 'flat';
+        const isDead  = a.deadZone === true;
+        const rowBase = isDead ? 'text-gray-600' : 'text-gray-500';
         let alertCol, alertIcon;
         if (flat || !dr) {
-          alertCol  = 'text-gray-500';
+          alertCol  = isDead ? 'text-gray-600' : 'text-gray-500';
           alertIcon = '→';
         } else if (a.alertCorrect) {
-          alertCol  = 'text-emerald-400';
+          alertCol  = isDead ? 'text-gray-500' : 'text-emerald-400';
           alertIcon = '✓';
         } else {
-          alertCol  = 'text-red-400';
+          alertCol  = isDead ? 'text-gray-500' : 'text-red-400';
           alertIcon = '✗';
         }
-        const dpLabel  = dp ? (dp === 'up' ? '↑' : '↓') : '—';
-        const drLabel  = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
-        const pAlert   = a.priceAtAlert != null ? (a.priceAtAlert * 100).toFixed(1) + '¢' : '—';
-        const movePp   = a.priceAtAlert != null && a.priceAtHorizon != null
+        const dpLabel    = dp ? (dp === 'up' ? '↑' : '↓') : '—';
+        const drLabel    = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
+        const pAlert     = a.priceAtAlert != null ? (a.priceAtAlert * 100).toFixed(1) + '¢' : '—';
+        const movePp     = a.priceAtAlert != null && a.priceAtHorizon != null
           ? ((a.priceAtHorizon - a.priceAtAlert) / a.priceAtAlert * 100).toFixed(1) + '%'
           : null;
-        const elapsed  = resolutionElapsed(a.firedAt, a.evaluatedAt);
-        const detType  = a.type ? a.type.replace(/_/g, ' ') : '—';
-        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0 text-[10px] text-gray-500 mt-0.5 pl-2 border-l border-gray-700">
+        const elapsed    = resolutionElapsed(a.firedAt, a.evaluatedAt);
+        const detType    = a.type ? a.type.replace(/_/g, ' ') : '—';
+        const skillLabel = a.brierSkill != null
+          ? `<span class="${a.brierSkill >= 0 ? 'text-emerald-500' : 'text-red-500'}">${fmtSkill(a.brierSkill)}</span>`
+          : '';
+        const deadTag    = isDead ? ' <span class="text-gray-600 italic">(dead zone)</span>' : '';
+        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0 text-[10px] ${rowBase} mt-0.5 pl-2 border-l border-gray-700">
           <span class="${alertCol} font-bold">${alertIcon}</span>
-          <span class="text-gray-400">${escapeHtml(detType)}</span>
-          <span>at <span class="text-gray-300">${pAlert}</span>${movePp ? ' → <span class="text-gray-300">' + movePp + '</span>' : ''}</span>
-          <span>pred <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
+          <span class="${isDead ? 'text-gray-600' : 'text-gray-400'}">${escapeHtml(detType)}</span>
+          <span>at <span class="${isDead ? 'text-gray-600' : 'text-gray-300'}">${pAlert}</span>${movePp ? ' → <span class="' + (isDead ? 'text-gray-600' : 'text-gray-300') + '">' + movePp + '</span>' : ''}${deadTag}</span>
+          <span>pred <span class="${isDead ? 'text-gray-600' : 'text-gray-300'}">${dpLabel}</span> · realized <span class="${isDead ? 'text-gray-600' : 'text-gray-300'}">${drLabel}</span></span>
+          ${skillLabel}
           ${elapsed ? `<span class="text-gray-600">${elapsed} before res.</span>` : ''}
         </div>`;
       }).join('');

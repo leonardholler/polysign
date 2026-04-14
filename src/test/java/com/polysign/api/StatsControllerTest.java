@@ -98,7 +98,10 @@ class StatsControllerTest {
 
         // stub getPerformance for insider_signature to return empty result
         when(signalPerformanceService.getPerformance(any(), any(), any()))
-                .thenReturn(new SignalPerformanceService.PerformanceResponse("t1h", "", List.of()));
+                .thenReturn(new SignalPerformanceService.PerformanceResponse("t1h", "", List.of(), 0, 0));
+        // stub getAggregateSkill — called by getStats() for resolution skill card
+        lenient().when(signalPerformanceService.getAggregateSkill(any(), any()))
+                .thenReturn(new SignalPerformanceService.AggregateSkill(null, 0, null, 0, 0, 0));
 
         controller = new StatsController(
                 alertsTable, watchedWalletsTable, marketsTable, alertOutcomesTable,

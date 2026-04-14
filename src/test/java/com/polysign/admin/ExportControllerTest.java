@@ -177,6 +177,58 @@ class ExportControllerTest {
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // CSV column-count assertion — RFC 4180 quoting must preserve exactly 15 cols
+    // ════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void csv_titleWithDollarComma_parsesTo15Columns() throws Exception {
+        // "Will Bitcoin reach $80,000 in April?" contains a comma → must be quoted so the
+        // CSV line parses to exactly 15 columns (not 16+).
+        AlertOutcome o = outcome("a1", "mkt-1", "price_movement", "2026-04-10T08:00:00Z",
+                new BigDecimal("0.45"), new BigDecimal("1.00"), "up", true);
+
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(o));
+        when(alertsTable.query(any(QueryConditional.class)).items().stream())
+                .thenAnswer(inv -> Stream.of(alert("a1", "warning", "2026-04-08T07:00:00Z", new BigDecimal("0.45"))));
+
+        Market market = new Market();
+        market.setMarketId("mkt-1");
+        market.setQuestion("Will Bitcoin reach $80,000 in April?");
+        market.setVolume24h("300000");
+        when(marketsTable.getItem(any(Key.class))).thenReturn(market);
+
+        String csv = mvc.perform(get("/admin/export/resolutions.csv")
+                        .header("X-Admin-Key", TEST_KEY))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String[] lines = csv.strip().split("\\r?\\n");
+        // header + 1 data row
+        assertThat(lines).hasSize(2);
+        // Every data line must parse to exactly 15 columns
+        for (int i = 1; i < lines.length; i++) {
+            assertThat(countCsvColumns(lines[i]))
+                    .as("line %d should have exactly 15 CSV columns", i)
+                    .isEqualTo(15);
+        }
+    }
+
+    /** RFC 4180-aware column counter: commas inside double-quoted fields are not separators. */
+    private static int countCsvColumns(String line) {
+        int count = 1;
+        boolean inQuotes = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"') {
+                inQuotes = !inQuotes;
+            } else if (c == ',' && !inQuotes) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // csvEscape unit tests
     // ════════════════════════════════════════════════════════════════════════
 

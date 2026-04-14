@@ -119,6 +119,71 @@ class SignalPerformanceServiceTest {
         assertThat(pm.count()).isEqualTo(1); // only the t1h outcome
     }
 
+    @Test
+    void unscorableAlerts_excludedFromPrecisionDenominator() {
+        // 3 correct + 1 unscorable (scorable=false, wasCorrect=null from null priceAtAlert)
+        // Old code would give precision = 3/3 = 1.0 if flat was excluded.
+        // With scorable filter: denominator = 3 correct only → precision = 1.0
+        // But main check: unscorable alert should NOT count as wrong in denominator.
+        List<AlertOutcome> outcomes = new ArrayList<>();
+        for (int i = 0; i < 3; i++) outcomes.add(outcome("price_movement", "t1h", true, "0.05"));
+        // Add an unscorable alert (scorable=false, wasCorrect=null)
+        AlertOutcome unscorable = outcome("price_movement", "t1h", null, "0.0");
+        unscorable.setScorable(false);
+        unscorable.setSkipReason("no_baseline");
+        outcomes.add(unscorable);
+
+        TestableService service = new TestableService(clock, outcomes);
+        PerformanceResponse resp = service.getPerformance(null, "t1h", SINCE);
+
+        DetectorPerformance pm = findType(resp, "price_movement");
+        assertThat(pm).isNotNull();
+        assertThat(pm.count()).isEqualTo(4); // all outcomes counted
+        assertThat(pm.scorableCount()).isEqualTo(3);
+        assertThat(pm.unscorableCount()).isEqualTo(1);
+        // precision denominator = 3 (3 correct + 0 wrong) = 1.0
+        assertThat(pm.precision()).isCloseTo(1.0, within(1e-9));
+        // top-level response also exposes counts
+        assertThat(resp.scorableCount()).isEqualTo(3);
+        assertThat(resp.unscorableCount()).isEqualTo(1);
+    }
+
+    @Test
+    void deadZoneAlerts_excludedFromCoreZoneBucket() {
+        // 4 correct outcomes: 2 core zone, 2 dead zone
+        List<AlertOutcome> outcomes = new ArrayList<>();
+        AlertOutcome core1 = outcome("price_movement", "t1h", true, "0.05");
+        core1.setScorable(true);
+        core1.setDeadZone(false);
+        outcomes.add(core1);
+        AlertOutcome core2 = outcome("price_movement", "t1h", false, "-0.03");
+        core2.setScorable(true);
+        core2.setDeadZone(false);
+        outcomes.add(core2);
+        AlertOutcome dz1 = outcome("price_movement", "t1h", true, "0.02");
+        dz1.setScorable(true);
+        dz1.setDeadZone(true);
+        outcomes.add(dz1);
+        AlertOutcome dz2 = outcome("price_movement", "t1h", false, "-0.01");
+        dz2.setScorable(true);
+        dz2.setDeadZone(true);
+        outcomes.add(dz2);
+
+        TestableService service = new TestableService(clock, outcomes);
+        PerformanceResponse resp = service.getPerformance(null, "t1h", SINCE);
+
+        DetectorPerformance pm = findType(resp, "price_movement");
+        assertThat(pm).isNotNull();
+        // overall: 2 correct + 2 wrong = 0.5
+        assertThat(pm.overall()).isNotNull();
+        assertThat(pm.overall().precision()).isCloseTo(0.5, within(1e-9));
+        assertThat(pm.overall().scoredCount()).isEqualTo(4);
+        // coreZone: 1 correct + 1 wrong = 0.5, but only 2 outcomes
+        assertThat(pm.coreZone()).isNotNull();
+        assertThat(pm.coreZone().precision()).isCloseTo(0.5, within(1e-9));
+        assertThat(pm.coreZone().scoredCount()).isEqualTo(2);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static DetectorPerformance findType(PerformanceResponse resp, String type) {
@@ -185,8 +250,11 @@ class SignalPerformanceServiceTest {
                 detectors.add(aggregatePublic(t, group));
             }
 
+            int scorableCount   = (int) filtered.stream().filter(o -> !Boolean.FALSE.equals(o.getScorable())).count();
+            int unscorableCount = (int) filtered.stream().filter(o -> Boolean.FALSE.equals(o.getScorable())).count();
             Instant since2 = since != null ? since : myClock.now().minusSeconds(7 * 24 * 3600L);
-            return new PerformanceResponse(finalHorizon, since2.toString(), detectors);
+            return new PerformanceResponse(finalHorizon, since2.toString(), detectors,
+                    scorableCount, unscorableCount);
         }
 
         /**
@@ -195,9 +263,17 @@ class SignalPerformanceServiceTest {
          */
         private DetectorPerformance aggregatePublic(String type, List<AlertOutcome> outcomes) {
             int count = outcomes.size();
-            long correctCount = outcomes.stream()
+
+            // Split scorable / unscorable (null scorable → treated as scorable for compat)
+            List<AlertOutcome> scorable = outcomes.stream()
+                    .filter(o -> !Boolean.FALSE.equals(o.getScorable()))
+                    .toList();
+            int scorableCount   = scorable.size();
+            int unscorableCount = count - scorableCount;
+
+            long correctCount = scorable.stream()
                     .filter(o -> Boolean.TRUE.equals(o.getWasCorrect())).count();
-            long wrongCount = outcomes.stream()
+            long wrongCount = scorable.stream()
                     .filter(o -> Boolean.FALSE.equals(o.getWasCorrect())).count();
             Double precision = (correctCount + wrongCount) == 0
                     ? null
@@ -222,7 +298,24 @@ class SignalPerformanceServiceTest {
                     .mapToDouble(o -> Math.abs(o.getMagnitudePp().doubleValue()))
                     .average().orElse(0.0);
 
-            return new DetectorPerformance(type, count, precision, avgMag, median, meanAbs);
+            SignalPerformanceService.SkillBucket overall  = buildBucket(scorable, false);
+            SignalPerformanceService.SkillBucket coreZone = buildBucket(scorable, true);
+
+            return new DetectorPerformance(type, count, precision, avgMag, median, meanAbs,
+                    scorableCount, unscorableCount, overall, coreZone);
+        }
+
+        private static SignalPerformanceService.SkillBucket buildBucket(
+                List<AlertOutcome> scorable, boolean excludeDeadZone) {
+            List<AlertOutcome> group = excludeDeadZone
+                    ? scorable.stream().filter(o -> !Boolean.TRUE.equals(o.getDeadZone())).toList()
+                    : scorable;
+            long correct = group.stream().filter(o -> Boolean.TRUE.equals(o.getWasCorrect())).count();
+            long wrong   = group.stream().filter(o -> Boolean.FALSE.equals(o.getWasCorrect())).count();
+            int scoredCount = (int) (correct + wrong);
+            Double prec = scoredCount == 0 ? null : (double) correct / scoredCount;
+            return new SignalPerformanceService.SkillBucket(prec, (int) correct, scoredCount,
+                    null, null, null, 0);
         }
     }
 }

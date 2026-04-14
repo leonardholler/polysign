@@ -18,6 +18,7 @@ import software.amazon.awssdk.enhanced.dynamodb.model.ReadBatch;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.OptionalDouble;
 import java.util.stream.Collectors;
 
 /**
@@ -85,6 +86,10 @@ public class SignalPerformanceService {
                 .filter(o -> finalHorizon.equals(o.getHorizon()))
                 .toList();
 
+        // Aggregate scorable/unscorable counts across all types for this horizon
+        int scorableCount   = (int) filtered.stream().filter(SignalPerformanceService::isScorable).count();
+        int unscorableCount = (int) filtered.stream().filter(o -> Boolean.FALSE.equals(o.getScorable())).count();
+
         // Group by type
         Map<String, List<AlertOutcome>> byType = filtered.stream()
                 .collect(Collectors.groupingBy(o -> o.getType() != null ? o.getType() : "unknown"));
@@ -102,7 +107,8 @@ public class SignalPerformanceService {
                 .sorted()
                 .forEach(t -> detectors.add(aggregate(t, byType.get(t))));
 
-        return new PerformanceResponse(finalHorizon, since.toString(), detectors);
+        return new PerformanceResponse(finalHorizon, since.toString(), detectors,
+                scorableCount, unscorableCount);
     }
 
     /**
@@ -308,6 +314,7 @@ public class SignalPerformanceService {
 
     /**
      * Aggregate precision and scored sample count across all detector types for one horizon.
+     * Precision denominator now filters to scorable outcomes only.
      *
      * @param horizon one of t15m, t1h, t24h, resolution
      * @param since   look-back window start (null = 7 days ago)
@@ -319,10 +326,14 @@ public class SignalPerformanceService {
         List<AlertOutcome> outcomes = fetchOutcomes(null, since);
 
         long correct = outcomes.stream()
-                .filter(o -> horizon.equals(o.getHorizon()) && Boolean.TRUE.equals(o.getWasCorrect()))
+                .filter(o -> horizon.equals(o.getHorizon())
+                        && isScorable(o)
+                        && Boolean.TRUE.equals(o.getWasCorrect()))
                 .count();
         long wrong = outcomes.stream()
-                .filter(o -> horizon.equals(o.getHorizon()) && Boolean.FALSE.equals(o.getWasCorrect()))
+                .filter(o -> horizon.equals(o.getHorizon())
+                        && isScorable(o)
+                        && Boolean.FALSE.equals(o.getWasCorrect()))
                 .count();
         long scored = correct + wrong;
         Double precision = scored == 0 ? null : (double) correct / scored;
@@ -330,21 +341,66 @@ public class SignalPerformanceService {
         return new AggregatePrecision(precision, scored);
     }
 
+    /**
+     * Aggregate Brier skill across all detector types for one horizon.
+     *
+     * @param horizon one of t15m, t1h, t24h, resolution
+     * @param since   look-back window start (null = 7 days ago)
+     * @return aggregate Brier skill statistics
+     */
+    public AggregateSkill getAggregateSkill(String horizon, Instant since) {
+        if (since == null) since = clock.now().minus(Duration.ofDays(7));
+
+        List<AlertOutcome> outcomes = fetchOutcomes(null, since);
+
+        List<AlertOutcome> forHorizon = outcomes.stream()
+                .filter(o -> horizon.equals(o.getHorizon()))
+                .toList();
+
+        int scorableCount   = (int) forHorizon.stream().filter(SignalPerformanceService::isScorable).count();
+        int unscorableCount = (int) forHorizon.stream().filter(o -> Boolean.FALSE.equals(o.getScorable())).count();
+
+        // overall: all scorable with non-null brierSkill
+        OptionalDouble overall = forHorizon.stream()
+                .filter(o -> isScorable(o) && o.getBrierSkill() != null)
+                .mapToDouble(o -> o.getBrierSkill().doubleValue())
+                .average();
+        long overallCount = forHorizon.stream()
+                .filter(o -> isScorable(o) && o.getBrierSkill() != null)
+                .count();
+
+        // coreZone: scorable + not dead zone
+        OptionalDouble coreZone = forHorizon.stream()
+                .filter(o -> isScorable(o) && !Boolean.TRUE.equals(o.getDeadZone())
+                        && o.getBrierSkill() != null)
+                .mapToDouble(o -> o.getBrierSkill().doubleValue())
+                .average();
+        long coreZoneCount = forHorizon.stream()
+                .filter(o -> isScorable(o) && !Boolean.TRUE.equals(o.getDeadZone())
+                        && o.getBrierSkill() != null)
+                .count();
+
+        return new AggregateSkill(
+                overall.isPresent()   ? overall.getAsDouble()   : null, (int) overallCount,
+                coreZone.isPresent()  ? coreZone.getAsDouble()  : null, (int) coreZoneCount,
+                scorableCount, unscorableCount);
+    }
+
     // ── Aggregation ───────────────────────────────────────────────────────────
 
     private DetectorPerformance aggregate(String type, List<AlertOutcome> outcomes) {
         int count = outcomes.size();
 
-        long correctCount = outcomes.stream()
-                .filter(o -> Boolean.TRUE.equals(o.getWasCorrect()))
-                .count();
-        long wrongCount = outcomes.stream()
-                .filter(o -> Boolean.FALSE.equals(o.getWasCorrect()))
-                .count();
+        // Scorable/unscorable split (null scorable = old row → treat as scorable)
+        List<AlertOutcome> scorable   = outcomes.stream().filter(SignalPerformanceService::isScorable).toList();
+        int scorableCount   = scorable.size();
+        int unscorableCount = (int) outcomes.stream().filter(o -> Boolean.FALSE.equals(o.getScorable())).count();
 
-        Double precision = (correctCount + wrongCount) == 0
-                ? null
-                : (double) correctCount / (correctCount + wrongCount);
+        // Precision uses scorable-only denominator
+        long correctCount = scorable.stream().filter(o -> Boolean.TRUE.equals(o.getWasCorrect())).count();
+        long wrongCount   = scorable.stream().filter(o -> Boolean.FALSE.equals(o.getWasCorrect())).count();
+        Double precision  = (correctCount + wrongCount) == 0
+                ? null : (double) correctCount / (correctCount + wrongCount);
 
         double avgMagnitudePp = outcomes.stream()
                 .filter(o -> o.getMagnitudePp() != null)
@@ -352,21 +408,66 @@ public class SignalPerformanceService {
                 .average()
                 .orElse(0.0);
 
-        List<Double> sorted = outcomes.stream()
+        List<Double> sortedMag = outcomes.stream()
                 .filter(o -> o.getMagnitudePp() != null)
                 .map(o -> o.getMagnitudePp().doubleValue())
                 .sorted()
                 .toList();
-        double medianMagnitudePp = median(sorted);
-
-        double meanAbsMagnitudePp = outcomes.stream()
+        double medianMagnitudePp    = median(sortedMag);
+        double meanAbsMagnitudePp   = outcomes.stream()
                 .filter(o -> o.getMagnitudePp() != null)
                 .mapToDouble(o -> Math.abs(o.getMagnitudePp().doubleValue()))
                 .average()
                 .orElse(0.0);
 
+        // Skill buckets
+        SkillBucket overall  = buildSkillBucket(scorable, false);
+        SkillBucket coreZone = buildSkillBucket(scorable, true);
+
         return new DetectorPerformance(type, count, precision,
-                avgMagnitudePp, medianMagnitudePp, meanAbsMagnitudePp);
+                avgMagnitudePp, medianMagnitudePp, meanAbsMagnitudePp,
+                scorableCount, unscorableCount, overall, coreZone);
+    }
+
+    /** Build a {@link SkillBucket} for the given scorable outcomes.
+     *  @param excludeDeadZone when true, outcomes with deadZone=true are excluded */
+    private static SkillBucket buildSkillBucket(List<AlertOutcome> scorable, boolean excludeDeadZone) {
+        List<AlertOutcome> bucket = excludeDeadZone
+                ? scorable.stream().filter(o -> !Boolean.TRUE.equals(o.getDeadZone())).toList()
+                : scorable;
+
+        long correct  = bucket.stream().filter(o -> Boolean.TRUE.equals(o.getWasCorrect())).count();
+        long wrong    = bucket.stream().filter(o -> Boolean.FALSE.equals(o.getWasCorrect())).count();
+        int  scored   = (int) (correct + wrong);
+        Double prec   = scored == 0 ? null : (double) correct / scored;
+
+        List<AlertOutcome> withBrier = bucket.stream()
+                .filter(o -> o.getBrierSkill() != null)
+                .toList();
+        int brierCount = withBrier.size();
+
+        OptionalDouble meanSkill  = withBrier.stream().mapToDouble(o -> o.getBrierSkill().doubleValue()).average();
+        OptionalDouble meanMkt    = withBrier.stream()
+                .filter(o -> o.getMarketBrier() != null)
+                .mapToDouble(o -> o.getMarketBrier().doubleValue()).average();
+        OptionalDouble meanDet    = withBrier.stream()
+                .filter(o -> o.getDetectorBrier() != null)
+                .mapToDouble(o -> o.getDetectorBrier().doubleValue()).average();
+
+        return new SkillBucket(
+                prec, (int) correct, scored,
+                meanSkill.isPresent() ? meanSkill.getAsDouble() : null,
+                meanMkt.isPresent()   ? meanMkt.getAsDouble()   : null,
+                meanDet.isPresent()   ? meanDet.getAsDouble()   : null,
+                brierCount);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Returns true when the outcome is scorable.
+     *  null scorable = old row before skill-overhaul — treat as scorable (backward compat). */
+    static boolean isScorable(AlertOutcome o) {
+        return !Boolean.FALSE.equals(o.getScorable());
     }
 
     private static double median(List<Double> sorted) {
@@ -417,12 +518,42 @@ public class SignalPerformanceService {
 
     // ── Response records ──────────────────────────────────────────────────────
 
-    public record PerformanceResponse(String horizon, String since,
-                                      List<DetectorPerformance> detectors) {}
+    public record PerformanceResponse(
+            String horizon,
+            String since,
+            List<DetectorPerformance> detectors,
+            /** Total scorable outcomes at this horizon (scorable != false). */
+            int scorableCount,
+            /** Total unscorable outcomes at this horizon (no baseline price). */
+            int unscorableCount) {}
 
-    public record DetectorPerformance(String type, int count, Double precision,
-                                      double avgMagnitudePp, double medianMagnitudePp,
-                                      double meanAbsMagnitudePp) {}
+    public record DetectorPerformance(
+            String type,
+            int count,
+            /** Precision computed over scorable outcomes only (wasCorrect true/false, no flat). */
+            Double precision,
+            double avgMagnitudePp,
+            double medianMagnitudePp,
+            double meanAbsMagnitudePp,
+            /** Outcomes with a valid priceAtAlert baseline. */
+            int scorableCount,
+            /** Outcomes lacking a baseline (pre-deploy data). */
+            int unscorableCount,
+            /** Skill metrics including dead-zone alerts. */
+            SkillBucket overall,
+            /** Skill metrics excluding dead-zone alerts (priceAtAlert 0–10% or 90–100%). */
+            SkillBucket coreZone) {}
+
+    /** Precision and Brier-skill aggregates for one alert bucket (overall or core-zone). */
+    public record SkillBucket(
+            Double precision,
+            int correctCount,
+            int scoredCount,
+            /** Mean Brier skill: positive = detector beat market's implied probability. */
+            Double meanBrierSkill,
+            Double meanMarketBrier,
+            Double meanDetectorBrier,
+            int brierCount) {}
 
     public record CategoryPerformanceResponse(String since, List<CategoryPerformance> categories) {}
 
@@ -436,6 +567,15 @@ public class SignalPerformanceService {
 
     /** Aggregate precision and scored sample count across all detector types for one horizon. */
     public record AggregatePrecision(Double precision, long scoredSamples) {}
+
+    /** Aggregate Brier skill across all detector types for one horizon. */
+    public record AggregateSkill(
+            Double meanBrierSkillOverall,
+            int brierCountOverall,
+            Double meanBrierSkillCoreZone,
+            int brierCountCoreZone,
+            int scorableCount,
+            int unscorableCount) {}
 
     public record ResolutionCoverageResponse(String since, List<CategoryCoverage> categories) {}
 

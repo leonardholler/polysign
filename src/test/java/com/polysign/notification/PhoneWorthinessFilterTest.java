@@ -73,8 +73,8 @@ class PhoneWorthinessFilterTest {
     }
 
     private PerformanceResponse perfResponse(String type, Double precision) {
-        DetectorPerformance dp = new DetectorPerformance(type, 10, precision, 0.01, 0.01, 0.01);
-        return new PerformanceResponse("t1h", "2026-04-02T00:00:00Z", List.of(dp));
+        DetectorPerformance dp = new DetectorPerformance(type, 10, precision, 0.01, 0.01, 0.01, 10, 0, null, null);
+        return new PerformanceResponse("t1h", "2026-04-02T00:00:00Z", List.of(dp), 0, 0);
     }
 
     // ── Test 1 ────────────────────────────────────────────────────────────────

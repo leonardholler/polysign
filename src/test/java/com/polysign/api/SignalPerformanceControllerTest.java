@@ -49,7 +49,8 @@ class SignalPerformanceControllerTest {
         PerformanceResponse stubResponse = new PerformanceResponse(
                 "t1h",
                 "2026-04-02T12:00:00Z",
-                List.of(new DetectorPerformance("price_movement", 42, 0.58, 0.021, 0.014, 0.033)));
+                List.of(new DetectorPerformance("price_movement", 42, 0.58, 0.021, 0.014, 0.033, 42, 0, null, null)),
+                0, 0);
 
         when(service.getPerformance(any(), any(), any())).thenReturn(stubResponse);
 

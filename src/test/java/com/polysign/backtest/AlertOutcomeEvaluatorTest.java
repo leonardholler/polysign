@@ -318,6 +318,86 @@ class AlertOutcomeEvaluatorTest {
         assertThat(outcome.getWasCorrect()).isTrue();
     }
 
+    // ── Test 13: nullPriceAtAlert → scorable=false ───────────────────────────
+
+    @Test
+    void nullPriceAtAlert_outcomeIsUnscorable() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-13", "price_movement", "mkt-13",
+                T, null /* priceAtAlert */, new BigDecimal("1.0"),
+                "up", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getScorable()).isFalse();
+        assertThat(outcome.getSkipReason()).isEqualTo("no_baseline");
+        assertThat(outcome.getWasCorrect()).isNull();
+        assertThat(outcome.getDirectionRealized()).isNull();
+        assertThat(outcome.getBrierSkill()).isNull();
+    }
+
+    // ── Test 14: deadZone flagged ─────────────────────────────────────────────
+
+    @Test
+    void lowPriceAtAlert_deadZoneTrue() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        // priceAtAlert = 0.08 < 0.10 → dead zone
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-14", "price_movement", "mkt-14",
+                T, new BigDecimal("0.08"), new BigDecimal("1.0"),
+                "up", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getScorable()).isTrue();
+        assertThat(outcome.getDeadZone()).isTrue();
+    }
+
+    // ── Test 15: Brier skill — UP at 0.30, resolves YES ──────────────────────
+    // detectorProbYes = min(0.30 + 0.20, 0.99) = 0.50
+    // marketProbYes   = 0.30
+    // actual          = 1.0  (priceAtHorizon=1.0 ≥ 0.50)
+    // marketBrier     = (0.30 - 1.0)² = 0.49
+    // detectorBrier   = (0.50 - 1.0)² = 0.25
+    // brierSkill      = 0.49 - 0.25   = +0.24
+
+    @Test
+    void brierSkill_upAtThirty_resolvesYes_positiveSkill() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-15", "price_movement", "mkt-15",
+                T, new BigDecimal("0.30"), new BigDecimal("1.0"),
+                "up", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getScorable()).isTrue();
+        assertThat(outcome.getMarketBrier().doubleValue()).isCloseTo(0.49, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(outcome.getDetectorBrier().doubleValue()).isCloseTo(0.25, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(outcome.getBrierSkill().doubleValue()).isCloseTo(0.24, org.assertj.core.api.Assertions.within(1e-9));
+    }
+
+    // ── Test 16: Brier skill — UP at 0.30, resolves NO ───────────────────────
+    // detectorProbYes = 0.50
+    // marketProbYes   = 0.30
+    // actual          = 0.0  (priceAtHorizon=0.0 < 0.50)
+    // marketBrier     = (0.30 - 0.0)² = 0.09
+    // detectorBrier   = (0.50 - 0.0)² = 0.25
+    // brierSkill      = 0.09 - 0.25   = -0.16
+
+    @Test
+    void brierSkill_upAtThirty_resolvesNo_negativeSkill() {
+        AlertOutcomeEvaluator ev = new TestableEvaluator(clock, List.of());
+
+        AlertOutcome outcome = ev.computeOutcome(
+                "alert-16", "price_movement", "mkt-16",
+                T, new BigDecimal("0.30"), new BigDecimal("0.0"),
+                "up", "resolution", NOW, Map.of());
+
+        assertThat(outcome.getScorable()).isTrue();
+        assertThat(outcome.getMarketBrier().doubleValue()).isCloseTo(0.09, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(outcome.getDetectorBrier().doubleValue()).isCloseTo(0.25, org.assertj.core.api.Assertions.within(1e-9));
+        assertThat(outcome.getBrierSkill().doubleValue()).isCloseTo(-0.16, org.assertj.core.api.Assertions.within(1e-9));
+    }
+
     // ── Test 12: categoryClassifierFallback ──────────────────────────────────
 
     @Test

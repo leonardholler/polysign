@@ -3,6 +3,7 @@ package com.polysign.api;
 import com.polysign.backtest.MarketPredicates;
 import com.polysign.backtest.SignalPerformanceService;
 import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
+import com.polysign.backtest.SignalPerformanceService.AggregateSkill;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
@@ -101,7 +102,13 @@ public class StatsController {
             long walletsSeenToday,
             long insiderSignatureCount,
             Double insiderSignaturePrecision7d1h,
-            long insiderSignatureSamples7d1h) {}
+            long insiderSignatureSamples7d1h,
+            /** Mean Brier skill (resolution horizon, core zone). Positive = beat market. */
+            Double meanBrierSkillResolutionCore,
+            /** Number of scorable, non-dead-zone resolution outcomes contributing to skill. */
+            int brierCountResolutionCore,
+            /** Total scorable resolution outcomes (core + dead-zone). */
+            int scorableCountResolution) {}
 
     @GetMapping
     public StatsResponse getStats() {
@@ -154,6 +161,9 @@ public class StatsController {
         long insiderSamples = insiderPerf.detectors().isEmpty()
                 ? 0 : insiderPerf.detectors().get(0).count();
 
+        // Brier skill for top stat card (resolution horizon, core zone, all-time)
+        AggregateSkill resSkill = signalPerformanceService.getAggregateSkill("resolution", null);
+
         // markets in resolution zone: effectivelyResolved() is true in the local markets table
         long marketsInResolutionZone = marketsTable.scan().items().stream()
                 .filter(m -> MarketPredicates.effectivelyResolved(m).isPresent())
@@ -195,7 +205,10 @@ public class StatsController {
                 walletsSeenToday,
                 insiderSignatureCount,
                 insiderPrec,
-                insiderSamples);
+                insiderSamples,
+                resSkill.meanBrierSkillCoreZone(),
+                resSkill.brierCountCoreZone(),
+                resSkill.scorableCount());
 
         cachedAtMillis = nowMs;
         cachedStats.set(response);

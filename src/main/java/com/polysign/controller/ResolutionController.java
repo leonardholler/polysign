@@ -13,6 +13,7 @@ import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.OptionalDouble;
 import java.util.stream.Collectors;
 
 /**
@@ -63,7 +64,10 @@ public class ResolutionController {
             String     title,
             String     link,
             String     marketQuestion,
-            boolean    alertCorrect) {}
+            boolean    alertCorrect,
+            BigDecimal brierSkill,
+            Boolean    deadZone,
+            Boolean    scorable) {}
 
     /** One alert row rendered inside a market card. */
     public record AlertRow(
@@ -75,7 +79,10 @@ public class ResolutionController {
             String     evaluatedAt,
             String     directionPredicted,
             String     directionRealized,
-            boolean    alertCorrect) {}
+            boolean    alertCorrect,
+            BigDecimal brierSkill,
+            Boolean    deadZone,
+            Boolean    scorable) {}
 
     /** One card per resolved market, containing all alerts that fired on it. */
     public record ResolvedMarketCard(
@@ -84,7 +91,12 @@ public class ResolutionController {
             String         link,
             BigDecimal     resolutionPrice,
             String         resolvedAt,
+            /** true if ANY alert is directionally correct (legacy field, kept for compatibility). */
             boolean        marketCorrect,
+            /** true if mean Brier skill across this market's scorable alerts is positive. */
+            boolean        marketInformative,
+            /** Mean Brier skill across scorable alerts for this market; null if no Brier data. */
+            Double         meanBrierSkill,
             List<AlertRow> alerts) {}
 
     // ── Grouping ──────────────────────────────────────────────────────────────
@@ -120,7 +132,10 @@ public class ResolutionController {
                                     o.evaluatedAt(),
                                     o.directionPredicted(),
                                     o.directionRealized(),
-                                    o.alertCorrect()))
+                                    o.alertCorrect(),
+                                    o.brierSkill(),
+                                    o.deadZone(),
+                                    o.scorable()))
                             .toList();
 
                     ResolvedOutcome representative = group.stream()
@@ -129,6 +144,14 @@ public class ResolutionController {
                             .orElseThrow();
 
                     boolean marketCorrect = group.stream().anyMatch(ResolvedOutcome::alertCorrect);
+
+                    // marketInformative: mean brierSkill > 0 across scorable alerts with Brier data
+                    OptionalDouble meanSkillOpt = group.stream()
+                            .filter(o -> !Boolean.FALSE.equals(o.scorable()) && o.brierSkill() != null)
+                            .mapToDouble(o -> o.brierSkill().doubleValue())
+                            .average();
+                    boolean marketInformative = meanSkillOpt.isPresent() && meanSkillOpt.getAsDouble() > 0;
+                    Double meanBrierSkill = meanSkillOpt.isPresent() ? meanSkillOpt.getAsDouble() : null;
 
                     String marketTitle = representative.marketQuestion() != null
                             ? representative.marketQuestion()
@@ -141,6 +164,8 @@ public class ResolutionController {
                             representative.priceAtHorizon(),
                             representative.evaluatedAt(),
                             marketCorrect,
+                            marketInformative,
+                            meanBrierSkill,
                             alertRows);
                 })
                 .sorted(Comparator.comparing(
@@ -221,7 +246,10 @@ public class ResolutionController {
                             title,
                             link,
                             marketQuestions.get(o.getMarketId()),
-                            alertCorrect);
+                            alertCorrect,
+                            o.getBrierSkill(),
+                            o.getDeadZone(),
+                            o.getScorable());
                 })
                 .toList();
 

@@ -348,6 +348,9 @@ class ResolutionControllerTest {
                 "title-" + alertId,
                 "https://polymarket.com/" + alertId,
                 "Market Q for " + marketId,
-                correct);
+                correct,
+                null,   // brierSkill
+                null,   // deadZone
+                null);  // scorable
     }
 }

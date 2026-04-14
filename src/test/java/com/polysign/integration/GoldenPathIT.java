@@ -222,6 +222,18 @@ class GoldenPathIT extends AbstractIntegrationIT {
                 .as("magnitudePp must be positive (price went in the predicted direction)")
                 .isGreaterThan(BigDecimal.ZERO);
 
+        // ── New skill-metric fields ───────────────────────────────────────────
+        // priceAtAlert = 0.84 (core zone: 0.10 ≤ 0.84 ≤ 0.90), scorable = true
+        assertThat(outcome.getScorable())
+                .as("outcome must be scorable (priceAtAlert = 0.84 is a valid baseline)")
+                .isTrue();
+        assertThat(outcome.getDeadZone())
+                .as("outcome must NOT be dead zone (priceAtAlert = 0.84 is within 0.10–0.90)")
+                .isFalse();
+        assertThat(outcome.getBrierSkill())
+                .as("brierSkill must be populated for a scorable UP prediction")
+                .isNotNull();
+
         // ── Steps 12 & 13: Re-run evaluate() — idempotency proof ─────────────
         // attribute_not_exists(horizon) condition on alert_outcomes rejects the duplicate write.
         alertOutcomeEvaluator.evaluate();

@@ -22,6 +22,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -191,29 +192,77 @@ public class AlertOutcomeEvaluator {
                                 String horizon, Instant evaluatedAt,
                                 Map<String, String> alertMetadata) {
 
-        // priceAtAlert may be null for pre-deploy resolution rows where the alert was written
-        // before the field existed. In that case rawDelta and magnitudePp are unavailable;
-        // direction scoring still works for the resolution horizon (based on priceAtHorizon only).
-        BigDecimal rawDelta = (priceAtAlert != null) ? priceAtHorizon.subtract(priceAtAlert) : null;
+        AlertOutcome outcome = new AlertOutcome();
+        // ── Set constant fields first ─────────────────────────────────────────
+        outcome.setAlertId(alertId);
+        outcome.setHorizon(horizon);
+        outcome.setType(type);
+        outcome.setMarketId(marketId);
+        outcome.setFiredAt(firedAt.toString());
+        outcome.setEvaluatedAt(evaluatedAt.toString());
+        outcome.setPriceAtAlert(priceAtAlert);
+        outcome.setPriceAtHorizon(priceAtHorizon);
+        outcome.setDirectionPredicted(directionPredicted);
 
-        // Decision 4: magnitudePp formula
-        BigDecimal magnitudePp;
-        if (rawDelta == null) {
-            magnitudePp = null;
-        } else if (directionPredicted == null) {
-            magnitudePp = rawDelta.abs();
-        } else if ("up".equals(directionPredicted)) {
-            magnitudePp = rawDelta;
-        } else {
-            // "down"
-            magnitudePp = rawDelta.negate();
+        // Copy orderbook fields from alert metadata (informational, not used in precision)
+        if (alertMetadata != null) {
+            parseAndSet(alertMetadata.get("spreadBps"), outcome::setSpreadBpsAtAlert);
+            parseAndSet(alertMetadata.get("depthAtMid"), outcome::setDepthAtMidAtAlert);
         }
 
-        // Decision 4: directionRealized + wasCorrect
+        // ── Part 1: scorable check ────────────────────────────────────────────
+        // An alert is UNSCORABLE when priceAtAlert is null or zero — no Brier baseline.
+        // null priceAtAlert → no direction computation at all (missing pre-deploy data).
+        // zero priceAtAlert → scorable=false (no Brier), but for resolution horizon the
+        //   direction is still derived from priceAtHorizon (zero is a valid resolved-NO price).
+        boolean isNull = (priceAtAlert == null);
+        boolean isZero = !isNull && priceAtAlert.compareTo(BigDecimal.ZERO) == 0;
+        boolean isUnscorable = isNull || isZero;
+        boolean isResolution = "resolution".equals(horizon);
+
+        if (isNull) {
+            // Truly missing baseline — no direction computation possible
+            outcome.setScorable(false);
+            outcome.setSkipReason("no_baseline");
+            // wasCorrect, directionRealized, magnitudePp all remain null
+            return outcome;
+        }
+
+        // ── Part 2: dead-zone flag ────────────────────────────────────────────
+        // Dead zone: priceAtAlert < 0.10 or > 0.90 — outcome near-predetermined.
+        // Not applicable when priceAtAlert is zero (degenerate, already set unscorable).
+        boolean dz = !isUnscorable
+                && (priceAtAlert.compareTo(BigDecimal.valueOf(0.10)) < 0
+                 || priceAtAlert.compareTo(BigDecimal.valueOf(0.90)) > 0);
+        outcome.setScorable(!isUnscorable);
+        if (isUnscorable) {
+            outcome.setSkipReason("no_baseline");
+        }
+        outcome.setDeadZone(dz);
+
+        // ── Decision 4: rawDelta + magnitudePp ───────────────────────────────
+        BigDecimal rawDelta = isUnscorable
+                ? BigDecimal.ZERO
+                : priceAtHorizon.subtract(priceAtAlert);
+
+        if (!isUnscorable) {
+            BigDecimal magnitudePp;
+            if (directionPredicted == null) {
+                magnitudePp = rawDelta.abs();
+            } else if ("up".equals(directionPredicted)) {
+                magnitudePp = rawDelta;
+            } else {
+                // "down"
+                magnitudePp = rawDelta.negate();
+            }
+            outcome.setMagnitudePp(magnitudePp);
+        }
+
+        // ── Decision 4: directionRealized + wasCorrect ───────────────────────
         String  directionRealized;
         Boolean wasCorrect;
 
-        if ("resolution".equals(horizon)) {
+        if (isResolution) {
             // For resolution horizon, derive directionRealized from the final market price.
             // Magnitude thresholds must NOT be used here: by the time the sweeper runs,
             // currentYesPrice has already settled at 1.0 or 0.0, so rawDelta ≈ 0 and
@@ -228,7 +277,7 @@ public class AlertOutcomeEvaluator {
             wasCorrect = (directionPredicted != null && !"flat".equals(directionRealized))
                     ? directionPredicted.equals(directionRealized)
                     : null;
-        } else if (rawDelta == null || directionPredicted == null) {
+        } else if (directionPredicted == null) {
             directionRealized = null;
             wasCorrect        = null;
         } else if (rawDelta.compareTo(BigDecimal.valueOf(0.005)) > 0) {
@@ -238,29 +287,28 @@ public class AlertOutcomeEvaluator {
             directionRealized = "down";
             wasCorrect        = "down".equals(directionPredicted);
         } else {
-            // Dead zone: |rawDelta| < 0.005 — excluded from precision denominator
+            // Movement dead zone: |rawDelta| < 0.005 — excluded from precision denominator
             directionRealized = "flat";
             wasCorrect        = null;
         }
-
-        AlertOutcome outcome = new AlertOutcome();
-        outcome.setAlertId(alertId);
-        outcome.setHorizon(horizon);
-        outcome.setType(type);
-        outcome.setMarketId(marketId);
-        outcome.setFiredAt(firedAt.toString());
-        outcome.setEvaluatedAt(evaluatedAt.toString());
-        outcome.setPriceAtAlert(priceAtAlert);
-        outcome.setPriceAtHorizon(priceAtHorizon);
-        outcome.setDirectionPredicted(directionPredicted);
         outcome.setDirectionRealized(directionRealized);
         outcome.setWasCorrect(wasCorrect);
-        outcome.setMagnitudePp(magnitudePp);
 
-        // Copy orderbook fields from alert metadata (informational, not used in precision)
-        if (alertMetadata != null) {
-            parseAndSet(alertMetadata.get("spreadBps"), outcome::setSpreadBpsAtAlert);
-            parseAndSet(alertMetadata.get("depthAtMid"), outcome::setDepthAtMidAtAlert);
+        // ── Part 3: Brier skill score ────────────────────────────────────────
+        // Only computable when a direction was predicted and priceAtAlert is a valid baseline.
+        // actual = 1.0 when priceAtHorizon ≥ 0.50 (market says YES probable), else 0.0.
+        // detectorProbYes = priceAtAlert ± 0.20 (detector's shifted belief).
+        if (directionPredicted != null && !isUnscorable) {
+            double actual         = priceAtHorizon.doubleValue() >= 0.50 ? 1.0 : 0.0;
+            double mktProb        = priceAtAlert.doubleValue();
+            double detProb        = "up".equals(directionPredicted)
+                    ? Math.min(mktProb + 0.20, 0.99)
+                    : Math.max(mktProb - 0.20, 0.01);
+            double mb = (mktProb - actual) * (mktProb - actual);
+            double db = (detProb  - actual) * (detProb  - actual);
+            outcome.setMarketBrier(BigDecimal.valueOf(mb).setScale(6, RoundingMode.HALF_UP));
+            outcome.setDetectorBrier(BigDecimal.valueOf(db).setScale(6, RoundingMode.HALF_UP));
+            outcome.setBrierSkill(BigDecimal.valueOf(mb - db).setScale(6, RoundingMode.HALF_UP));
         }
 
         return outcome;
