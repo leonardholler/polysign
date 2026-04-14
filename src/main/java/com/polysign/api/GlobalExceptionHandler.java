@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.net.URI;
 import java.util.Map;
@@ -26,6 +27,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidCursorException.class)
     public ResponseEntity<Map<String, String>> handleInvalidCursor(InvalidCursorException ex) {
         return ResponseEntity.badRequest().body(Map.of("error", "Invalid cursor"));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ProblemDetail> handleNoResourceFound(NoResourceFoundException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setType(URI.create("about:blank"));
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .header("Content-Type", "application/problem+json")
+                .body(problem);
     }
 
     @ExceptionHandler(ResponseStatusException.class)
