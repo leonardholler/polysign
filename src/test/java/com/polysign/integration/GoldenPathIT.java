@@ -173,6 +173,10 @@ class GoldenPathIT extends AbstractIntegrationIT {
         assertThat(firedAlert.getType()).isEqualTo("price_movement");
         assertThat(firedAlert.getMarketId()).isEqualTo(TEST_MARKET_ID);
         assertThat(firedAlert.getMetadata().get("direction")).isEqualTo("up");
+        assertThat(firedAlert.getPriceAtAlert())
+                .as("priceAtAlert must be persisted to DynamoDB and equal the spike snapshot price")
+                .isNotNull()
+                .isEqualByComparingTo("0.84");
 
         // ── Step 6: Assert one SQS message in alerts-to-notify ───────────────
         int depthAfterFirst = notifyQueueDepth();

@@ -1,16 +1,31 @@
 # PolySign
 
-PolySign is an anomaly-detection and signal-quality system for Polymarket prediction markets. It polls 400 markets every 60 seconds, runs three independent detectors against the price and trade stream, and surfaces alerts through a cursor-paginated REST API and push notifications. The non-obvious part: every alert is scored at T+15m, T+1h, and T+24h against the actual forward price movement, and the measured precision feeds back into the notification filter. A signal system that cannot report its own accuracy is indistinguishable from noise. [polysign.dev](https://polysign.dev)
+PolySign is an anomaly-detection and signal-quality system for Polymarket prediction markets. It polls 400 markets every 60 seconds, runs three independent detectors against the price and trade stream, and surfaces alerts through a cursor-paginated REST API and push notifications. The non-obvious part: every alert is scored at T+15m, T+1h, and at market resolution against the actual forward price movement, and the measured precision feeds back into the notification filter. A signal system that cannot report its own accuracy is indistinguishable from noise. [polysign.dev](https://polysign.dev)
 
 ![PolySign Dashboard](dashboard.png)
 
 ## What it does
 
-Three pollers ingest data from Polymarket's Gamma, CLOB, and Data APIs every 60 seconds. Three detectors evaluate the stream each cycle: `PriceMovementDetector` catches absolute threshold breaches (>= 8% in a 15-minute window), `StatisticalAnomalyDetector` flags z-score spikes above 3 sigma relative to each market's recent behavior, and `WalletActivityDetector` identifies large tracked-wallet activity in live markets. When 2+ detectors fire on the same market within 60 minutes, that convergence is the signal.
+Three pollers ingest data from Polymarket's Gamma, CLOB, and Data APIs every 60 seconds. Three detectors evaluate the stream each cycle: `PriceMovementDetector` catches absolute threshold breaches (>= 8% in a 15-minute window), `StatisticalAnomalyDetector` flags z-score spikes above 3 sigma relative to each market's recent behavior, and `InsiderSignatureDetector` scans the live trade stream for burner-wallet activity on high-volume markets.
 
-Each alert is enqueued to SQS and consumed by `NotificationConsumer`, which runs it through `PhoneWorthinessFilter` — a three-rule gate that passes multi-detector convergence, precision-gated criticals, and large-wallet activity events. Alerts failing all three still land in DynamoDB and the dashboard. They just do not ring the phone.
+Each alert is enqueued to SQS and consumed by `NotificationConsumer`, which runs it through `PhoneWorthinessFilter` — a two-rule gate. Detectors whose trailing 7-day 1-hour precision is below 60% stop producing phone alerts. Insider signature alerts pass by default, on account of their low base rate and high conviction. Alerts failing both rules still land in DynamoDB and the dashboard. They just do not ring the phone.
 
 `AlertOutcomeEvaluator` runs every 5 minutes, finds alerts whose next evaluation horizon is due, looks up the price snapshot at that offset, and writes a directional-correctness result to `alert_outcomes`. `SignalPerformanceService` aggregates per-detector precision at each horizon. A detector whose 1-hour precision drops below threshold stops generating phone alerts automatically. The feedback loop is closed — detection to scoring to gating, no manual intervention.
+
+## InsiderSignatureDetector
+
+The simpler design was a static watched-wallet list. That approach fails for Polymarket specifically because documented insider cases (Feb 28 2026 US-Iran strike, April 7 ceasefire, Maduro capture bets) all used fresh burner wallets that go dormant after one trade. A list of "known insiders" is a list of wallets that will never trade again. The detector instead scans the live trade stream for the burner signature as it appears.
+
+The detector implements a real-time simplified version of the screen described in Mitts & Ofir, "From Iran to Taylor Swift: Informed Trading in Prediction Markets" (Columbia Law / Harvard CorpGov, 2026), which systematically identified the same burner-wallet signature across 93,000 Polymarket markets. An alert fires when all of the following hold:
+
+- Market 24h volume >= $100k
+- Trade size >= max($1,000, 0.5% of market volume)
+- Wallet age < 7 days, OR lifetime trade count <= 5, OR this trade >= 70% of wallet's lifetime volume
+- Trade occurred within the last 24h
+- No opposing-side bet by the same wallet in the last 2 hours
+- Market probability between 1% and 99%
+
+Cooldown: one alert per (wallet, market) pair per 24 hours. Per-wallet age, trade count, and lifetime volume are cached in the `wallet_metadata` table with a 6-hour TTL.
 
 ## Architecture
 
@@ -19,17 +34,17 @@ flowchart TD
     src["Polymarket APIs"]
     src -->|"every 60s"| poll["3 Pollers"]
     poll --> db[("DynamoDB — 7 tables")]
-    db --> det["3 Detectors"]
+    db --> det["3 Detectors\n(Price | Statistical | InsiderSignature)"]
     det -->|"SHA-256 ID\nconditional write"| db
     det --> sqs{{"SQS → alerts-to-notify"}}
     sqs --> pw["PhoneWorthinessFilter"]
     pw -->|"phone-worthy"| ntfy["ntfy.sh push"]
-    db --> eval["AlertOutcomeEvaluator\nT+15m | T+1h | T+24h"]
+    db --> eval["AlertOutcomeEvaluator\nT+15m | T+1h | resolution"]
     eval --> db
     db --> api["v1 API endpoints"]
 ```
 
-Java 25, Spring Boot 3.5.5, single Maven module. Seven DynamoDB tables with on-demand capacity (`markets`, `price_snapshots`, `watched_wallets`, `wallet_trades`, `alerts`, `alert_outcomes`, `api_keys`). Two SQS queues (`wallet-trades-to-process`, `alerts-to-notify`), each with a dead-letter queue (max 5 receives). S3 (`polysign-archives`) for daily snapshot rollups. Runs on a single EC2 `t3.small` in `us-east-2`, fronted by Caddy for TLS.
+Java 25, Spring Boot 3.5.5, single Maven module. Seven DynamoDB tables with on-demand capacity (`markets`, `price_snapshots`, `wallet_trades`, `wallet_metadata`, `alerts`, `alert_outcomes`, `api_keys`). Two SQS queues (`wallet-trades-to-process`, `alerts-to-notify`), each with a dead-letter queue (max 5 receives). S3 (`polysign-archives`) for daily snapshot rollups. Runs on a single EC2 `t3.small` in `us-east-2`, fronted by Caddy for TLS.
 
 Alert IDs are deterministic: `SHA-256(type | marketId | bucketedTimestamp | payloadHash)`. Every write uses DynamoDB `attribute_not_exists(alertId)` on the composite key — duplicates are rejected at the storage layer with no external dedup table. Resilience4j 2.2.0 wraps every outbound HTTP call: four circuit breaker instances (`polymarket-gamma`, `polymarket-clob`, `polymarket-data`, `ntfy`), five retry policies with exponential backoff, one rate limiter (CLOB at 10 calls/sec). All table access goes through DynamoDB Enhanced Client (AWS SDK v2).
 
@@ -95,10 +110,10 @@ curl -H "X-API-Key: psk_XXXX..." http://localhost:8080/api/v1/alerts
 
 ## Testing
 
-208 tests. JUnit 5 + Mockito + AssertJ for unit tests (`mvn test`), Testcontainers with LocalStack 3.8 for integration tests (`mvn verify`). Split via Maven Surefire (unit) and Failsafe (integration).
+288 tests. JUnit 5 + Mockito + AssertJ for unit tests (`mvn test`), Testcontainers with LocalStack 3.8 for integration tests (`mvn verify`). Split via Maven Surefire (unit) and Failsafe (integration).
 
 `PublicApiIT` covers the auth and pagination contract end-to-end against LocalStack: 401 on missing key, 401 on invalid key, 200 on valid key, cursor pagination roundtrip with no-overlap verification, and rate-limit enforcement (65 burst requests producing at least one 429 with correct `Retry-After` and `X-RateLimit-*` headers).
 
 ## Design notes
 
-See [DESIGN.md](DESIGN.md) for the full treatment: data model with access-pattern rationale for all 7 tables, write path trace from poll to phone, alert ID design and the composite-key bug, SQS consumer pattern, Resilience4j strategy across all 4 circuit breakers, failure mode matrix, observed signal quality results (sports 60%, politics 17%), and signal quality methodology (precision definition, dead zone, horizon vs. resolution evaluation, known biases).
+See [DESIGN.md](DESIGN.md) for the full treatment: data model with access-pattern rationale for all 7 tables, write path trace from poll to phone, alert ID design and the composite-key bug, SQS consumer pattern, Resilience4j strategy across all 4 circuit breakers, failure mode matrix, observed signal quality results (around coinflip to mid-50s% precision depending on detector and horizon, across ~156 resolved alerts as of Apr 14 2026), and signal quality methodology (precision definition, dead zone, horizon vs. resolution evaluation, known biases).

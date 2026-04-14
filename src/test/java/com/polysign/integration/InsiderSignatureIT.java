@@ -224,5 +224,9 @@ class InsiderSignatureIT {
         assertThat(alert.getMetadata()).containsEntry("traderAddress", BURNER_ADDRESS);
         assertThat(alert.getMetadata()).containsEntry("outcomeSide", "YES");
         assertThat(alert.getLink()).contains("test-insider-it-event");
+        assertThat(alert.getPriceAtAlert())
+                .as("priceAtAlert must be persisted to DynamoDB and equal the market's currentYesPrice")
+                .isNotNull()
+                .isEqualByComparingTo("0.50");
     }
 }

@@ -106,12 +106,19 @@ public class ResolutionController {
                                     .findFirst()
                                     .orElse(null);
                             if (alert != null) {
-                                title       = alert.getTitle();
-                                link        = alert.getLink();
-                                priceAtAlert = alert.getPriceAtAlert(); // null for pre-deploy rows
+                                title        = alert.getTitle();
+                                link         = alert.getLink();
+                                priceAtAlert = alert.getPriceAtAlert();
                             }
                         }
                     } catch (Exception ignored) {}
+                    // Fallback: AlertOutcome carries priceAtAlert stored by the sweeper/evaluator.
+                    // For post-deploy alerts the sweeper now writes alert.getPriceAtAlert() there;
+                    // for pre-deploy rows it is the market's current YES price at sweep time —
+                    // not ideal but non-null and better than returning null to the UI.
+                    if (priceAtAlert == null) {
+                        priceAtAlert = o.getPriceAtAlert();
+                    }
 
                     return new ResolutionItemDto(
                             o.getAlertId(),

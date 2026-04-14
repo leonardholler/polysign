@@ -13,6 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
+import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -181,6 +182,54 @@ class ResolutionControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$").isArray());
+    }
+
+    // ── Test 9: priceAtAlert populated from the Alert row ────────────────────
+
+    @Test
+    void priceAtAlert_fromAlertRow_whenAlertHasPriceAtAlert() {
+        AlertOutcome res = outcomeOf("alert-x", "resolution", "2026-04-10T12:00:00Z");
+        // AlertOutcome has 0.55 (set in helper), Alert has 0.63 — Alert value wins
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
+
+        Alert alert = new Alert();
+        alert.setAlertId(res.getAlertId());
+        alert.setTitle("Price spike alert");
+        alert.setLink("https://polymarket.com/event/test");
+        alert.setPriceAtAlert(new BigDecimal("0.63"));
+        when(alertsTable.query(any(QueryConditional.class)).items().stream())
+                .thenReturn(Stream.of(alert));
+
+        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).priceAtAlert())
+                .as("priceAtAlert should come from the Alert row when it is populated")
+                .isEqualByComparingTo("0.63");
+        assertThat(result.get(0).title()).isEqualTo("Price spike alert");
+    }
+
+    // ── Test 10: priceAtAlert falls back to AlertOutcome when Alert has none ──
+
+    @Test
+    void priceAtAlert_fromAlertOutcome_whenAlertPriceIsNull() {
+        AlertOutcome res = outcomeOf("alert-y", "resolution", "2026-04-10T12:00:00Z");
+        // AlertOutcome.priceAtAlert = 0.55 (set in helper); Alert has null priceAtAlert (pre-deploy row)
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
+
+        Alert alert = new Alert();
+        alert.setAlertId(res.getAlertId());
+        alert.setTitle("Pre-deploy alert");
+        // priceAtAlert intentionally NOT set → remains null
+        when(alertsTable.query(any(QueryConditional.class)).items().stream())
+                .thenReturn(Stream.of(alert));
+
+        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).priceAtAlert())
+                .as("priceAtAlert should fall back to AlertOutcome value when Alert.priceAtAlert is null")
+                .isEqualByComparingTo("0.55");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
