@@ -325,6 +325,7 @@ public class InsiderSignatureDetector {
         alert.setLink(market.getEventSlug() != null
                 ? "https://polymarket.com/event/" + market.getEventSlug() : null);
         alert.setExpiresAt(clock.now().plus(Duration.ofDays(30)).getEpochSecond());
+        alert.setPriceAtAlert(market.getCurrentYesPrice());
 
         if (alertService.tryCreate(alert)) {
             alertsFired.increment();

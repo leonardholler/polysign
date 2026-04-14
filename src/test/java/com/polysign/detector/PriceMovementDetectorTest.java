@@ -878,4 +878,32 @@ class PriceMovementDetectorTest {
         assertThat(alert.getMetadata().get("detectedAt"))
                 .isNotEqualTo(alert.getCreatedAt());
     }
+
+    // ── priceAtAlert is populated at fire time ────────────────────────────────
+
+    @Test
+    void priceAtAlert_isSetToMoveToPrice() {
+        // 0.50 → 0.60: 20% move in resolution zone (Tier 1, threshold 8%) → fires
+        List<PriceSnapshot> snapshots = List.of(
+                snap("m1", NOW.minus(Duration.ofMinutes(12)), "0.50"),
+                snap("m1", NOW.minus(Duration.ofMinutes(6)),  "0.55"),
+                snap("m1", NOW,                               "0.60")
+        );
+        Market m = market("m1", "300000", false);
+
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        // TestableDetector overrides querySnapshots so snapshotsTable (null) is never hit.
+        TestableDetector det = new TestableDetector(spy, snapshots, null);
+        det.checkMarket(m, NOW);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        assertThat(alert.getPriceAtAlert())
+                .isNotNull()
+                .isEqualByComparingTo(new BigDecimal("0.60")); // toPrice of the detected move
+    }
 }

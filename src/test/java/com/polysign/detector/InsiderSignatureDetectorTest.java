@@ -493,4 +493,24 @@ class InsiderSignatureDetectorTest {
             detectorLogger.detachAppender(appender);
         }
     }
+
+    // ── priceAtAlert is populated at fire time ────────────────────────────────
+
+    @Test
+    void priceAtAlert_isSetToMarketCurrentYesPrice() {
+        Market m = market("m1", "400000", 0.48); // currentYesPrice = 0.48
+        WalletTrade t = trade("0xburner", "m1", 15_000.0, "YES");
+        WalletMetadata meta = burnerByAge(5, 3, 30_000);
+        when(mockMetadataService.get(any())).thenReturn(meta);
+
+        detector.evaluateTrade(t, m);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(mockAlertService).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        assertThat(alert.getPriceAtAlert())
+                .isNotNull()
+                .isEqualByComparingTo(new BigDecimal("0.48")); // market.getCurrentYesPrice()
+    }
 }

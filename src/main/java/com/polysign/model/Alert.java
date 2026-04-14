@@ -2,6 +2,7 @@ package com.polysign.model;
 
 import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 
+import java.math.BigDecimal;
 import java.util.Map;
 
 /**
@@ -25,6 +26,7 @@ public class Alert {
     private String title;
     private String description;
     private Map<String, String> metadata;
+    private BigDecimal priceAtAlert;  // market mid-price at the moment the alert fired (null for pre-deploy rows)
     private Boolean wasNotified;
     private Boolean phoneWorthy; // set by NotificationConsumer via PhoneWorthinessFilter
     private Boolean reviewed;    // set by POST /api/alerts/{alertId}/mark-reviewed
@@ -47,6 +49,7 @@ public class Alert {
     public String              getTitle()       { return title;       }
     public String              getDescription() { return description; }
     public Map<String, String> getMetadata()    { return metadata;    }
+    public BigDecimal          getPriceAtAlert() { return priceAtAlert; }
     public Boolean             getWasNotified()  { return wasNotified;  }
     public Boolean             getPhoneWorthy()  { return phoneWorthy;  }
     public Boolean             getReviewed()     { return reviewed;     }
@@ -61,6 +64,7 @@ public class Alert {
     public void setTitle(String title)                    { this.title       = title;       }
     public void setDescription(String description)        { this.description = description; }
     public void setMetadata(Map<String, String> metadata) { this.metadata    = metadata;    }
+    public void setPriceAtAlert(BigDecimal priceAtAlert)   { this.priceAtAlert = priceAtAlert; }
     public void setWasNotified(Boolean wasNotified)        { this.wasNotified  = wasNotified;  }
     public void setPhoneWorthy(Boolean phoneWorthy)        { this.phoneWorthy  = phoneWorthy;  }
     public void setReviewed(Boolean reviewed)              { this.reviewed     = reviewed;     }

@@ -2,20 +2,28 @@ package com.polysign.controller;
 
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
+import software.amazon.awssdk.enhanced.dynamodb.Key;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
 /**
  * Unit tests for {@link ResolutionController}.
@@ -24,6 +32,8 @@ import static org.mockito.Mockito.when;
  * 1. Empty list returned gracefully when alert_outcomes table has no resolution rows.
  * 2. Items sorted by evaluatedAt descending.
  * 3. Non-resolution horizon rows are excluded.
+ * 4. marketQuestion is populated from the markets table.
+ * 5. marketQuestion is null when market is not found.
  */
 @ExtendWith(MockitoExtension.class)
 class ResolutionControllerTest {
@@ -34,11 +44,16 @@ class ResolutionControllerTest {
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     DynamoDbTable<Alert> alertsTable;
 
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    DynamoDbTable<Market> marketsTable;
+
     ResolutionController controller;
+    MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        controller = new ResolutionController(alertOutcomesTable, alertsTable);
+        controller = new ResolutionController(alertOutcomesTable, alertsTable, marketsTable);
+        mvc = standaloneSetup(controller).build();
     }
 
     // ── Test 1: empty table ───────────────────────────────────────────────────
@@ -102,6 +117,70 @@ class ResolutionControllerTest {
         assertThat(result).hasSize(2);
         assertThat(result.get(0).alertId()).isEqualTo("alert-3"); // most recent first
         assertThat(result.get(1).alertId()).isEqualTo("alert-2");
+    }
+
+    // ── Test 5: marketQuestion populated from markets table ───────────────────
+
+    @Test
+    void marketQuestion_populatedFromMarketTable() {
+        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
+
+        Market market = new Market();
+        market.setMarketId(res.getMarketId());
+        market.setQuestion("Will the test pass?");
+        when(marketsTable.getItem(any(Key.class))).thenReturn(market);
+
+        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).marketQuestion()).isEqualTo("Will the test pass?");
+    }
+
+    // ── Test 6: marketQuestion null when market not found ─────────────────────
+
+    @Test
+    void marketQuestion_nullWhenMarketNotFound() {
+        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
+        when(marketsTable.getItem(any(Key.class))).thenReturn(null);
+
+        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).marketQuestion()).isNull();
+    }
+
+    // ── Test 7: long marketQuestion is truncated to 80 chars ─────────────────
+
+    @Test
+    void marketQuestion_truncatedAt80Chars() {
+        AlertOutcome res = outcomeOf("alert-c", "resolution", "2026-04-10T12:00:00Z");
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res));
+
+        String longQuestion = "A".repeat(100); // 100 chars
+        Market market = new Market();
+        market.setMarketId(res.getMarketId());
+        market.setQuestion(longQuestion);
+        when(marketsTable.getItem(any(Key.class))).thenReturn(market);
+
+        List<ResolutionController.ResolutionItemDto> result = controller.getRecentResolutions(20);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).marketQuestion()).hasSize(81); // 80 chars + "…"
+        assertThat(result.get(0).marketQuestion()).endsWith("…");
+    }
+
+    // ── Test 8: HTTP route — GET /api/resolutions/recent?limit=5 returns 200 JSON ──
+
+    @Test
+    void http_getRecentResolutions_returns200WithJsonArray() throws Exception {
+        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of());
+
+        mvc.perform(get("/api/resolutions/recent").param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$").isArray());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

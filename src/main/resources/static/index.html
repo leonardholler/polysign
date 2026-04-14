@@ -218,6 +218,26 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Returns a human-readable elapsed string between two ISO-8601 timestamps,
+// e.g. "3h 12m" or "45m". Returns null if either timestamp is absent or invalid.
+function resolutionElapsed(firedAt, evaluatedAt) {
+  if (!firedAt || !evaluatedAt) return null;
+  try {
+    const ms = new Date(evaluatedAt) - new Date(firedAt);
+    if (ms < 0) return null;
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    return `${m}m`;
+  } catch (_) { return null; }
+}
+
 function priceColor(p) {
   if (p == null) return 'text-gray-100';
   if (p > 0.65) return 'text-emerald-400';
@@ -647,27 +667,35 @@ async function loadResolutions() {
         resultLabel = '✗ WRONG';
       }
 
-      const title = item.title || item.marketId || '—';
-      const link  = item.link;
+      // Primary row title: market question (new), fall back to alert title
+      const question  = item.marketQuestion || item.title || item.marketId || '—';
+      const signalTag = item.marketQuestion && item.title
+        ? `<div class="text-[10px] text-gray-500 mt-0.5 truncate">${escapeHtml(truncate(item.title, 60))}</div>`
+        : '';
+      const link = item.link;
       const titleEl = link
-        ? `<a href="${link}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline leading-tight">${truncate(title, 60)}</a>`
-        : `<span class="text-gray-200 leading-tight">${truncate(title, 60)}</span>`;
+        ? `<a href="${link}" target="_blank" rel="noopener" class="text-gray-200 hover:text-blue-400 hover:underline leading-tight">${escapeHtml(truncate(question, 60))}</a>`
+        : `<span class="text-gray-200 leading-tight">${escapeHtml(truncate(question, 60))}</span>`;
 
       const pAlert   = item.priceAtAlert   != null ? (item.priceAtAlert   * 100).toFixed(1) + '¢' : '—';
       const pHorizon = item.priceAtHorizon != null ? (item.priceAtHorizon * 100).toFixed(1) + '¢' : '—';
+      const elapsed  = resolutionElapsed(item.firedAt, item.evaluatedAt);
 
       const dpLabel = dp ? (dp === 'up' ? '↑' : '↓') : '—';
       const drLabel = dr && dr !== 'flat' ? (dr === 'up' ? '↑' : '↓') : (dr === 'flat' ? '→' : '—');
 
       return `<div class="rounded border border-gray-800 border-l-2 ${borderCol} bg-gray-900/50 px-3 py-2">
         <div class="flex items-start justify-between gap-2 mb-0.5">
-          <div class="text-xs flex-1 min-w-0">${titleEl}</div>
+          <div class="text-xs flex-1 min-w-0 truncate">${titleEl}</div>
           <span class="text-[10px] font-bold shrink-0 ${labelCol}">${resultLabel}</span>
         </div>
-        <div class="flex items-center gap-3 text-[10px] text-gray-500">
-          <span>predicted <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
-          <span class="text-gray-600">${pAlert} → ${pHorizon}</span>
+        ${signalTag}
+        <div class="flex items-center gap-3 text-[10px] text-gray-500 mt-0.5">
+          <span class="text-gray-600">fired at <span class="text-gray-400">${pAlert}</span> → resolved at <span class="text-gray-400">${pHorizon}</span>${elapsed ? ' · ' + elapsed + ' later' : ''}</span>
           <span class="ml-auto shrink-0">${relativeTime(item.evaluatedAt)}</span>
+        </div>
+        <div class="flex items-center gap-3 text-[10px] text-gray-500 mt-0.5">
+          <span>predicted <span class="text-gray-300">${dpLabel}</span> · realized <span class="text-gray-300">${drLabel}</span></span>
         </div>
       </div>`;
     }).join('');

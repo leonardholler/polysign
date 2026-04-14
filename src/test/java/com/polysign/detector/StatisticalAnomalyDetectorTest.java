@@ -620,4 +620,31 @@ class StatisticalAnomalyDetectorTest {
         assertThat(alert.getMetadata().get("detectedAt"))
                 .isNotEqualTo(alert.getCreatedAt());
     }
+
+    // ── priceAtAlert is populated at fire time ────────────────────────────────
+
+    @Test
+    void priceAtAlert_isSetToLastSnapshotPrice() {
+        // 29 tiny ±0.0001 oscillations then a 0.04 spike → fires on Tier 1
+        double[] prices = new double[30];
+        for (int i = 0; i < 29; i++) {
+            prices[i] = 0.50 + (i % 2 == 0 ? 0.0001 : -0.0001);
+        }
+        prices[29] = 0.54; // last snapshot price — priceAtAlert should equal this
+
+        Market m = market("m1", "300000");
+        AlertService spy = mock(AlertService.class);
+        when(spy.tryCreate(any())).thenReturn(true);
+
+        TestableDetector det = detector(spy, series("m1", prices));
+        det.checkMarket(m, NOW);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(spy).tryCreate(captor.capture());
+        Alert alert = captor.getValue();
+
+        assertThat(alert.getPriceAtAlert())
+                .isNotNull()
+                .isEqualByComparingTo(new BigDecimal("0.54")); // last snapshot = prices[29]
+    }
 }
