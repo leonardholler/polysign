@@ -2,6 +2,7 @@ package com.polysign.integration;
 
 import com.polysign.backtest.ResolutionSweeper;
 import com.polysign.backtest.SnapshotArchiver;
+import com.polysign.detector.InsiderSignatureDetector;
 import com.polysign.metrics.SignalQualityMetrics;
 import com.polysign.metrics.SqsQueueMetrics;
 import com.polysign.notification.NotificationConsumer;
@@ -59,7 +60,9 @@ import org.testcontainers.utility.DockerImageName;
         SignalQualityMetrics.class,
         // ── Backtest schedulers (not under test in any IT class) ─────────────
         SnapshotArchiver.class,
-        ResolutionSweeper.class
+        ResolutionSweeper.class,
+        // ── Phase 2 detectors ─────────────────────────────────────────────────
+        InsiderSignatureDetector.class
 })
 public abstract class AbstractIntegrationIT {
 

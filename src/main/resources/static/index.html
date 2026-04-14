@@ -79,15 +79,15 @@
     <div class="text-xs text-gray-600" id="st-precision-samples">no scored alerts yet</div>
   </div>
   <div class="bg-gray-900 px-4 py-3">
-    <div class="text-xs text-gray-500 mb-0.5">Whale Activity</div>
-    <div class="text-2xl font-bold text-gray-100" id="st-whale">—</div>
-    <div class="text-xs text-gray-600" id="st-wallets-active">— active in 24h</div>
+    <div class="text-xs text-gray-500 mb-0.5">Insider Signals</div>
+    <div class="text-2xl font-bold text-gray-100" id="st-insider">—</div>
+    <div class="text-xs text-gray-600" id="st-insider-sub">— wallets 24h</div>
   </div>
 </div>
 
 <!-- ── Signal Quality row ─────────────────────────────────────────────────── -->
 <div class="border-b border-gray-800 px-4 py-1.5">
-  <span class="text-xs text-gray-500">Signal Quality (1h eval · 7-day window) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · whale —%</span></span>
+  <span class="text-xs text-gray-500">Signal Quality (1h eval · 7-day window) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · insider —%</span></span>
 </div>
 
 <!-- ── Signal Performance by Category ───────────────────────────────────── -->
@@ -246,12 +246,12 @@ function copyTopic() {
 
 function typeLabel(type) {
   return { price_movement:'PRICE', statistical_anomaly:'ANOMALY',
-           wallet_activity:'WHALE' }[type] || type.toUpperCase();
+           wallet_activity:'WHALE', insider_signature:'INSIDER' }[type] || type.toUpperCase();
 }
 
 function typeColor(type) {
   return { price_movement:'text-blue-400', statistical_anomaly:'text-purple-400',
-           wallet_activity:'text-pink-400' }[type] || 'text-gray-400';
+           wallet_activity:'text-pink-400', insider_signature:'text-orange-400' }[type] || 'text-gray-400';
 }
 
 function renderAlertDetail(a) {
@@ -291,6 +291,17 @@ function renderAlertDetail(a) {
     const ep    = m.entryPrice && m.entryPrice !== '?' ? ` <span class="text-gray-500">@ ${(parseFloat(m.entryPrice)*100).toFixed(1)}¢</span>` : '';
     return `<span class="${col}">${alias || '?'} ${dir} ${out}</span>` +
            (sz ? ` <span class="text-gray-400">${sz}</span>` : '') + ep;
+  }
+  if (a.type === 'insider_signature') {
+    const age = m.walletAgeDays === 'unknown' ? '?' : (m.walletAgeDays + 'd');
+    const sz = m.tradeSizeUsd ? fmtUsd(parseFloat(m.tradeSizeUsd)) : (m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '');
+    const outcome = m.outcomeSide || '';
+    const pct = m.tradeSizeAsPctOfWalletVolume ? m.tradeSizeAsPctOfWalletVolume + '% of wallet vol' : '';
+    const col = 'text-orange-400';
+    return `<span class="${col}">BUY ${outcome}</span>` +
+           (sz ? ` <span class="text-gray-400">${sz}</span>` : '') +
+           ` <span class="text-gray-600">age ${age}` +
+           (pct ? ` · ${pct}` : '') + `</span>`;
   }
   return a.title || '';
 }
@@ -446,8 +457,6 @@ function renderWallets(wallets) {
               && !(w.lastSizeUsdc == null && w.recentDirection == null))
     .sort((a, b) => new Date(b.lastTradeAt) - new Date(a.lastTradeAt));
 
-  document.getElementById('st-wallets-active').textContent = filtered.length + ' active in 24h';
-
   if (filtered.length === 0) {
     document.getElementById('wallet-list').innerHTML =
       '<div class="text-gray-600 text-xs py-3 text-center">No trades in the last 24h</div>';
@@ -582,7 +591,8 @@ async function loadStats() {
       ? 'no resolved alerts yet'
       : `${rc}/${arz} correct · ${mz} markets at resolution · all time`;
 
-    document.getElementById('st-whale').textContent    = d.watchedWallets ?? '—';
+    document.getElementById('st-insider').textContent  = d.insiderSignatureCount ?? '—';
+    document.getElementById('st-insider-sub').textContent = d.walletsSeenToday != null ? d.walletsSeenToday + ' wallets seen 24h' : '— wallets 24h';
     const prec1h = d.signalPrecision7d1h;
     document.getElementById('st-precision').textContent =
         samples1h > 0 ? (prec1h != null ? (prec1h * 100).toFixed(1) + '%' : '—') : '—';
@@ -618,7 +628,7 @@ async function loadStats() {
     const idx = {};
     (d.detectors || []).forEach(x => { idx[x.type] = x; });
     document.getElementById('sq-summary').textContent =
-      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · whale ${fmtPct(idx.wallet_activity?.precision)}`;
+      `price ${fmtPct(idx.price_movement?.precision)} · anomaly ${fmtPct(idx.statistical_anomaly?.precision)} · insider ${fmtPct(idx.insider_signature?.precision)}`;
   } catch (_) {}
 })();
 

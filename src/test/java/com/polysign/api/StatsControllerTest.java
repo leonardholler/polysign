@@ -7,6 +7,7 @@ import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
+import com.polysign.model.WalletTrade;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -52,6 +54,9 @@ class StatsControllerTest {
     DynamoDbTable<AlertOutcome> alertOutcomesTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    DynamoDbTable<WalletTrade> walletTradesTable;
+
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     MeterRegistry meterRegistry;
 
     @Mock
@@ -69,17 +74,24 @@ class StatsControllerTest {
         clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:00Z"), ZoneOffset.UTC));
 
         // stub DynamoDB scans to return empty streams
-        when(alertsTable.scan().items().stream()).thenReturn(Stream.of());
+        // alertsTable is scanned twice (alertsFiredToday + insiderSignatureCount),
+        // so use a supplier-based answer to return a fresh stream on each call.
+        when(alertsTable.scan().items().stream()).thenAnswer(inv -> Stream.of());
         when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
         when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of());
+        when(walletTradesTable.scan().items().stream()).thenReturn(Stream.of());
 
         // stub MeterRegistry gauge lookup to return null (no gauge registered)
         when(meterRegistry.find(any()).gauge()).thenReturn(null);
 
+        // stub getPerformance for insider_signature to return empty result
+        when(signalPerformanceService.getPerformance(any(), any(), any()))
+                .thenReturn(new SignalPerformanceService.PerformanceResponse("t1h", "", List.of()));
+
         controller = new StatsController(
                 alertsTable, watchedWalletsTable, marketsTable, alertOutcomesTable,
-                meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
+                walletTradesTable, meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 
     // ── Test 1: precision fields populated when scored samples exist ──────────

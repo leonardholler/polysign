@@ -8,6 +8,7 @@ import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
+import com.polysign.model.WalletTrade;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -44,6 +45,7 @@ public class StatsController {
     private final DynamoDbTable<WatchedWallet> watchedWalletsTable;
     private final DynamoDbTable<Market>        marketsTable;
     private final DynamoDbTable<AlertOutcome>  alertOutcomesTable;
+    private final DynamoDbTable<WalletTrade>   walletTradesTable;
     private final MeterRegistry                meterRegistry;
     private final AppStats                     appStats;
     private final AppClock                     clock;
@@ -55,6 +57,7 @@ public class StatsController {
             DynamoDbTable<WatchedWallet> watchedWalletsTable,
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<AlertOutcome> alertOutcomesTable,
+            DynamoDbTable<WalletTrade> walletTradesTable,
             MeterRegistry meterRegistry,
             AppStats appStats,
             AppClock clock,
@@ -64,6 +67,7 @@ public class StatsController {
         this.watchedWalletsTable       = watchedWalletsTable;
         this.marketsTable              = marketsTable;
         this.alertOutcomesTable        = alertOutcomesTable;
+        this.walletTradesTable         = walletTradesTable;
         this.meterRegistry             = meterRegistry;
         this.appStats                  = appStats;
         this.clock                     = clock;
@@ -84,7 +88,11 @@ public class StatsController {
             long marketsInResolutionZone,
             long alertsInResolutionZone,
             long resolutionCorrect,
-            Double resolutionAccuracyPct) {}
+            Double resolutionAccuracyPct,
+            long walletsSeenToday,
+            long insiderSignatureCount,
+            Double insiderSignaturePrecision7d1h,
+            long insiderSignatureSamples7d1h) {}
 
     @GetMapping
     public StatsResponse getStats() {
@@ -104,6 +112,20 @@ public class StatsController {
         // watchedWallets: count the watched_wallets table (small — max ~100 entries)
         long watchedWallets = watchedWalletsTable.scan().items().stream().count();
 
+        // walletsSeenToday: distinct trader addresses in wallet_trades, last 24h
+        String since24h = clock.now().minus(Duration.ofHours(24)).toString();
+        long walletsSeenToday = walletTradesTable.scan().items().stream()
+                .filter(t -> t.getTimestamp() != null && t.getTimestamp().compareTo(since24h) >= 0)
+                .map(WalletTrade::getAddress)
+                .distinct()
+                .count();
+
+        // insiderSignatureCount: insider_signature alerts today
+        long insiderSignatureCount = alertsTable.scan().items().stream()
+                .filter(a -> "insider_signature".equals(a.getType()))
+                .filter(a -> a.getCreatedAt() != null && a.getCreatedAt().compareTo(todayStart) >= 0)
+                .count();
+
         // lastPollTime from AppStats (set by MarketPoller after each successful cycle)
         Instant lastPoll = appStats.getLastMarketPollAt();
 
@@ -111,6 +133,13 @@ public class StatsController {
         Instant since7d = clock.now().minus(Duration.ofDays(7));
         AggregatePrecision ap1h  = signalPerformanceService.getAggregatePrecision("t1h",  since7d);
         AggregatePrecision ap15m = signalPerformanceService.getAggregatePrecision("t15m", since7d);
+
+        // insiderSignature precision (7d, t1h)
+        var insiderPerf = signalPerformanceService.getPerformance("insider_signature", "t1h", since7d);
+        Double insiderPrec = insiderPerf.detectors().isEmpty()
+                ? null : insiderPerf.detectors().get(0).precision();
+        long insiderSamples = insiderPerf.detectors().isEmpty()
+                ? 0 : insiderPerf.detectors().get(0).count();
 
         // markets in resolution zone: effectivelyResolved() is true in the local markets table
         long marketsInResolutionZone = marketsTable.scan().items().stream()
@@ -147,7 +176,11 @@ public class StatsController {
                 marketsInResolutionZone,
                 alertsInResolutionZone,
                 resolutionCorrect,
-                resolutionAccuracyPct);
+                resolutionAccuracyPct,
+                walletsSeenToday,
+                insiderSignatureCount,
+                insiderPrec,
+                insiderSamples);
     }
 
     /** Returns true when priceAtHorizon is a decisive binary outcome (>= 0.99 or <= 0.01). */

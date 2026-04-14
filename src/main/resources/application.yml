@@ -76,6 +76,7 @@ polysign:
       alerts: alerts
       alert-outcomes: alert_outcomes
       api-keys: api_keys
+      wallet-metadata: wallet_metadata
   sqs:
     queues:
       wallet-trades-to-process: wallet-trades-to-process
@@ -213,3 +214,7 @@ resilience4j:
         limit-for-period: 10
         limit-refresh-period: 1s
         timeout-duration: 5s
+      polymarket-data-metadata:
+        limit-for-period: 20
+        limit-refresh-period: 1s
+        timeout-duration: 2s

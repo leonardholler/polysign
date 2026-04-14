@@ -39,7 +39,7 @@ public class SignalPerformanceService {
     private static final Logger log = LoggerFactory.getLogger(SignalPerformanceService.class);
 
     public static final List<String> KNOWN_TYPES = List.of(
-            "price_movement", "statistical_anomaly", "wallet_activity");
+            "price_movement", "statistical_anomaly", "wallet_activity", "insider_signature");
 
     private final DynamoDbTable<AlertOutcome> alertOutcomesTable;
     private final DynamoDbTable<Market>       marketsTable;
