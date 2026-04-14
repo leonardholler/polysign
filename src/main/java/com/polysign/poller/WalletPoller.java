@@ -3,6 +3,7 @@ package com.polysign.poller;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.polysign.common.AppClock;
+import com.polysign.common.AppStats;
 import com.polysign.common.CorrelationId;
 import com.polysign.model.Market;
 import com.polysign.model.WalletTrade;
@@ -65,6 +66,7 @@ public class WalletPoller {
     private final DynamoDbTable<Market>      marketsTable;
     private final DynamoDbTable<WalletTrade> walletTradesTable;
     private final AppClock                   clock;
+    private final AppStats                   appStats;
     private final ObjectMapper               mapper;
     private final CircuitBreaker             circuitBreaker;
     private final Retry                      retry;
@@ -75,6 +77,7 @@ public class WalletPoller {
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<WalletTrade> walletTradesTable,
             AppClock clock,
+            AppStats appStats,
             ObjectMapper mapper,
             CircuitBreakerRegistry cbRegistry,
             RetryRegistry retryRegistry,
@@ -86,6 +89,7 @@ public class WalletPoller {
         this.marketsTable       = marketsTable;
         this.walletTradesTable  = walletTradesTable;
         this.clock              = clock;
+        this.appStats           = appStats;
         this.mapper             = mapper;
         this.circuitBreaker     = cbRegistry.circuitBreaker(CB_NAME);
         this.retry              = retryRegistry.retry(CB_NAME);
@@ -210,6 +214,7 @@ public class WalletPoller {
         trade.setSlug(str(raw, "slug"));
 
         walletTradesTable.putItem(trade);
+        appStats.recordTrade(address);
         log.debug("wallet_trade_written address={} txHash={} marketId={} sizeUsdc={}",
                 address, txHash, market.getMarketId(), sizeUsdc);
     }

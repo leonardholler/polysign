@@ -7,7 +7,6 @@ import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
-import com.polysign.model.WalletTrade;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,11 +15,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
+import software.amazon.awssdk.enhanced.dynamodb.model.ScanEnhancedRequest;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -28,15 +31,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link StatsController}.
  *
- * Verifies that the new signalPrecision7d1h / scoredSamples7d1h fields are
- * populated correctly from SignalPerformanceService.getAggregatePrecision().
+ * Verifies precision fields, resolution zone counts, and the 10-second response cache.
  */
 @ExtendWith(MockitoExtension.class)
 class StatsControllerTest {
@@ -54,9 +55,6 @@ class StatsControllerTest {
     DynamoDbTable<AlertOutcome> alertOutcomesTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    DynamoDbTable<WalletTrade> walletTradesTable;
-
-    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     MeterRegistry meterRegistry;
 
     @Mock
@@ -68,22 +66,35 @@ class StatsControllerTest {
     AppClock clock;
     StatsController controller;
 
+    /**
+     * Helper: wraps a list as a typed {@link SdkIterable} for Mockito stubs.
+     * {@code SdkIterable} is a functional interface (iterator() is the only abstract method).
+     */
+    @SafeVarargs
+    private static <T> SdkIterable<T> iterableOf(T... items) {
+        List<T> list = Arrays.asList(items);
+        return list::iterator;
+    }
+
     @BeforeEach
     void setUp() {
         clock = new AppClock();
         clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:00Z"), ZoneOffset.UTC));
 
-        // stub DynamoDB scans to return empty streams
-        // alertsTable is scanned twice (alertsFiredToday + insiderSignatureCount),
-        // so use a supplier-based answer to return a fresh stream on each call.
-        when(alertsTable.scan().items().stream()).thenAnswer(inv -> Stream.of());
+        // alertsTable is iterated with a for-each in the controller
+        when(alertsTable.scan().items()).thenReturn(iterableOf());
         when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
-        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of());
-        when(walletTradesTable.scan().items().stream()).thenReturn(Stream.of());
+        // alertOutcomesTable uses ScanEnhancedRequest — disambiguate overload
+        when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
+                .thenReturn(Stream.of());
 
         // stub MeterRegistry gauge lookup to return null (no gauge registered)
         when(meterRegistry.find(any()).gauge()).thenReturn(null);
+
+        // Fix 1: walletsSeenInLast24h comes from appStats, not a DB scan.
+        // lenient — some tests override this stub with a specific return value.
+        lenient().when(appStats.walletsSeenInLast24h(any(Clock.class))).thenReturn(0L);
 
         // stub getPerformance for insider_signature to return empty result
         when(signalPerformanceService.getPerformance(any(), any(), any()))
@@ -91,7 +102,7 @@ class StatsControllerTest {
 
         controller = new StatsController(
                 alertsTable, watchedWalletsTable, marketsTable, alertOutcomesTable,
-                walletTradesTable, meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
+                meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 
     // ── Test 1: precision fields populated when scored samples exist ──────────
@@ -149,7 +160,7 @@ class StatsControllerTest {
 
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of(resolved, open));
 
-        // Two resolution outcome rows
+        // Two resolution outcome rows + one non-resolution row
         AlertOutcome res1 = new AlertOutcome();
         res1.setAlertId("alert-01");
         res1.setHorizon("resolution");
@@ -158,12 +169,12 @@ class StatsControllerTest {
         res2.setAlertId("alert-02");
         res2.setHorizon("resolution");
 
-        // One non-resolution outcome (should not count)
         AlertOutcome t1h = new AlertOutcome();
         t1h.setAlertId("alert-03");
         t1h.setHorizon("t1h");
 
-        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(res1, res2, t1h));
+        when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
+                .thenReturn(Stream.of(res1, res2, t1h));
 
         StatsController.StatsResponse resp = controller.getStats();
 
@@ -179,23 +190,20 @@ class StatsControllerTest {
                 .thenReturn(new AggregatePrecision(null, 0L));
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
-        // 4 resolution outcomes: 3 correct, 1 wrong
         AlertOutcome correct1 = resolutionOutcome("a1", "up",   "up",   1.0);
         AlertOutcome correct2 = resolutionOutcome("a2", "down", "down", 0.0);
         AlertOutcome correct3 = resolutionOutcome("a3", "up",   "up",   1.0);
         AlertOutcome wrong1   = resolutionOutcome("a4", "up",   "down", 0.0);
-        // one t1h row that must not count
         AlertOutcome other    = resolutionOutcome("a5", "up",   "up",   1.0);
         other.setHorizon("t1h");
 
-        when(alertOutcomesTable.scan().items().stream())
+        when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
                 .thenReturn(Stream.of(correct1, correct2, correct3, wrong1, other));
 
         StatsController.StatsResponse resp = controller.getStats();
 
         assertThat(resp.alertsInResolutionZone()).isEqualTo(4L);
         assertThat(resp.resolutionCorrect()).isEqualTo(3L);
-        // 3/4 * 100 = 75.0
         assertThat(resp.resolutionAccuracyPct()).isEqualTo(75.0);
     }
 
@@ -204,7 +212,6 @@ class StatsControllerTest {
         when(signalPerformanceService.getAggregatePrecision(any(), any()))
                 .thenReturn(new AggregatePrecision(null, 0L));
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
-        // alertOutcomesTable already stubbed to empty in setUp
 
         StatsController.StatsResponse resp = controller.getStats();
 
@@ -218,17 +225,64 @@ class StatsControllerTest {
                 .thenReturn(new AggregatePrecision(null, 0L));
         when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
-        // direction matches but price stuck at 0.50 — should not count as correct
         AlertOutcome stuck = resolutionOutcome("a1", "up", "up", 0.50);
 
-        when(alertOutcomesTable.scan().items().stream()).thenReturn(Stream.of(stuck));
+        when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
+                .thenReturn(Stream.of(stuck));
 
         StatsController.StatsResponse resp = controller.getStats();
 
         assertThat(resp.alertsInResolutionZone()).isEqualTo(1L);
         assertThat(resp.resolutionCorrect()).isEqualTo(0L);
-        // 0/1 * 100 = 0.0
         assertThat(resp.resolutionAccuracyPct()).isEqualTo(0.0);
+    }
+
+    // ── Test 5: Fix 1 — walletsSeenToday comes from appStats, not a DB scan ───
+
+    @Test
+    void walletsSeenToday_delegatesToAppStats() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+        when(appStats.walletsSeenInLast24h(any(Clock.class))).thenReturn(42L);
+
+        StatsController.StatsResponse resp = controller.getStats();
+
+        assertThat(resp.walletsSeenToday()).isEqualTo(42L);
+    }
+
+    // ── Test 6: Fix 3 — 10-second response cache ─────────────────────────────
+
+    @Test
+    void getStats_returnsCachedResponse_withinTtl() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+
+        // Both calls use the same fixed clock instant → same millis → cache hit
+        StatsController.StatsResponse first  = controller.getStats();
+        StatsController.StatsResponse second = controller.getStats();
+
+        assertThat(second).isSameAs(first); // same object reference — cache hit
+    }
+
+    @Test
+    void getStats_recomputesAfterCacheTtlExpires() {
+        when(signalPerformanceService.getAggregatePrecision(any(), any()))
+                .thenReturn(new AggregatePrecision(null, 0L));
+
+        StatsController.StatsResponse first = controller.getStats();
+
+        // Advance clock by 11 seconds — past the 10s TTL
+        clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:11Z"), ZoneOffset.UTC));
+        // Re-stub all stream/iterable returns — Streams are single-use; the first getStats() consumed them
+        when(alertsTable.scan().items()).thenReturn(iterableOf());
+        when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
+        when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
+                .thenReturn(Stream.of());
+        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+
+        StatsController.StatsResponse second = controller.getStats();
+
+        assertThat(second).isNotSameAs(first); // new object — cache miss
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

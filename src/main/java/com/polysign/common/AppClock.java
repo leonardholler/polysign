@@ -46,4 +46,9 @@ public class AppClock {
     public void setClock(Clock clock) {
         this.clock = clock;
     }
+
+    /** Returns the underlying {@link Clock} — useful when a raw {@code Clock} is required (e.g. AppStats). */
+    public Clock getClock() {
+        return clock;
+    }
 }
