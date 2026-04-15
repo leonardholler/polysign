@@ -86,6 +86,16 @@ public class MarketController {
                 .toList();
     }
 
+    // ── GET /api/markets/count ───────────────────────────────────────────────
+    // Must appear BEFORE /{marketId} so Spring MVC matches "count" as a literal
+    // path segment rather than routing it to the @PathVariable handler.
+
+    @GetMapping("/count")
+    public java.util.Map<String, Long> countMarkets() {
+        long count = marketsTable.scan().items().stream().count();
+        return java.util.Map.of("count", count);
+    }
+
     // ── GET /api/markets/{marketId} ──────────────────────────────────────────
 
     @GetMapping("/{marketId}")

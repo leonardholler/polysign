@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * every ~10 s; the cache cuts DynamoDB load ~10× under any concurrent request burst.
  */
 @RestController
-@RequestMapping("/api/stats")
+@RequestMapping({"/api/stats", "/api/dashboard/stats"})
 public class StatsController {
 
     /** Response cache TTL — matches the dashboard poll interval. */

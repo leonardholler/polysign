@@ -29,4 +29,6 @@ RUN addgroup --system polysign && adduser --system --ingroup polysign polysign
 USER polysign
 
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Use shell form so $JAVA_OPTS from docker-compose (or any orchestrator) is expanded.
+# exec replaces the shell with java, making java PID 1 for correct signal handling.
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

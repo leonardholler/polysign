@@ -77,6 +77,19 @@ public class AlertService {
         if (alert.getWasNotified() == null) {
             alert.setWasNotified(false);
         }
+        // GSI fields for AlertOutcomeEvaluator — schedule first evaluation at firedAt+15m.
+        // evaluationStatus="PENDING" keeps the alert in nextEvaluationDue-index until all
+        // horizons are evaluated, after which AlertOutcomeEvaluator removes the attribute.
+        if (alert.getEvaluationStatus() == null) {
+            alert.setEvaluationStatus("PENDING");
+            try {
+                java.time.Instant firstEval = java.time.Instant.parse(alert.getCreatedAt())
+                        .plus(java.time.Duration.ofMinutes(15));
+                alert.setNextEvaluationDue(firstEval.toString());
+            } catch (Exception ignored) {
+                // malformed createdAt — evaluator will miss this alert; better than crashing
+            }
+        }
 
         try {
             alertsTable.putItem(PutItemEnhancedRequest.builder(Alert.class)

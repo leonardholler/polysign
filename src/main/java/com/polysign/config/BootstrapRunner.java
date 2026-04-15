@@ -142,12 +142,17 @@ public class BootstrapRunner implements ApplicationRunner {
         );
 
         // ── alerts ────────────────────────────────────────────────────────────
+        // nextEvaluationDue-index: PK=evaluationStatus ("PENDING"), SK=nextEvaluationDue.
+        // AlertOutcomeEvaluator queries this GSI instead of full-scanning the table,
+        // keeping memory usage O(batch_size) instead of O(total_alerts).
         createTable(
             "alerts",
             List.of(
-                attr("alertId",   ScalarAttributeType.S),
-                attr("createdAt", ScalarAttributeType.S),
-                attr("marketId",  ScalarAttributeType.S)
+                attr("alertId",          ScalarAttributeType.S),
+                attr("createdAt",        ScalarAttributeType.S),
+                attr("marketId",         ScalarAttributeType.S),
+                attr("evaluationStatus", ScalarAttributeType.S),
+                attr("nextEvaluationDue", ScalarAttributeType.S)
             ),
             List.of(
                 key("alertId",   KeyType.HASH),
@@ -156,7 +161,10 @@ public class BootstrapRunner implements ApplicationRunner {
             List.of(
                 gsi("marketId-createdAt-index",
                     key("marketId",  KeyType.HASH),
-                    key("createdAt", KeyType.RANGE))
+                    key("createdAt", KeyType.RANGE)),
+                gsi("nextEvaluationDue-index",
+                    key("evaluationStatus",  KeyType.HASH),
+                    key("nextEvaluationDue", KeyType.RANGE))
             )
         );
         enableTtl("alerts", "expiresAt");

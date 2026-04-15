@@ -13,12 +13,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.enhanced.dynamodb.DynamoDbIndex;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.Expression;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.model.PutItemEnhancedRequest;
-import software.amazon.awssdk.enhanced.dynamodb.model.ScanEnhancedRequest;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import java.math.BigDecimal;
@@ -34,16 +34,19 @@ import java.util.Optional;
 /**
  * Evaluates fired alerts against forward price movement at fixed horizons.
  *
- * <p>Runs every 5 minutes. For each alert fired between 15 minutes ago and
- * 25 hours ago, evaluates whichever of the t15m / t1h / t24h horizons are
- * now due and whose outcome row does not yet exist in {@code alert_outcomes}.
+ * <p>Runs every 5 minutes. Queries the {@code nextEvaluationDue-index} GSI for PENDING
+ * alerts whose next evaluation horizon is due, then evaluates all due horizons (t15m,
+ * t1h, t24h). After evaluation, advances the alert's {@code nextEvaluationDue} to the
+ * next horizon, or removes {@code evaluationStatus} once all horizons are complete —
+ * taking the alert out of the GSI. Memory usage is O(batch_size), not O(total_alerts).
  *
  * <p>Direction predicted is derived from alert metadata (see Decision 2).
  * firedAt is read from the {@code detectedAt} metadata key (Decision 1) —
  * falls back to createdAt with a WARN log for pre-Phase-5 alerts.
  *
- * <p>Package-private methods ({@link #scanRecentAlerts}, {@link #findClosestSnapshot},
- * {@link #writeOutcome}, {@link #outcomeExists}) are overridable in tests via a subclass.
+ * <p>Package-private methods ({@link #queryPendingAlerts}, {@link #advanceEvaluationState},
+ * {@link #findClosestSnapshot}, {@link #writeOutcome}, {@link #outcomeExists}) are
+ * overridable in tests via a subclass.
  *
  * <p>{@link #computeOutcome} is package-private and reused by {@link ResolutionSweeper}.
  */
@@ -108,11 +111,8 @@ public class AlertOutcomeEvaluator {
      * Core evaluation loop — public for direct invocation in integration tests.
      */
     public void evaluate() {
-        Instant now      = clock.now();
-        Instant earliest = now.minus(Duration.ofHours(25));
-        Instant latest   = now.minus(Duration.ofMinutes(15));
-
-        List<Alert> alerts = scanRecentAlerts(earliest, latest);
+        Instant now = clock.now();
+        List<Alert> alerts = queryPendingAlerts(now);
         int evaluated = 0;
 
         for (Alert alert : alerts) {
@@ -120,6 +120,12 @@ public class AlertOutcomeEvaluator {
                 evaluated += evaluateAlert(alert, now);
             } catch (Exception e) {
                 log.warn("alert_outcome_eval_failed alertId={} error={}",
+                        alert.getAlertId(), e.getMessage());
+            }
+            try {
+                advanceEvaluationState(alert, now);
+            } catch (Exception e) {
+                log.warn("alert_evaluation_state_advance_failed alertId={} error={}",
                         alert.getAlertId(), e.getMessage());
             }
         }
@@ -387,7 +393,7 @@ public class AlertOutcomeEvaluator {
 
     // ── firedAt extraction (Decision 1) ──────────────────────────────────────
 
-    private static Instant extractFiredAt(Alert alert) {
+    static Instant extractFiredAt(Alert alert) {
         Map<String, String> meta = alert.getMetadata();
         if (meta != null && meta.containsKey("detectedAt")) {
             try {
@@ -404,25 +410,56 @@ public class AlertOutcomeEvaluator {
     // ── Package-private seams (overridden in tests) ───────────────────────────
 
     /**
-     * Scans the alerts table for alerts with createdAt between earliest and latest.
-     * Decision 5: a filtered scan is correct at this project's scale.
+     * Queries the {@code nextEvaluationDue-index} GSI for alerts with
+     * {@code evaluationStatus = "PENDING"} and {@code nextEvaluationDue <= now}.
+     * Returns only the alerts whose next evaluation horizon has arrived.
+     * Memory usage is O(due_alerts), not O(total_alerts_ever_written).
      */
-    List<Alert> scanRecentAlerts(Instant earliest, Instant latest) {
-        Expression filter = Expression.builder()
-                .expression("#ca >= :earliest AND #ca <= :latest")
-                .expressionNames(Map.of("#ca", "createdAt"))
-                .expressionValues(Map.of(
-                        ":earliest", AttributeValue.fromS(earliest.toString()),
-                        ":latest",   AttributeValue.fromS(latest.toString())))
-                .build();
+    List<Alert> queryPendingAlerts(Instant now) {
+        DynamoDbIndex<Alert> gsi = alertsTable.index("nextEvaluationDue-index");
+        QueryConditional qc = QueryConditional.sortLessThanOrEqualTo(
+                Key.builder()
+                        .partitionValue("PENDING")
+                        .sortValue(now.toString())
+                        .build());
 
         List<Alert> result = new ArrayList<>();
-        alertsTable.scan(ScanEnhancedRequest.builder()
-                        .filterExpression(filter)
-                        .build())
-                .items()
+        gsi.query(r -> r.queryConditional(qc))
+                .stream()
+                .flatMap(page -> page.items().stream())
                 .forEach(result::add);
         return result;
+    }
+
+    /**
+     * Advances the alert's evaluation state after a round of horizon evaluations.
+     *
+     * <ul>
+     *   <li>If all horizons (t15m, t1h, t24h) are now past: sets {@code evaluationStatus}
+     *       and {@code nextEvaluationDue} to null, removing the alert from the GSI.</li>
+     *   <li>If t1h is past but t24h is not: advances {@code nextEvaluationDue} to firedAt+24h.</li>
+     *   <li>If only t15m is past: advances {@code nextEvaluationDue} to firedAt+1h.</li>
+     * </ul>
+     *
+     * <p>Always calls {@code alertsTable.updateItem} so the GSI stays consistent.
+     */
+    void advanceEvaluationState(Alert alert, Instant now) {
+        Instant firedAt = extractFiredAt(alert);
+        Instant t1hDue  = firedAt.plus(Duration.ofHours(1));
+        Instant t24hDue = firedAt.plus(Duration.ofHours(24));
+
+        if (!now.isBefore(t24hDue)) {
+            // All horizons complete — remove from GSI by deleting the GSI attributes.
+            alert.setEvaluationStatus(null);
+            alert.setNextEvaluationDue(null);
+        } else if (!now.isBefore(t1hDue)) {
+            // t1h just completed; next is t24h.
+            alert.setNextEvaluationDue(t24hDue.toString());
+        } else {
+            // t15m just completed; next is t1h.
+            alert.setNextEvaluationDue(t1hDue.toString());
+        }
+        alertsTable.updateItem(alert);
     }
 
     /**

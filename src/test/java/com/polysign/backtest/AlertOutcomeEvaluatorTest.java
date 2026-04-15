@@ -508,8 +508,13 @@ class AlertOutcomeEvaluatorTest {
         }
 
         @Override
-        List<Alert> scanRecentAlerts(Instant earliest, Instant latest) {
+        List<Alert> queryPendingAlerts(Instant now) {
             return alertsToReturn;
+        }
+
+        @Override
+        void advanceEvaluationState(Alert alert, Instant now) {
+            // no-op: unit tests exercise evaluation logic, not GSI state advancement
         }
 
         @Override

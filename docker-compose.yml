@@ -48,9 +48,10 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
       - AWS_REGION=${AWS_REGION:-us-east-1}
-      # JVM flags: cap heap, dump on OOM, and exit the JVM (not just the thread)
-      # so Docker detects the crash and autoheal can restart the container.
-      - JAVA_OPTS=-Xmx1g -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/polysign-heapdump.hprof
+      # JVM flags: cap heap at 768m (box=1.9GB, DynamoDB Local≈300MB, leaves OS headroom),
+      # dump on OOM, and exit the JVM (not just the thread) so Docker detects the crash
+      # and autoheal can restart the container.
+      - JAVA_OPTS=-Xmx768m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/polysign-heapdump.hprof
     env_file:
       - path: .env
         required: false   # .env is optional; defaults above are used if absent

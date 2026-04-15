@@ -5,6 +5,10 @@ import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 import java.math.BigDecimal;
 import java.util.Map;
 
+// GSI nextEvaluationDue-index: PK=evaluationStatus ("PENDING"), SK=nextEvaluationDue (ISO-8601).
+// Set on alert creation; removed when all horizons are evaluated (takes alert out of the GSI).
+// This lets AlertOutcomeEvaluator query only due alerts instead of scanning the full table.
+
 /**
  * DynamoDB "alerts" table.
  *
@@ -31,7 +35,11 @@ public class Alert {
     private Boolean phoneWorthy; // set by NotificationConsumer via PhoneWorthinessFilter
     private Boolean reviewed;    // set by POST /api/alerts/{alertId}/mark-reviewed
     private String link;
-    private Long expiresAt;     // TTL — Unix epoch seconds (30 days out)
+    private Long expiresAt;      // TTL — Unix epoch seconds (30 days out)
+
+    // GSI attributes — see nextEvaluationDue-index comment at top of file.
+    private String evaluationStatus;  // "PENDING" while pending; null/absent when all horizons done
+    private String nextEvaluationDue; // ISO-8601: firedAt+15m initially, advanced per horizon
 
     @DynamoDbPartitionKey
     public String getAlertId() { return alertId; }
@@ -43,6 +51,12 @@ public class Alert {
 
     @DynamoDbSecondaryPartitionKey(indexNames = "marketId-createdAt-index")
     public String getMarketId() { return marketId; }
+
+    @DynamoDbSecondaryPartitionKey(indexNames = "nextEvaluationDue-index")
+    public String getEvaluationStatus() { return evaluationStatus; }
+
+    @DynamoDbSecondarySortKey(indexNames = "nextEvaluationDue-index")
+    public String getNextEvaluationDue() { return nextEvaluationDue; }
 
     public String              getType()        { return type;        }
     public String              getSeverity()    { return severity;    }
@@ -68,7 +82,9 @@ public class Alert {
     public void setPriceAtAlert(BigDecimal priceAtAlert)   { this.priceAtAlert = priceAtAlert; }
     public void setWasNotified(Boolean wasNotified)        { this.wasNotified  = wasNotified;  }
     public void setPhoneWorthy(Boolean phoneWorthy)        { this.phoneWorthy  = phoneWorthy;  }
-    public void setReviewed(Boolean reviewed)              { this.reviewed     = reviewed;     }
-    public void setLink(String link)                       { this.link         = link;         }
-    public void setExpiresAt(Long expiresAt)               { this.expiresAt    = expiresAt;    }
+    public void setReviewed(Boolean reviewed)              { this.reviewed          = reviewed;          }
+    public void setLink(String link)                       { this.link              = link;              }
+    public void setExpiresAt(Long expiresAt)               { this.expiresAt         = expiresAt;         }
+    public void setEvaluationStatus(String s)              { this.evaluationStatus  = s;                 }
+    public void setNextEvaluationDue(String s)             { this.nextEvaluationDue = s;                 }
 }
