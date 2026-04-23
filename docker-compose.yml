@@ -1,40 +1,14 @@
-# PolySign local development stack
+# PolySign stack
 #
-# Why is the LocalStack version pinned to 3.8?
-# As of LocalStack 2026.03.0 (released March 23, 2026), localstack/localstack:latest
-# requires a LOCALSTACK_AUTH_TOKEN environment variable and will fail to start without
-# one. To avoid forcing a LocalStack account sign-up for a portfolio project, we pin
-# to localstack/localstack:3.8 — the last pre-consolidation tag that runs without
-# authentication.
+# Production (EC2): real AWS DynamoDB, authenticated via EC2 instance role.
+# Local dev: docker-compose.override.yml (auto-merged by Docker Compose) adds LocalStack.
 #
 # Usage:
 #   docker compose up --build     # first time or after code changes
 #   docker compose up -d          # subsequent runs (uses cached image)
 #   docker compose down           # stop
-#   docker compose down -v        # stop and wipe all data
 
 services:
-  localstack:
-    image: localstack/localstack:3.8   # DO NOT change to :latest — see comment above
-    restart: unless-stopped
-    ports:
-      - "4566:4566"
-    environment:
-      - SERVICES=dynamodb,sqs,s3
-      - DEFAULT_REGION=us-east-1
-      - DEBUG=0
-    volumes:
-      # /var/lib/localstack is LocalStack 3.x's canonical persistent data directory.
-      # Do NOT mount at /tmp/localstack — LocalStack tries to rm -rf that path on
-      # startup and the mounted volume blocks the cleanup, causing exit code 1.
-      - localstack_data:/var/lib/localstack
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
-      interval: 5s
-      timeout: 5s
-      retries: 15
-      start_period: 10s
-
   polysign:
     build: .
     restart: unless-stopped
@@ -44,20 +18,15 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=local
-      # LocalStack dummy credentials — see .env.example
+      # Defaults used locally; EC2 .env overrides AWS_REGION and SPRING_PROFILES_ACTIVE.
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
       - AWS_REGION=${AWS_REGION:-us-east-1}
-      # JVM flags: cap heap at 768m (box=1.9GB, DynamoDB Local≈300MB, leaves OS headroom),
-      # dump on OOM, and exit the JVM (not just the thread) so Docker detects the crash
-      # and autoheal can restart the container.
+      # JVM: cap heap, exit on OOM so Docker/autoheal can restart cleanly.
       - JAVA_OPTS=-Xmx768m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/polysign-heapdump.hprof
     env_file:
       - path: .env
-        required: false   # .env is optional; defaults above are used if absent
-    depends_on:
-      localstack:
-        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
       interval: 20s
@@ -65,10 +34,6 @@ services:
       retries: 5
       start_period: 180s
 
-  # autoheal watches for containers whose Docker healthcheck enters the
-  # "unhealthy" state and restarts them automatically. This is the safety net
-  # that makes the polysign healthcheck above actually trigger a recovery when
-  # the DynamoDB connection pool is poisoned and the JVM stays up but broken.
   autoheal:
     image: willfarrell/autoheal
     restart: unless-stopped
@@ -76,6 +41,3 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - AUTOHEAL_CONTAINER_LABEL=all
-
-volumes:
-  localstack_data:

@@ -1,0 +1,35 @@
+# Local development overrides — auto-merged by Docker Compose when present.
+# Adds LocalStack (AWS emulation) and wires polysign to wait for it.
+# NOT deployed to EC2; EC2 uses real AWS DynamoDB via instance role.
+#
+# Why localstack:3.8? As of 2026-03, :latest requires LOCALSTACK_AUTH_TOKEN.
+# 3.8 is the last tag that runs unauthenticated.
+
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,sqs,s3
+      - DEFAULT_REGION=us-east-1
+      - DEBUG=0
+    volumes:
+      # /var/lib/localstack is LocalStack 3.x's canonical persistent data directory.
+      # Do NOT mount at /tmp/localstack — LocalStack rm -rf's that path on startup.
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  polysign:
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+volumes:
+  localstack_data:
