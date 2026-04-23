@@ -17,10 +17,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - SPRING_PROFILES_ACTIVE=local
-      # Defaults used locally; EC2 .env overrides AWS_REGION and SPRING_PROFILES_ACTIVE.
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-local}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       # JVM: cap heap, exit on OOM so Docker/autoheal can restart cleanly.
       - JAVA_OPTS=-Xmx768m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/polysign-heapdump.hprof

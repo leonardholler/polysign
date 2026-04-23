@@ -27,6 +27,9 @@ services:
       start_period: 10s
 
   polysign:
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
     depends_on:
       localstack:
         condition: service_healthy
