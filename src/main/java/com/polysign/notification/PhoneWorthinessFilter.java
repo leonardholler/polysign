@@ -81,11 +81,6 @@ public class PhoneWorthinessFilter {
             return true;
         }
 
-        // Rule (c*): insider_signature is always phone-worthy — high-conviction burner pattern
-        if ("insider_signature".equals(alert.getType())) {
-            return true;
-        }
-
         // Rule (c): critical + t1h precision gate (fail closed when precision is null)
         if ("critical".equals(alert.getSeverity())) {
             return hasSufficientPrecision(alert.getType());

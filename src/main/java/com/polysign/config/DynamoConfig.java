@@ -2,7 +2,6 @@ package com.polysign.config;
 
 import com.polysign.model.*;
 import com.polysign.model.AlertOutcome;
-import com.polysign.wallet.WalletMetadata;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -42,9 +41,6 @@ public class DynamoConfig {
     @Value("${polysign.dynamodb.tables.api-keys:api_keys}")
     private String apiKeysTable;
 
-    @Value("${polysign.dynamodb.tables.wallet-metadata:wallet_metadata}")
-    private String walletMetadataTable;
-
     @Bean
     public DynamoDbTable<Market> marketsTable(DynamoDbEnhancedClient client) {
         return client.table(marketsTable, TableSchema.fromBean(Market.class));
@@ -80,8 +76,4 @@ public class DynamoConfig {
         return client.table(apiKeysTable, TableSchema.fromBean(ApiKey.class));
     }
 
-    @Bean
-    public DynamoDbTable<WalletMetadata> walletMetadataTable(DynamoDbEnhancedClient client) {
-        return client.table(walletMetadataTable, TableSchema.fromBean(WalletMetadata.class));
-    }
 }

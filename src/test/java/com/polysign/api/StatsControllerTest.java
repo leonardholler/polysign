@@ -4,9 +4,7 @@ import com.polysign.backtest.SignalPerformanceService;
 import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
-import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
-import com.polysign.model.Market;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,15 +13,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.model.ScanEnhancedRequest;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -43,13 +38,7 @@ import static org.mockito.Mockito.when;
 class StatsControllerTest {
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    DynamoDbTable<Alert> alertsTable;
-
-    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     DynamoDbTable<WatchedWallet> watchedWalletsTable;
-
-    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    DynamoDbTable<Market> marketsTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     DynamoDbTable<AlertOutcome> alertOutcomesTable;
@@ -66,25 +55,12 @@ class StatsControllerTest {
     AppClock clock;
     StatsController controller;
 
-    /**
-     * Helper: wraps a list as a typed {@link SdkIterable} for Mockito stubs.
-     * {@code SdkIterable} is a functional interface (iterator() is the only abstract method).
-     */
-    @SafeVarargs
-    private static <T> SdkIterable<T> iterableOf(T... items) {
-        List<T> list = Arrays.asList(items);
-        return list::iterator;
-    }
-
     @BeforeEach
     void setUp() {
         clock = new AppClock();
         clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:00Z"), ZoneOffset.UTC));
 
-        // alertsTable is iterated with a for-each in the controller
-        when(alertsTable.scan().items()).thenReturn(iterableOf());
         when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
         // alertOutcomesTable uses ScanEnhancedRequest — disambiguate overload
         when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
                 .thenReturn(Stream.of());
@@ -104,7 +80,7 @@ class StatsControllerTest {
                 .thenReturn(new SignalPerformanceService.AggregateSkill(null, 0, null, 0, 0, 0));
 
         controller = new StatsController(
-                alertsTable, watchedWalletsTable, marketsTable, alertOutcomesTable,
+                watchedWalletsTable, alertOutcomesTable,
                 meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 
@@ -151,17 +127,7 @@ class StatsControllerTest {
         when(signalPerformanceService.getAggregatePrecision(any(), any()))
                 .thenReturn(new AggregatePrecision(null, 0L));
 
-        // One effectively-resolved market (resolvedBy set + YES price >= 0.99)
-        Market resolved = new Market();
-        resolved.setMarketId("mkt-resolved-01");
-        resolved.setResolvedBy("0xUMA");
-        resolved.setOutcomePrices(List.of("0.99", "0.01"));
-
-        // One non-resolved market
-        Market open = new Market();
-        open.setMarketId("mkt-open-01");
-
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of(resolved, open));
+        when(appStats.getMarketsInResolutionZone()).thenReturn(1L);
 
         // Two resolution outcome rows + one non-resolution row
         AlertOutcome res1 = new AlertOutcome();
@@ -191,7 +157,6 @@ class StatsControllerTest {
     void resolutionAccuracy_computedCorrectly() {
         when(signalPerformanceService.getAggregatePrecision(any(), any()))
                 .thenReturn(new AggregatePrecision(null, 0L));
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
         AlertOutcome correct1 = resolutionOutcome("a1", "up",   "up",   1.0);
         AlertOutcome correct2 = resolutionOutcome("a2", "down", "down", 0.0);
@@ -214,7 +179,6 @@ class StatsControllerTest {
     void resolutionAccuracy_nullWhenNoResolutionOutcomes() {
         when(signalPerformanceService.getAggregatePrecision(any(), any()))
                 .thenReturn(new AggregatePrecision(null, 0L));
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
         StatsController.StatsResponse resp = controller.getStats();
 
@@ -226,7 +190,6 @@ class StatsControllerTest {
     void resolutionAccuracy_notCountedWhenPriceNotFullyResolved() {
         when(signalPerformanceService.getAggregatePrecision(any(), any()))
                 .thenReturn(new AggregatePrecision(null, 0L));
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
         AlertOutcome stuck = resolutionOutcome("a1", "up", "up", 0.50);
 
@@ -274,14 +237,12 @@ class StatsControllerTest {
 
         StatsController.StatsResponse first = controller.getStats();
 
-        // Advance clock by 11 seconds — past the 10s TTL
-        clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:11Z"), ZoneOffset.UTC));
-        // Re-stub all stream/iterable returns — Streams are single-use; the first getStats() consumed them
-        when(alertsTable.scan().items()).thenReturn(iterableOf());
+        // Advance clock by 61 seconds — past the 60s TTL
+        clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:01:01Z"), ZoneOffset.UTC));
+        // Re-stub all stream returns — Streams are single-use; the first getStats() consumed them
         when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
         when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
                 .thenReturn(Stream.of());
-        when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
         StatsController.StatsResponse second = controller.getStats();
 

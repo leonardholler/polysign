@@ -2,6 +2,7 @@ package com.polysign.poller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.polysign.backtest.MarketPredicates;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.common.CategoryClassifier;
@@ -282,7 +283,10 @@ public class MarketPoller {
             // ── Phase 6: Unwatch markets that fell out of top 25 ─────────────
             // Scan all markets; any that are still isWatched=true but not in the
             // current autoWatch set are stale auto-watches — reset them to false.
-            int unwatched = 0;
+            // Also count markets in the resolution zone so StatsController can
+            // read this from AppStats instead of running its own full scan.
+            int  unwatched           = 0;
+            long resolutionZoneCount = 0;
             for (Market existing : marketsTable.scan().items()) {
                 if (Boolean.TRUE.equals(existing.getIsWatched())
                         && !autoWatch.contains(existing.getMarketId())) {
@@ -290,7 +294,11 @@ public class MarketPoller {
                     marketsTable.putItem(existing);
                     unwatched++;
                 }
+                if (MarketPredicates.effectivelyResolved(existing).isPresent()) {
+                    resolutionZoneCount++;
+                }
             }
+            appStats.setMarketsInResolutionZone(resolutionZoneCount);
             log.info("auto_watch updated={} markets by volume24h", autoWatch.size());
             if (unwatched > 0) {
                 log.info("auto_watch_unwatch markets_unwatched={}", unwatched);

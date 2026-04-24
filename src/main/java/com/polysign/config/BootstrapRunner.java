@@ -178,15 +178,6 @@ public class BootstrapRunner implements ApplicationRunner {
             List.of()
         );
 
-        // ── wallet_metadata ───────────────────────────────────────────────────
-        createTable(
-            "wallet_metadata",
-            List.of(attr("address", ScalarAttributeType.S)),
-            List.of(key("address", KeyType.HASH)),
-            List.of()
-        );
-        enableTtl("wallet_metadata", "expiresAt");
-
         // ── alert_outcomes ────────────────────────────────────────────────────
         // No TTL — outcomes are cheap and the whole point is long-term measurement.
         // GSI type-firedAt-index enables per-detector aggregation queries.
@@ -258,11 +249,8 @@ public class BootstrapRunner implements ApplicationRunner {
     // ══════════════════════════════════════════════════════════════════════════
 
     private void bootstrapSqs() {
-        String walletTradesToProcessDlqArn = getOrCreateQueue("wallet-trades-to-process-dlq", null);
-        String alertsToNotifyDlqArn        = getOrCreateQueue("alerts-to-notify-dlq",         null);
-
-        getOrCreateQueue("wallet-trades-to-process", walletTradesToProcessDlqArn);
-        getOrCreateQueue("alerts-to-notify",         alertsToNotifyDlqArn);
+        String alertsToNotifyDlqArn = getOrCreateQueue("alerts-to-notify-dlq", null);
+        getOrCreateQueue("alerts-to-notify", alertsToNotifyDlqArn);
     }
 
     /**

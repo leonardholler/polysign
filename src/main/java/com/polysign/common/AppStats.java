@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Shared mutable state updated by pollers and read by {@code StatsController}.
@@ -23,6 +24,14 @@ public class AppStats {
 
     private volatile Instant lastMarketPollAt;
 
+    // ── Alert counters (reset daily at UTC midnight by resetDailyAlertCounters) ──
+    // Cold-start: both start at 0 and ramp up as alerts fire — acceptable.
+    private final AtomicLong alertsFiredToday      = new AtomicLong(0);
+    private final AtomicLong insiderSigToday       = new AtomicLong(0);
+
+    // Set by MarketPoller after each poll cycle; 0 until the first cycle completes.
+    private volatile long marketsInResolutionZone  = 0;
+
     // Wallet address → last-seen epoch millis (rolling 24h window).
     // Populated by WalletPoller on each trade write; queried by StatsController.
     // Cold-start: map is empty, so walletsSeenToday ramps up over the first 24h — acceptable.
@@ -31,6 +40,27 @@ public class AppStats {
 
     public void setLastMarketPollAt(Instant t) { this.lastMarketPollAt = t; }
     public Instant getLastMarketPollAt()        { return lastMarketPollAt;  }
+
+    /** Called by AlertService when a new alert is successfully written to DynamoDB. */
+    public void recordAlertFired(String type) {
+        alertsFiredToday.incrementAndGet();
+        if ("insider_signature".equals(type)) {
+            insiderSigToday.incrementAndGet();
+        }
+    }
+
+    public long getAlertsFiredToday()      { return alertsFiredToday.get(); }
+    public long getInsiderSignatureCount() { return insiderSigToday.get();  }
+
+    public void setMarketsInResolutionZone(long count) { this.marketsInResolutionZone = count; }
+    public long getMarketsInResolutionZone()           { return marketsInResolutionZone; }
+
+    /** Resets the today-alert counters at UTC midnight. */
+    @Scheduled(cron = "0 0 0 * * *")
+    public void resetDailyAlertCounters() {
+        alertsFiredToday.set(0);
+        insiderSigToday.set(0);
+    }
 
     /**
      * Records that {@code address} was active at the current wall-clock time.

@@ -1,6 +1,7 @@
 package com.polysign.alert;
 
 import com.polysign.common.AppClock;
+import com.polysign.common.AppStats;
 import com.polysign.model.Alert;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -40,6 +41,7 @@ public class AlertService {
     private final SqsClient sqsClient;
     private final AppClock clock;
     private final MeterRegistry meterRegistry;
+    private final AppStats appStats;
     private final String alertsQueueName;
 
     // Lazily resolved — BootstrapRunner creates the queue after beans are wired.
@@ -49,11 +51,13 @@ public class AlertService {
                         SqsClient sqsClient,
                         AppClock clock,
                         MeterRegistry meterRegistry,
+                        AppStats appStats,
                         @Value("${polysign.sqs.queues.alerts-to-notify:alerts-to-notify}") String alertsQueueName) {
         this.alertsTable = alertsTable;
         this.sqsClient = sqsClient;
         this.clock = clock;
         this.meterRegistry = meterRegistry;
+        this.appStats = appStats;
         this.alertsQueueName = alertsQueueName;
     }
 
@@ -112,6 +116,8 @@ public class AlertService {
                 : "unknown";
         log.info("alert_created alertId={} marketId={} type={} tier={} severity={}",
                 alert.getAlertId(), alert.getMarketId(), alert.getType(), tier, alert.getSeverity());
+
+        appStats.recordAlertFired(alert.getType());
 
         Counter.builder("polysign.alerts.fired")
                 .tag("type", alert.getType())
