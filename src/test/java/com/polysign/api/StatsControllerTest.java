@@ -5,6 +5,7 @@ import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,9 @@ class StatsControllerTest {
     DynamoDbTable<WatchedWallet> watchedWalletsTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    DynamoDbTable<Market> marketsTable;
+
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     DynamoDbTable<AlertOutcome> alertOutcomesTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
@@ -68,6 +72,12 @@ class StatsControllerTest {
         // stub MeterRegistry gauge lookup to return null (no gauge registered)
         when(meterRegistry.find(any()).gauge()).thenReturn(null);
 
+        // Simulate post-first-poll state so tests exercise the AppStats path.
+        // The fallback scan (lastPoll == null) is covered by StatsResolutionZoneIT.
+        lenient().when(appStats.getLastMarketPollAt())
+                .thenReturn(Instant.parse("2026-04-09T11:55:00Z"));
+        lenient().when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
+
         // Fix 1: walletsSeenInLast24h comes from appStats, not a DB scan.
         // lenient — some tests override this stub with a specific return value.
         lenient().when(appStats.walletsSeenInLast24h(any(Clock.class))).thenReturn(0L);
@@ -80,7 +90,7 @@ class StatsControllerTest {
                 .thenReturn(new SignalPerformanceService.AggregateSkill(null, 0, null, 0, 0, 0));
 
         controller = new StatsController(
-                watchedWalletsTable, alertOutcomesTable,
+                watchedWalletsTable, marketsTable, alertOutcomesTable,
                 meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 

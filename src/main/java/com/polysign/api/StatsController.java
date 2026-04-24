@@ -1,11 +1,13 @@
 package com.polysign.api;
 
+import com.polysign.backtest.MarketPredicates;
 import com.polysign.backtest.SignalPerformanceService;
 import com.polysign.backtest.SignalPerformanceService.AggregatePrecision;
 import com.polysign.backtest.SignalPerformanceService.AggregateSkill;
 import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.AlertOutcome;
+import com.polysign.model.Market;
 import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -47,6 +49,7 @@ public class StatsController {
     private static final long CACHE_TTL_MS = 60_000L;
 
     private final DynamoDbTable<WatchedWallet> watchedWalletsTable;
+    private final DynamoDbTable<Market>        marketsTable;
     private final DynamoDbTable<AlertOutcome>  alertOutcomesTable;
     private final MeterRegistry                meterRegistry;
     private final AppStats                     appStats;
@@ -59,6 +62,7 @@ public class StatsController {
 
     public StatsController(
             DynamoDbTable<WatchedWallet> watchedWalletsTable,
+            DynamoDbTable<Market> marketsTable,
             DynamoDbTable<AlertOutcome> alertOutcomesTable,
             MeterRegistry meterRegistry,
             AppStats appStats,
@@ -66,6 +70,7 @@ public class StatsController {
             @Value("${polysign.ntfy.topic}") String ntfyTopic,
             SignalPerformanceService signalPerformanceService) {
         this.watchedWalletsTable       = watchedWalletsTable;
+        this.marketsTable              = marketsTable;
         this.alertOutcomesTable        = alertOutcomesTable;
         this.meterRegistry             = meterRegistry;
         this.appStats                  = appStats;
@@ -139,8 +144,14 @@ public class StatsController {
         // Brier skill for top stat card (resolution horizon, core zone, all-time)
         AggregateSkill resSkill = signalPerformanceService.getAggregateSkill("resolution", null);
 
-        // marketsInResolutionZone is maintained by MarketPoller after each cycle — no scan needed.
-        long marketsInResolutionZone = appStats.getMarketsInResolutionZone();
+        // marketsInResolutionZone: use AppStats when MarketPoller has completed at least one cycle.
+        // Fall back to a live scan when lastPoll is null (cold start, or MarketPoller is mocked in
+        // integration tests) so the value reflects the actual table state rather than 0.
+        long marketsInResolutionZone = lastPoll != null
+                ? appStats.getMarketsInResolutionZone()
+                : marketsTable.scan().items().stream()
+                        .filter(m -> MarketPredicates.effectivelyResolved(m).isPresent())
+                        .count();
 
         // TODO: add a firedAt GSI to alert_outcomes so this can be a time-bounded query
         // instead of a bounded scan over the first 1000 items by hash-key order.
