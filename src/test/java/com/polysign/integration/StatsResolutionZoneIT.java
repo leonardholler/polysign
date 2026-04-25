@@ -31,6 +31,8 @@ class StatsResolutionZoneIT extends AbstractIntegrationIT {
     @AfterEach
     void cleanup() {
         marketsTable.deleteItem(Key.builder().partitionValue(TEST_MARKET_ID).build());
+        // Clear the 60-second StatsController cache so test ordering doesn't cause stale reads.
+        statsController.clearCache();
     }
 
     @Test

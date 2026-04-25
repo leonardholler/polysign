@@ -199,6 +199,12 @@ public class StatsController {
         return response;
     }
 
+    /** Resets the response cache. Used by integration tests to prevent stale-cache failures across test ordering. */
+    public void clearCache() {
+        cachedStats.set(null);
+        cachedAtMillis = 0L;
+    }
+
     /** Returns true when priceAtHorizon is a decisive binary outcome (>= 0.99 or <= 0.01). */
     private static boolean isFullyResolved(BigDecimal price) {
         if (price == null) return false;
