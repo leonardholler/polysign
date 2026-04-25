@@ -107,7 +107,7 @@ Prerequisites: Java 25, Maven, Docker.
 ```bash
 git clone https://github.com/leonardholler/polysign.git
 cd polysign
-docker compose up --build
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
 
 Wait ~90 seconds for LocalStack to bootstrap tables and queues. The dashboard is served at `http://localhost:8080`. The first cycle takes a few minutes — `MarketPoller` paginates Polymarket's 50,000+ markets, applies quality filters (volume floors, time-to-expiry, 24h activity), and keeps the top ~400 by 24h volume. After that, everything runs every 60 seconds.
