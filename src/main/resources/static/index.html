@@ -19,7 +19,14 @@
   </script>
   <style>
     * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    html, body { background: #f9fafb; }
+    html, body { background: #cbeda8; }
+    /* Two-tone green palette */
+    .bg-white             { background-color: #e8f7d8 !important; }
+    .bg-gray-50           { background-color: #9acc68 !important; }
+    .border-gray-100      { border-color: #82b84e !important; }
+    .border-gray-200      { border-color: #6ea03a !important; }
+    .border-t-gray-100    { border-top-color: #82b84e !important; }
+    .hover\:bg-gray-50:hover { background-color: #b2de88 !important; }
     .live-pulse { animation: pulse-live 2s infinite; }
     @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .tabnum { font-variant-numeric: tabular-nums; }
@@ -390,7 +397,7 @@ async function loadAlerts() {
           ${priceStr}
           <span class="flex items-center gap-1.5 shrink-0">${countBadge}${latestType}${recentTime}</span>
         </div>
-        <div class="border-t border-gray-100 space-y-1 p-1.5 bg-gray-50/50">
+        <div class="border-t border-gray-100 space-y-1 p-1.5 bg-[#9acc68]">
           ${firstCard}
           ${hasExtra ? `<div id="mgrp-${safeId}" class="${isExpanded ? '' : 'hidden'} space-y-1 mt-1">${extraCards}</div>` : ''}
         </div>
