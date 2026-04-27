@@ -56,7 +56,7 @@
 <div class="pt-16">
 
 <!-- ── Stats row ─────────────────────────────────────────────────────────── -->
-<div class="grid grid-cols-2 md:grid-cols-5 gap-px bg-gray-800 border-b border-gray-800">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-800 border-b border-gray-800">
   <div class="bg-gray-900 px-4 py-3">
     <div class="text-xs text-gray-500 mb-0.5">Markets Tracked</div>
     <div class="text-2xl font-bold text-gray-100" id="st-markets">—</div>
@@ -77,16 +77,6 @@
     <div class="text-2xl font-bold text-gray-100" id="st-precision">—</div>
     <div class="text-xs text-gray-600" id="st-precision-samples">no scored alerts yet</div>
   </div>
-  <div class="bg-gray-900 px-4 py-3">
-    <div class="text-xs text-gray-500 mb-0.5">Insider Signals</div>
-    <div class="text-2xl font-bold text-gray-100" id="st-insider">—</div>
-    <div class="text-xs text-gray-600" id="st-insider-sub">— wallets 24h</div>
-  </div>
-</div>
-
-<!-- ── Signal Quality row ─────────────────────────────────────────────────── -->
-<div class="border-b border-gray-800 px-4 py-1.5">
-  <span class="text-xs text-gray-500">Signal Quality (1h eval · 7-day window) — <span id="sq-summary" class="text-gray-500">price —% · anomaly —% · insider —%</span></span>
 </div>
 
 <!-- ── Signal Performance by Category ───────────────────────────────────── -->
@@ -460,8 +450,6 @@ async function loadStats() {
       ? 'no skill data yet'
       : `${skillCount} scorable alerts · core zone · precision ${precRes != null ? precRes + '%' : '—'}`;
 
-    document.getElementById('st-insider').textContent  = d.insiderSignatureCount ?? '—';
-    document.getElementById('st-insider-sub').textContent = d.walletsSeenToday != null ? d.walletsSeenToday + ' wallets seen 24h' : '— wallets 24h';
     const prec1h = d.signalPrecision7d1h;
     document.getElementById('st-precision').textContent =
         samples1h > 0 ? (prec1h != null ? (prec1h * 100).toFixed(1) + '%' : '—') : '—';
@@ -487,26 +475,16 @@ async function loadStats() {
   } catch (_) {}
 }
 
-// ── Signal Quality ────────────────────────────────────────────────────────────
-
-(async function loadSqSummary() {
-  try {
-    const r = await fetch('/api/signals/performance?horizon=t1h');
-    if (!r.ok) return;
-    const d = await r.json();
-    const idx = {};
-    (d.detectors || []).forEach(x => { idx[x.type] = x; });
-    document.getElementById('sq-summary').textContent =
-      `price ${fmtSkill(idx.price_movement?.coreZone?.meanBrierSkill)} · anomaly ${fmtSkill(idx.statistical_anomaly?.coreZone?.meanBrierSkill)} · insider ${fmtSkill(idx.insider_signature?.coreZone?.meanBrierSkill)}`;
-  } catch (_) {}
-})();
-
 // ── Signal Performance by Category ───────────────────────────────────────────
 
 let catData = [];
 let catSortKey = 'precisionT1h';
 let catSortAsc = false;
-let catOpen = true;
+let catOpen = window.innerWidth >= 768;
+if (!catOpen) {
+  document.getElementById('cat-panel').style.display = 'none';
+  document.getElementById('cat-chevron').style.transform = 'rotate(180deg)';
+}
 
 function toggleCatPanel() {
   catOpen = !catOpen;
