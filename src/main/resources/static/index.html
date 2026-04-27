@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,7 +10,6 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      darkMode: 'class',
       theme: {
         extend: {
           fontFamily: { sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'] }
@@ -20,92 +19,92 @@
   </script>
   <style>
     * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    html, body { background: #09090b; }
+    html, body { background: #f9fafb; }
     .live-pulse { animation: pulse-live 2s infinite; }
     @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .tabnum { font-variant-numeric: tabular-nums; }
-    .mono { font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace; }
+    .mono { font-family: ui-monospace, 'Cascadia Code', monospace; }
   </style>
 </head>
-<body class="text-zinc-100 min-h-screen font-sans antialiased">
+<body class="text-gray-900 min-h-screen font-sans antialiased">
 
 <!-- ── Header ─────────────────────────────────────────────────────────────── -->
-<header class="fixed top-0 left-0 right-0 z-30 h-[52px] flex items-center px-5 gap-4 border-b border-zinc-800/50 bg-[#09090b]/95 backdrop-blur-sm">
-  <span class="text-[15px] font-bold tracking-tight text-white">PolySign</span>
-  <span class="text-zinc-800 hidden sm:inline">·</span>
-  <span class="text-xs text-zinc-600 hidden sm:inline">prediction intelligence</span>
+<header class="fixed top-0 left-0 right-0 z-30 h-[52px] flex items-center px-5 gap-4 border-b border-gray-200 bg-white">
+  <span class="text-[15px] font-bold tracking-tight text-gray-900">PolySign</span>
+  <span class="text-gray-300 hidden sm:inline">·</span>
+  <span class="text-xs text-gray-400 hidden sm:inline">prediction intelligence</span>
 
   <span id="conn-status" class="flex items-center gap-1.5 ml-1">
-    <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
-    <span id="conn-label" class="text-xs text-zinc-500">—</span>
+    <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-gray-300"></span>
+    <span id="conn-label" class="text-xs text-gray-400">—</span>
   </span>
 
-  <div class="hidden sm:flex items-center gap-1 text-xs text-zinc-600">
-    <span class="text-zinc-300 font-medium" id="h-markets">—</span>&nbsp;markets
-    <span class="mx-2 text-zinc-800">·</span>
-    poll&nbsp;<span class="text-zinc-300 font-medium" id="h-poll">—</span>
+  <div class="hidden sm:flex items-center gap-1 text-xs text-gray-400">
+    <span class="text-gray-700 font-medium" id="h-markets">—</span>&nbsp;markets
+    <span class="mx-2 text-gray-200">·</span>
+    poll&nbsp;<span class="text-gray-700 font-medium" id="h-poll">—</span>
   </div>
 
   <div class="ml-auto flex items-center gap-2">
-    <span class="text-[11px] text-zinc-700 hidden sm:inline">ntfy</span>
-    <code id="h-topic" class="mono text-xs text-violet-400 cursor-pointer hover:text-violet-300 transition-colors" title="Click to copy" onclick="copyTopic()">—</code>
+    <span class="text-xs text-gray-400 hidden sm:inline">ntfy</span>
+    <code id="h-topic" class="mono text-xs text-violet-500 cursor-pointer hover:text-violet-700 transition-colors" title="Click to copy" onclick="copyTopic()">—</code>
   </div>
 </header>
 
 <div class="pt-[52px]">
 
 <!-- ── Stats ─────────────────────────────────────────────────────────────── -->
-<div class="grid grid-cols-2 md:grid-cols-4 border-b border-zinc-800/50">
-  <div class="px-5 py-5 border-r border-zinc-800/50">
-    <p class="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-3">Markets</p>
-    <p class="text-[30px] font-bold text-white leading-none tabnum" id="st-markets">—</p>
-    <p class="text-[11px] text-zinc-600 mt-2" id="st-watched">— watched</p>
+<div class="grid grid-cols-2 md:grid-cols-4 border-b border-gray-200 bg-white">
+  <div class="px-6 py-5 border-r border-gray-100">
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Markets</p>
+    <p class="text-[32px] font-bold text-gray-900 leading-none tabnum" id="st-markets">—</p>
+    <p class="text-[11px] text-gray-400 mt-2" id="st-watched">— watched</p>
   </div>
-  <div class="px-5 py-5 border-r border-zinc-800/50">
-    <p class="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-3">Alerts Today</p>
-    <p class="text-[30px] font-bold text-white leading-none tabnum" id="st-alerts">—</p>
-    <p class="text-[11px] text-zinc-600 mt-2" id="st-alerts-sub">— scored this week</p>
+  <div class="px-6 py-5 border-r border-gray-100">
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Alerts Today</p>
+    <p class="text-[32px] font-bold text-gray-900 leading-none tabnum" id="st-alerts">—</p>
+    <p class="text-[11px] text-gray-400 mt-2" id="st-alerts-sub">— scored this week</p>
   </div>
-  <div class="px-5 py-5 border-r border-zinc-800/50 border-t border-t-zinc-800/50 md:border-t-0">
-    <p class="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-3">Signal Skill</p>
-    <p class="text-[30px] font-bold text-white leading-none tabnum" id="st-res-acc">—</p>
-    <p class="text-[11px] text-zinc-600 mt-2" id="st-res-acc-sub">no skill data yet</p>
+  <div class="px-6 py-5 border-r border-gray-100 border-t border-t-gray-100 md:border-t-0">
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Signal Skill</p>
+    <p class="text-[32px] font-bold text-gray-900 leading-none tabnum" id="st-res-acc">—</p>
+    <p class="text-[11px] text-gray-400 mt-2" id="st-res-acc-sub">no skill data yet</p>
   </div>
-  <div class="px-5 py-5 border-t border-t-zinc-800/50 md:border-t-0">
-    <p class="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-3">Precision · 1h</p>
-    <p class="text-[30px] font-bold text-white leading-none tabnum" id="st-precision">—</p>
-    <p class="text-[11px] text-zinc-600 mt-2" id="st-precision-samples">no scored alerts yet</p>
+  <div class="px-6 py-5 border-t border-t-gray-100 md:border-t-0">
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Precision · 1h</p>
+    <p class="text-[32px] font-bold text-gray-900 leading-none tabnum" id="st-precision">—</p>
+    <p class="text-[11px] text-gray-400 mt-2" id="st-precision-samples">no scored alerts yet</p>
   </div>
 </div>
 
 <!-- ── Signal Performance by Category ────────────────────────────────────── -->
-<div class="border-b border-zinc-800/50">
+<div class="border-b border-gray-200 bg-white">
   <button id="cat-toggle" onclick="toggleCatPanel()"
-          class="w-full flex items-center justify-between px-5 py-2.5 hover:bg-zinc-900/40 transition-colors focus:outline-none">
-    <span class="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest">
+          class="w-full flex items-center justify-between px-6 py-2.5 hover:bg-gray-50 transition-colors focus:outline-none">
+    <span class="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
       Signal Performance by Category
-      <span class="font-normal normal-case tracking-normal text-zinc-800 ml-1">· last 7 days</span>
+      <span class="font-normal normal-case tracking-normal text-gray-300 ml-1">· last 7 days</span>
     </span>
-    <span id="cat-chevron" class="text-zinc-700 text-[10px] transition-transform duration-200">▲</span>
+    <span id="cat-chevron" class="text-gray-300 text-[10px] transition-transform duration-200">▲</span>
   </button>
   <div id="cat-panel">
     <table class="w-full text-xs border-collapse">
       <thead>
-        <tr class="border-t border-zinc-800/50">
-          <th class="px-5 py-2 text-left text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors" onclick="sortCat('category')">Category <span id="cat-sort-category" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors" onclick="sortCat('alertCount')">Alerts <span id="cat-sort-alertCount" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors" onclick="sortCat('precisionT15m')">P@15m <span id="cat-sort-precisionT15m" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors" onclick="sortCat('precisionT1h')">P@1h <span id="cat-sort-precisionT1h" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors hidden md:table-cell" onclick="sortCat('precisionT24h')">P@24h <span id="cat-sort-precisionT24h" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors hidden md:table-cell" onclick="sortCat('avgMagnitudePp')">Avg Move <span id="cat-sort-avgMagnitudePp" class="text-zinc-700"></span></th>
-          <th class="px-4 py-2 text-right text-[10px] font-semibold text-zinc-600 uppercase tracking-widest cursor-pointer hover:text-zinc-400 transition-colors" onclick="sortCat('sampleCount')">n <span id="cat-sort-sampleCount" class="text-zinc-700"></span></th>
+        <tr class="border-t border-gray-100">
+          <th class="px-6 py-2 text-left text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors" onclick="sortCat('category')">Category <span id="cat-sort-category" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors" onclick="sortCat('alertCount')">Alerts <span id="cat-sort-alertCount" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors" onclick="sortCat('precisionT15m')">P@15m <span id="cat-sort-precisionT15m" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors" onclick="sortCat('precisionT1h')">P@1h <span id="cat-sort-precisionT1h" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors hidden md:table-cell" onclick="sortCat('precisionT24h')">P@24h <span id="cat-sort-precisionT24h" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors hidden md:table-cell" onclick="sortCat('avgMagnitudePp')">Avg Move <span id="cat-sort-avgMagnitudePp" class="text-gray-300"></span></th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-widest cursor-pointer hover:text-gray-600 transition-colors" onclick="sortCat('sampleCount')">n <span id="cat-sort-sampleCount" class="text-gray-300"></span></th>
         </tr>
       </thead>
       <tbody id="cat-tbody">
-        <tr><td colspan="7" class="px-5 py-3 text-zinc-700">Loading…</td></tr>
+        <tr><td colspan="7" class="px-6 py-3 text-gray-400">Loading…</td></tr>
       </tbody>
     </table>
-    <p class="px-5 py-2 text-[10px] text-zinc-800">7-day totals, not today's</p>
+    <p class="px-6 py-2 text-[10px] text-gray-300">7-day totals, not today's</p>
   </div>
 </div>
 
@@ -113,34 +112,34 @@
 <div class="flex flex-col md:flex-row min-h-screen">
 
   <!-- Left: Live Events -->
-  <div class="flex-1 md:w-[63%] border-r border-zinc-800/50 px-5 py-5">
+  <div class="flex-1 md:w-[63%] border-r border-gray-200 px-6 py-5 bg-gray-50">
     <div class="flex items-center gap-2 mb-4">
-      <h2 class="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Live Events</h2>
-      <span class="text-zinc-800">·</span>
-      <span class="text-[11px] text-zinc-700">grouped by market · 10s refresh</span>
+      <h2 class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Live Events</h2>
+      <span class="text-gray-200">·</span>
+      <span class="text-[11px] text-gray-400">grouped by market · 10s refresh</span>
     </div>
     <div id="alert-feed-container">
       <div id="alert-feed" class="space-y-2">
-        <div class="text-zinc-700 text-xs py-10 text-center">Loading…</div>
+        <div class="text-gray-400 text-xs py-10 text-center">Loading…</div>
       </div>
     </div>
   </div>
 
   <!-- Right: Resolutions -->
-  <div class="md:w-[37%] px-5 py-5">
+  <div class="md:w-[37%] px-6 py-5 bg-white">
     <div class="flex items-center gap-2 mb-1">
-      <h2 class="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Recent Resolutions</h2>
-      <span class="text-zinc-800">·</span>
-      <span class="text-[11px] text-zinc-700">60s</span>
+      <h2 class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Recent Resolutions</h2>
+      <span class="text-gray-200">·</span>
+      <span class="text-[11px] text-gray-400">60s</span>
     </div>
-    <p id="resolutions-summary" class="text-[11px] text-zinc-700 mb-4">—</p>
+    <p id="resolutions-summary" class="text-[11px] text-gray-400 mb-4">—</p>
     <div id="resolutions-list" class="space-y-2">
-      <div class="text-zinc-700 text-xs py-4 text-center">Loading…</div>
+      <div class="text-gray-400 text-xs py-4 text-center">Loading…</div>
     </div>
   </div>
 
 </div>
-</div><!-- /pt-[52px] -->
+</div>
 
 <script>
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -159,21 +158,16 @@ function fmtUsd(n) {
   return '$' + Number(n).toFixed(0);
 }
 
-function fmtPct(v) {
-  if (v == null) return '—';
-  return (v * 100).toFixed(0) + '%';
-}
-
 function fmtSkill(v) {
   if (v == null) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(3);
 }
 
 function fmtPrecisionStat(s) {
-  if (!s || s.denominator < 20) return '<span class="text-zinc-700">—</span>';
+  if (!s || s.denominator < 20) return '<span class="text-gray-300">—</span>';
   const pct = Math.round((s.precision ?? 0) * 100);
-  const col = pct >= 60 ? 'text-emerald-400' : pct >= 50 ? 'text-amber-400' : 'text-red-400';
-  return `<span class="${col}">${pct}%</span> <span class="text-zinc-700">${s.numerator}/${s.denominator}</span>`;
+  const col = pct >= 60 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-500' : 'text-red-500';
+  return `<span class="${col} font-medium">${pct}%</span> <span class="text-gray-300">${s.numerator}/${s.denominator}</span>`;
 }
 
 function catSortValue(row, key) {
@@ -181,13 +175,6 @@ function catSortValue(row, key) {
   if (key === 'precisionT1h')  return row.t1h?.precision  ?? null;
   if (key === 'precisionT24h') return row.t24h?.precision ?? null;
   return row[key] ?? null;
-}
-
-function precisionColor(v) {
-  if (v == null)  return 'text-zinc-600';
-  if (v >= 0.60)  return 'text-emerald-400';
-  if (v >= 0.50)  return 'text-amber-400';
-  return 'text-red-400';
 }
 
 function relativeTime(iso) {
@@ -223,10 +210,10 @@ function resolutionElapsed(firedAt, evaluatedAt) {
 }
 
 function priceColor(p) {
-  if (p == null) return 'text-zinc-100';
-  if (p > 0.65) return 'text-emerald-400';
-  if (p < 0.35) return 'text-red-400';
-  return 'text-zinc-300';
+  if (p == null) return 'text-gray-700';
+  if (p > 0.65) return 'text-emerald-600';
+  if (p < 0.35) return 'text-red-500';
+  return 'text-gray-700';
 }
 
 function copyTopic() {
@@ -242,8 +229,13 @@ function typeLabel(type) {
 }
 
 function typeColor(type) {
-  return { price_movement:'text-sky-400', statistical_anomaly:'text-violet-400',
-           wallet_activity:'text-pink-400', insider_signature:'text-amber-400' }[type] || 'text-zinc-500';
+  return { price_movement:'text-blue-600', statistical_anomaly:'text-violet-600',
+           wallet_activity:'text-pink-600', insider_signature:'text-amber-600' }[type] || 'text-gray-500';
+}
+
+function typeBg(type) {
+  return { price_movement:'bg-blue-50 text-blue-700', statistical_anomaly:'bg-violet-50 text-violet-700',
+           wallet_activity:'bg-pink-50 text-pink-700', insider_signature:'bg-amber-50 text-amber-700' }[type] || 'bg-gray-100 text-gray-600';
 }
 
 function renderAlertDetail(a) {
@@ -252,63 +244,62 @@ function renderAlertDetail(a) {
     const from = m.fromPrice, to = m.toPrice, pct = m.movePct, dir = m.direction;
     if (!from || !to || !pct) return a.title || '';
     const arrow = dir === 'up' ? '↑' : '↓';
-    const col   = dir === 'up' ? 'text-emerald-400' : 'text-red-400';
+    const col   = dir === 'up' ? 'text-emerald-600' : 'text-red-500';
     const zt    = m.zoneTransition;
     let zoneTag = '';
-    if (zt === 'ENTERED_BULLISH') zoneTag = ' <span class="text-emerald-700">▲ res. zone</span>';
-    else if (zt === 'ENTERED_BEARISH') zoneTag = ' <span class="text-red-800">▼ res. zone</span>';
-    else if (zt === 'MID_RANGE') zoneTag = ' <span class="text-zinc-700">mid</span>';
+    if (zt === 'ENTERED_BULLISH') zoneTag = ' <span class="text-emerald-500 text-[10px]">▲ res. zone</span>';
+    else if (zt === 'ENTERED_BEARISH') zoneTag = ' <span class="text-red-400 text-[10px]">▼ res. zone</span>';
     let bookTag = '';
     const spread = parseFloat(m.spreadBps || 0), depth = parseFloat(m.depthAtMid || 0);
     if (spread > 0 || depth > 0) {
       const parts = [];
       if (spread > 0) parts.push(spread.toFixed(0) + 'bps');
       if (depth  > 0) parts.push(fmtUsd(depth));
-      bookTag = ' <span class="text-zinc-700">' + parts.join(' · ') + '</span>';
+      bookTag = ' <span class="text-gray-400">' + parts.join(' · ') + '</span>';
     }
-    return `<span class="text-zinc-500">${(parseFloat(from)*100).toFixed(1)}¢ → ${(parseFloat(to)*100).toFixed(1)}¢</span> <span class="${col} font-medium">${parseFloat(pct).toFixed(1)}% ${arrow}</span>${zoneTag}${bookTag}`;
+    return `<span class="text-gray-500">${(parseFloat(from)*100).toFixed(1)}¢ → ${(parseFloat(to)*100).toFixed(1)}¢</span> <span class="${col} font-semibold">${parseFloat(pct).toFixed(1)}% ${arrow}</span>${zoneTag}${bookTag}`;
   }
   if (a.type === 'statistical_anomaly') {
-    const z = m.zScore, mean = m.mean, std = m.stddev;
+    const z = m.zScore, std = m.stddev;
     if (!z) return a.title || '';
-    return `<span class="text-violet-400 font-medium">z=${parseFloat(z).toFixed(1)}</span>` +
-           (mean && std ? ` <span class="text-zinc-700">σ=${parseFloat(std).toFixed(3)}</span>` : '');
+    return `<span class="text-violet-600 font-semibold">z=${parseFloat(z).toFixed(1)}</span>` +
+           (std ? ` <span class="text-gray-400">σ=${parseFloat(std).toFixed(3)}</span>` : '');
   }
   if (a.type === 'wallet_activity') {
     const alias = m.alias || m.walletAlias || '';
     const dir   = m.direction || m.side || '';
     const out   = m.outcome || '';
     const sz    = m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '';
-    const col   = dir === 'BUY' ? 'text-emerald-400' : 'text-red-400';
-    const ep    = m.entryPrice && m.entryPrice !== '?' ? ` <span class="text-zinc-600">@ ${(parseFloat(m.entryPrice)*100).toFixed(1)}¢</span>` : '';
-    return `<span class="${col} font-medium">${alias || '?'} ${dir} ${out}</span>` +
-           (sz ? ` <span class="text-zinc-400">${sz}</span>` : '') + ep;
+    const col   = dir === 'BUY' ? 'text-emerald-600' : 'text-red-500';
+    const ep    = m.entryPrice && m.entryPrice !== '?' ? ` <span class="text-gray-400">@ ${(parseFloat(m.entryPrice)*100).toFixed(1)}¢</span>` : '';
+    return `<span class="${col} font-semibold">${alias || '?'} ${dir} ${out}</span>` +
+           (sz ? ` <span class="text-gray-600">${sz}</span>` : '') + ep;
   }
   if (a.type === 'insider_signature') {
     const age = m.walletAgeDays === 'unknown' ? '?' : (m.walletAgeDays + 'd');
     const sz  = m.tradeSizeUsd ? fmtUsd(parseFloat(m.tradeSizeUsd)) : (m.sizeUsdc ? fmtUsd(parseFloat(m.sizeUsdc)) : '');
     const out = m.outcomeSide || '';
     const tc  = m.walletLifetimeTrades != null ? m.walletLifetimeTrades + ' trades' : '';
-    return `<span class="text-amber-400 font-medium">BUY ${out}</span>` +
-           (sz ? ` <span class="text-zinc-400">${sz}</span>` : '') +
-           ` <span class="text-zinc-700">age ${age}${tc ? ' · ' + tc : ''}</span>`;
+    return `<span class="text-amber-600 font-semibold">BUY ${out}</span>` +
+           (sz ? ` <span class="text-gray-600">${sz}</span>` : '') +
+           ` <span class="text-gray-400">age ${age}${tc ? ' · ' + tc : ''}</span>`;
   }
   return a.title || '';
 }
 
 function renderAlertCard(a) {
-  const typeCol = typeColor(a.type);
-  const detail  = renderAlertDetail(a);
-  const link    = a.link ? `<a href="${a.link}" target="_blank" rel="noopener" class="text-zinc-700 hover:text-blue-400 transition-colors text-[10px] shrink-0">↗</a>` : '';
+  const detail   = renderAlertDetail(a);
+  const badgeCls = typeBg(a.type);
+  const link     = a.link ? `<a href="${a.link}" target="_blank" rel="noopener" class="text-gray-400 hover:text-blue-500 transition-colors text-[10px] shrink-0">↗</a>` : '';
   const question = a.marketQuestion
-    ? `<p class="text-zinc-600 text-[10px] truncate mb-1.5">${truncate(a.marketQuestion, 55)}</p>` : '';
-  return `<div class="rounded-md bg-zinc-900/50 border border-zinc-800/50 px-3 py-2.5">
+    ? `<p class="text-gray-400 text-[10px] truncate mb-1.5">${truncate(a.marketQuestion, 55)}</p>` : '';
+  return `<div class="rounded-lg bg-white border border-gray-100 px-3 py-2.5 shadow-sm">
     ${question}
-    <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-      <span class="text-[10px] font-semibold tracking-wide ${typeCol}">${typeLabel(a.type)}</span>
-      <span class="text-zinc-300 text-xs">${detail}</span>
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span class="text-[9px] font-bold tracking-widest px-1.5 py-0.5 rounded ${badgeCls}">${typeLabel(a.type)}</span>
+      <span class="text-gray-700 text-xs">${detail}</span>
       ${link}
-      <span class="ml-auto text-zinc-700 text-[10px] tabnum shrink-0">${relativeTime(a.createdAt)}</span>
+      <span class="ml-auto text-gray-300 text-[10px] tabnum shrink-0">${relativeTime(a.createdAt)}</span>
     </div>
   </div>`;
 }
@@ -341,7 +332,7 @@ async function loadAlerts() {
     alerts = alerts.filter(a => (a.score ?? 1) >= 0.3);
 
     if (alerts.length === 0) {
-      const empty = `<div class="text-center py-12 text-zinc-700">
+      const empty = `<div class="text-center py-12 text-gray-400">
         <div class="text-3xl mb-3 opacity-30">◎</div>
         <p class="text-xs">No alerts yet — price alerts need ~15 min of history after startup</p>
       </div>`;
@@ -375,30 +366,31 @@ async function loadAlerts() {
       const hasCritical = g.alerts.some(a => a.severity === 'critical');
       if (hasCritical) expandedMarkets.add(safeId);
 
-      const isExpanded  = expandedMarkets.has(safeId);
-      const priceNum    = g.price != null ? g.price : null;
-      const priceStr    = priceNum != null
+      const isExpanded = expandedMarkets.has(safeId);
+      const priceNum   = g.price != null ? g.price : null;
+      const priceStr   = priceNum != null
         ? `<span class="font-semibold tabnum text-sm ${priceColor(priceNum)}">${(priceNum*100).toFixed(1)}¢</span>` : '';
-      const countBadge  = g.alerts.length > 1
-        ? `<span class="text-[10px] tabnum px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500">${g.alerts.length}</span>` : '';
-      const latestType  = `<span class="text-[10px] font-semibold ${typeColor(first.type)}">${typeLabel(first.type)}</span>`;
-      const recentTime  = `<span class="text-zinc-700 text-[10px] tabnum">${relativeTime(first.createdAt)}</span>`;
+      const countBadge = g.alerts.length > 1
+        ? `<span class="text-[10px] tabnum px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">${g.alerts.length}</span>` : '';
+      const badgeCls   = typeBg(first.type);
+      const latestType = `<span class="text-[9px] font-bold tracking-widest px-1.5 py-0.5 rounded ${badgeCls}">${typeLabel(first.type)}</span>`;
+      const recentTime = `<span class="text-gray-400 text-[10px] tabnum">${relativeTime(first.createdAt)}</span>`;
 
       const firstCard  = renderAlertCard(g.alerts[0]);
       const hasExtra   = g.alerts.length > 1;
       const extraCards = hasExtra ? g.alerts.slice(1).map(a => renderAlertCard(a)).join('') : '';
 
-      return `<div class="rounded-lg border border-zinc-800/60 bg-zinc-900/20 overflow-hidden">
-        <div class="flex flex-wrap items-center gap-2 px-3 py-2.5 ${hasExtra ? 'cursor-pointer hover:bg-zinc-800/20' : ''} select-none transition-colors"
+      return `<div class="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+        <div class="flex flex-wrap items-center gap-2 px-4 py-3 ${hasExtra ? 'cursor-pointer hover:bg-gray-50' : ''} select-none transition-colors"
              ${hasExtra ? `onclick="toggleMarket('${safeId}')"` : ''}>
-          <span id="mchev-${safeId}" class="text-zinc-700 text-[10px] w-3">${hasExtra ? (isExpanded ? '▾' : '▸') : ''}</span>
+          <span id="mchev-${safeId}" class="text-gray-300 text-[10px] w-3">${hasExtra ? (isExpanded ? '▾' : '▸') : ''}</span>
           <a href="${pmLink}" target="_blank" rel="noopener"
-             class="text-zinc-200 hover:text-white flex-1 leading-snug font-medium transition-colors"
+             class="text-gray-800 hover:text-blue-600 flex-1 leading-snug font-medium text-sm transition-colors"
              onclick="event.stopPropagation()">${truncate(g.question || g.marketId, 80)}</a>
           ${priceStr}
           <span class="flex items-center gap-1.5 shrink-0">${countBadge}${latestType}${recentTime}</span>
         </div>
-        <div class="border-t border-zinc-800/40 space-y-1 p-1.5">
+        <div class="border-t border-gray-100 space-y-1 p-1.5 bg-gray-50/50">
           ${firstCard}
           ${hasExtra ? `<div id="mgrp-${safeId}" class="${isExpanded ? '' : 'hidden'} space-y-1 mt-1">${extraCards}</div>` : ''}
         </div>
@@ -458,16 +450,16 @@ async function loadStats() {
     if (pollAge < 120) {
       dot.className   = 'w-1.5 h-1.5 rounded-full bg-emerald-400 live-pulse';
       label.textContent = 'Live';
-      label.className = 'text-xs text-emerald-400';
+      label.className = 'text-xs text-emerald-500 font-medium';
     } else {
-      dot.className   = 'w-1.5 h-1.5 rounded-full bg-red-500';
+      dot.className   = 'w-1.5 h-1.5 rounded-full bg-red-400';
       label.textContent = 'Stale';
-      label.className = 'text-xs text-red-400';
+      label.className = 'text-xs text-red-500';
     }
   } catch (_) {}
 }
 
-// ── Signal Performance by Category ───────────────────────────────────────────
+// ── Category Performance ──────────────────────────────────────────────────────
 
 let catData    = [];
 let catSortKey = 'precisionT1h';
@@ -506,19 +498,19 @@ function renderCatTable() {
 
   const tbody = document.getElementById('cat-tbody');
   if (sorted.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="px-5 py-3 text-zinc-700">No data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-3 text-gray-400">No data</td></tr>';
     return;
   }
 
   tbody.innerHTML = sorted.map(c => {
-    return `<tr class="border-t border-zinc-800/40 hover:bg-zinc-900/40 transition-colors">
-      <td class="px-5 py-1.5 text-left text-zinc-300 font-medium">${c.category ?? 'unknown'}</td>
-      <td class="px-4 py-1.5 text-right text-zinc-500 tabnum">${c.alertCount}</td>
-      <td class="px-4 py-1.5 text-right tabnum">${fmtPrecisionStat(c.t15m)}</td>
-      <td class="px-4 py-1.5 text-right tabnum">${fmtPrecisionStat(c.t1h)}</td>
-      <td class="px-4 py-1.5 text-right tabnum hidden md:table-cell">${fmtPrecisionStat(c.t24h)}</td>
-      <td class="px-4 py-1.5 text-right text-zinc-600 tabnum hidden md:table-cell">${c.avgMagnitudePp != null ? (c.avgMagnitudePp * 100).toFixed(1) + 'pp' : '—'}</td>
-      <td class="px-4 py-1.5 text-right text-zinc-700 tabnum">${c.sampleCount}</td>
+    return `<tr class="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+      <td class="px-6 py-2 text-left text-gray-700 font-medium">${c.category ?? 'unknown'}</td>
+      <td class="px-4 py-2 text-right text-gray-500 tabnum">${c.alertCount}</td>
+      <td class="px-4 py-2 text-right tabnum">${fmtPrecisionStat(c.t15m)}</td>
+      <td class="px-4 py-2 text-right tabnum">${fmtPrecisionStat(c.t1h)}</td>
+      <td class="px-4 py-2 text-right tabnum hidden md:table-cell">${fmtPrecisionStat(c.t24h)}</td>
+      <td class="px-4 py-2 text-right text-gray-500 tabnum hidden md:table-cell">${c.avgMagnitudePp != null ? (c.avgMagnitudePp * 100).toFixed(1) + 'pp' : '—'}</td>
+      <td class="px-4 py-2 text-right text-gray-400 tabnum">${c.sampleCount}</td>
     </tr>`;
   }).join('');
 }
@@ -556,36 +548,36 @@ async function loadResolutions() {
     }
 
     if (!cards || cards.length === 0) {
-      el.innerHTML = '<div class="text-zinc-700 text-xs py-4 text-center">No resolutions yet — check back soon.</div>';
+      el.innerHTML = '<div class="text-gray-400 text-xs py-4 text-center">No resolutions yet — check back soon.</div>';
       return;
     }
 
     el.innerHTML = cards.map(card => {
-      const borderCol = card.marketInformative ? 'border-l-emerald-600' : 'border-l-zinc-700';
-      const labelCol  = card.marketInformative ? 'text-emerald-400'     : 'text-zinc-600';
+      const borderCol = card.marketInformative ? 'border-l-emerald-400' : 'border-l-gray-200';
+      const labelCol  = card.marketInformative ? 'text-emerald-600'     : 'text-gray-400';
       const badge     = card.marketInformative ? '✓ informative'        : '✗ not informative';
 
-      const title  = card.marketTitle || card.marketId || '—';
+      const title    = card.marketTitle || card.marketId || '—';
       const pHorizon = card.resolutionPrice != null ? (card.resolutionPrice * 100).toFixed(1) + '¢' : '—';
       const titleEl  = card.link
-        ? `<a href="${card.link}" target="_blank" rel="noopener" class="text-zinc-200 hover:text-white transition-colors leading-snug font-medium">${escapeHtml(truncate(title, 60))}</a>`
-        : `<span class="text-zinc-200 leading-snug font-medium">${escapeHtml(truncate(title, 60))}</span>`;
+        ? `<a href="${card.link}" target="_blank" rel="noopener" class="text-gray-800 hover:text-blue-600 transition-colors font-medium leading-snug">${escapeHtml(truncate(title, 60))}</a>`
+        : `<span class="text-gray-800 font-medium leading-snug">${escapeHtml(truncate(title, 60))}</span>`;
 
       const alertRows = (card.alerts || []).map(a => {
         const dp     = a.directionPredicted;
         const dr     = a.directionRealized;
         const flat   = dr === 'flat';
         const isDead = a.deadZone === true;
-        const base   = isDead ? 'text-zinc-700' : 'text-zinc-600';
+        const base   = isDead ? 'text-gray-300' : 'text-gray-500';
         let alertCol, alertIcon;
         if (flat || !dr) {
-          alertCol  = isDead ? 'text-zinc-700' : 'text-zinc-600';
+          alertCol  = isDead ? 'text-gray-300' : 'text-gray-400';
           alertIcon = '→';
         } else if (a.alertCorrect) {
-          alertCol  = isDead ? 'text-zinc-600' : 'text-emerald-400';
+          alertCol  = isDead ? 'text-gray-400' : 'text-emerald-500';
           alertIcon = '✓';
         } else {
-          alertCol  = isDead ? 'text-zinc-600' : 'text-red-400';
+          alertCol  = isDead ? 'text-gray-400' : 'text-red-500';
           alertIcon = '✗';
         }
         const dpLabel  = dp ? (dp === 'up' ? '↑' : '↓') : '—';
@@ -596,24 +588,24 @@ async function loadResolutions() {
         const elapsed  = resolutionElapsed(a.firedAt, a.evaluatedAt);
         const detType  = a.type ? a.type.replace(/_/g, ' ') : '—';
         const skillLbl = a.brierSkill != null
-          ? `<span class="${a.brierSkill >= 0 ? 'text-emerald-500' : 'text-red-500'} tabnum">${fmtSkill(a.brierSkill)}</span>` : '';
-        const deadTag  = isDead ? ' <span class="text-zinc-700 italic">(dead zone)</span>' : '';
-        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0 text-[10px] ${base} mt-0.5 pl-2 border-l border-zinc-800">
+          ? `<span class="${a.brierSkill >= 0 ? 'text-emerald-500' : 'text-red-500'} font-medium tabnum">${fmtSkill(a.brierSkill)}</span>` : '';
+        const deadTag  = isDead ? ' <span class="text-gray-300 italic">(dead zone)</span>' : '';
+        return `<div class="flex flex-wrap items-center gap-x-2 gap-y-0 text-[10px] ${base} mt-0.5 pl-2 border-l-2 border-gray-100">
           <span class="${alertCol} font-bold">${alertIcon}</span>
-          <span class="${isDead ? 'text-zinc-700' : 'text-zinc-500'}">${escapeHtml(detType)}</span>
-          <span class="tabnum">@ <span class="${isDead ? 'text-zinc-700' : 'text-zinc-400'}">${pAlert}</span>${movePp ? ` → <span class="${isDead ? 'text-zinc-700' : 'text-zinc-400'}">${movePp}</span>` : ''}${deadTag}</span>
-          <span>pred <span class="${isDead ? 'text-zinc-700' : 'text-zinc-400'}">${dpLabel}</span> · got <span class="${isDead ? 'text-zinc-700' : 'text-zinc-400'}">${drLabel}</span></span>
+          <span class="${isDead ? 'text-gray-300' : 'text-gray-500'}">${escapeHtml(detType)}</span>
+          <span class="tabnum">@ ${pAlert}${movePp ? ` → ${movePp}` : ''}${deadTag}</span>
+          <span>pred ${dpLabel} · got ${drLabel}</span>
           ${skillLbl}
-          ${elapsed ? `<span class="text-zinc-700">${elapsed} before res.</span>` : ''}
+          ${elapsed ? `<span class="text-gray-300">${elapsed} before res.</span>` : ''}
         </div>`;
       }).join('');
 
-      return `<div class="rounded-lg border border-zinc-800/50 border-l-2 ${borderCol} bg-zinc-900/20 px-3 py-2.5">
+      return `<div class="rounded-lg border border-gray-100 border-l-4 ${borderCol} bg-white px-3 py-3 shadow-sm">
         <div class="flex items-start justify-between gap-3 mb-1">
           <div class="text-xs flex-1 min-w-0">${titleEl}</div>
           <span class="text-[10px] font-semibold shrink-0 ${labelCol}">${badge}</span>
         </div>
-        <div class="text-[10px] text-zinc-700 mb-1.5">resolved <span class="text-zinc-500 tabnum">${pHorizon}</span> · ${relativeTime(card.resolvedAt)}</div>
+        <div class="text-[10px] text-gray-400 mb-1.5">resolved <span class="font-medium tabnum text-gray-600">${pHorizon}</span> · ${relativeTime(card.resolvedAt)}</div>
         <div class="space-y-0.5">${alertRows}</div>
       </div>`;
     }).join('');
