@@ -8,7 +8,6 @@ import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
-import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,8 +32,6 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>alertsFiredToday       — in-memory counter in AppStats, incremented by AlertService</li>
  *   <li>insiderSignatureCount  — same, filtered to type=insider_signature</li>
  *   <li>marketsInResolutionZone — in-memory counter set by MarketPoller each cycle</li>
- *   <li>watchedWallets         — watched_wallets table count (small, ≤~100 rows)</li>
- *   <li>walletsSeenToday       — in-memory counter maintained by WalletPoller</li>
  *   <li>lastPollTime           — last MarketPoller cycle completion time (ISO-8601)</li>
  *   <li>ntfyTopic              — the configured ntfy.sh topic name</li>
  * </ul>
@@ -48,7 +45,6 @@ public class StatsController {
     /** Response cache TTL. Dashboard polls every 10 s but stats don't need sub-minute freshness. */
     private static final long CACHE_TTL_MS = 60_000L;
 
-    private final DynamoDbTable<WatchedWallet> watchedWalletsTable;
     private final DynamoDbTable<Market>        marketsTable;
     private final DynamoDbTable<AlertOutcome>  alertOutcomesTable;
     private final MeterRegistry                meterRegistry;
@@ -61,7 +57,6 @@ public class StatsController {
     private volatile long                        cachedAtMillis = 0L;
 
     public StatsController(
-            DynamoDbTable<WatchedWallet> watchedWalletsTable,
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<AlertOutcome> alertOutcomesTable,
             MeterRegistry meterRegistry,
@@ -69,7 +64,6 @@ public class StatsController {
             AppClock clock,
             @Value("${polysign.ntfy.topic}") String ntfyTopic,
             SignalPerformanceService signalPerformanceService) {
-        this.watchedWalletsTable       = watchedWalletsTable;
         this.marketsTable              = marketsTable;
         this.alertOutcomesTable        = alertOutcomesTable;
         this.meterRegistry             = meterRegistry;
@@ -82,7 +76,6 @@ public class StatsController {
     public record StatsResponse(
             long marketsTracked,
             long alertsFiredToday,
-            long watchedWallets,
             String lastPollTime,
             String ntfyTopic,
             Double signalPrecision7d1h,
@@ -93,7 +86,6 @@ public class StatsController {
             long alertsInResolutionZone,
             long resolutionCorrect,
             Double resolutionAccuracyPct,
-            long walletsSeenToday,
             long insiderSignatureCount,
             Double insiderSignaturePrecision7d1h,
             long insiderSignatureSamples7d1h,
@@ -120,11 +112,6 @@ public class StatsController {
         // via AppStats.recordAlertFired() — no table scan needed.
         long alertsFiredToday    = appStats.getAlertsFiredToday();
         long insiderSignatureCount = appStats.getInsiderSignatureCount();
-
-        // watchedWallets: count the watched_wallets table (small — max ~100 entries)
-        long watchedWallets = watchedWalletsTable.scan().items().stream().count();
-
-        long walletsSeenToday = appStats.walletsSeenInLast24h(clock.getClock());
 
         // lastPollTime from AppStats (set by MarketPoller after each successful cycle)
         Instant lastPoll = appStats.getLastMarketPollAt();
@@ -175,7 +162,6 @@ public class StatsController {
         StatsResponse response = new StatsResponse(
                 marketsTracked,
                 alertsFiredToday,
-                watchedWallets,
                 lastPoll != null ? lastPoll.toString() : null,
                 ntfyTopic,
                 ap1h.precision(),
@@ -186,7 +172,6 @@ public class StatsController {
                 alertsInResolutionZone,
                 resolutionCorrect,
                 resolutionAccuracyPct,
-                walletsSeenToday,
                 insiderSignatureCount,
                 insiderPrec,
                 insiderSamples,

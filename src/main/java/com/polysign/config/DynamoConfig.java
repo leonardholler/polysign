@@ -1,7 +1,10 @@
 package com.polysign.config;
 
-import com.polysign.model.*;
+import com.polysign.model.Alert;
 import com.polysign.model.AlertOutcome;
+import com.polysign.model.ApiKey;
+import com.polysign.model.Market;
+import com.polysign.model.PriceSnapshot;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,12 +29,6 @@ public class DynamoConfig {
     @Value("${polysign.dynamodb.tables.price-snapshots:price_snapshots}")
     private String priceSnapshotsTable;
 
-    @Value("${polysign.dynamodb.tables.watched-wallets:watched_wallets}")
-    private String watchedWalletsTable;
-
-    @Value("${polysign.dynamodb.tables.wallet-trades:wallet_trades}")
-    private String walletTradesTable;
-
     @Value("${polysign.dynamodb.tables.alerts:alerts}")
     private String alertsTable;
 
@@ -49,16 +46,6 @@ public class DynamoConfig {
     @Bean
     public DynamoDbTable<PriceSnapshot> priceSnapshotsTable(DynamoDbEnhancedClient client) {
         return client.table(priceSnapshotsTable, TableSchema.fromBean(PriceSnapshot.class));
-    }
-
-    @Bean
-    public DynamoDbTable<WatchedWallet> watchedWalletsTable(DynamoDbEnhancedClient client) {
-        return client.table(watchedWalletsTable, TableSchema.fromBean(WatchedWallet.class));
-    }
-
-    @Bean
-    public DynamoDbTable<WalletTrade> walletTradesTable(DynamoDbEnhancedClient client) {
-        return client.table(walletTradesTable, TableSchema.fromBean(WalletTrade.class));
     }
 
     @Bean

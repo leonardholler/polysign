@@ -3,7 +3,6 @@ package com.polysign.api;
 import com.polysign.common.AppClock;
 import com.polysign.model.Market;
 import com.polysign.model.PriceSnapshot;
-import com.polysign.model.WalletTrade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -18,7 +17,6 @@ import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
-import java.util.stream.StreamSupport;
 
 /**
  * REST endpoints for market data.
@@ -28,7 +26,6 @@ import java.util.stream.StreamSupport;
  *   <li>GET /api/markets?category=&watchedOnly=&limit=</li>
  *   <li>GET /api/markets/{marketId}</li>
  *   <li>GET /api/markets/{marketId}/price-history?windowMinutes=60</li>
- *   <li>GET /api/markets/{marketId}/whale-trades</li>
  *   <li>POST /api/markets/{marketId}/watch</li>
  * </ul>
  */
@@ -40,18 +37,15 @@ public class MarketController {
 
     private final DynamoDbTable<Market>        marketsTable;
     private final DynamoDbTable<PriceSnapshot> snapshotsTable;
-    private final DynamoDbTable<WalletTrade>   walletTradesTable;
     private final AppClock                     clock;
 
     public MarketController(
             DynamoDbTable<Market> marketsTable,
             DynamoDbTable<PriceSnapshot> priceSnapshotsTable,
-            DynamoDbTable<WalletTrade> walletTradesTable,
             AppClock clock) {
-        this.marketsTable      = marketsTable;
-        this.snapshotsTable    = priceSnapshotsTable;
-        this.walletTradesTable = walletTradesTable;
-        this.clock             = clock;
+        this.marketsTable   = marketsTable;
+        this.snapshotsTable = priceSnapshotsTable;
+        this.clock          = clock;
     }
 
     // ── GET /api/markets ─────────────────────────────────────────────────────
@@ -130,20 +124,6 @@ public class MarketController {
                 .items()
                 .stream()
                 .map(s -> new PriceHistoryPoint(s.getTimestamp(), s.getMidpoint()))
-                .toList();
-    }
-
-    // ── GET /api/markets/{marketId}/whale-trades ─────────────────────────────
-
-    @GetMapping("/{marketId}/whale-trades")
-    public List<WalletTrade> getWhaleTrades(@PathVariable String marketId) {
-        DynamoDbIndex<WalletTrade> gsi = walletTradesTable.index("marketId-timestamp-index");
-        String cutoff = clock.now().minus(Duration.ofHours(24)).toString();
-        QueryConditional qc = QueryConditional.sortGreaterThanOrEqualTo(
-                Key.builder().partitionValue(marketId).sortValue(cutoff).build());
-        return gsi.query(r -> r.queryConditional(qc).scanIndexForward(false))
-                .stream()
-                .flatMap(page -> page.items().stream())
                 .toList();
     }
 

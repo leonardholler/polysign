@@ -6,7 +6,6 @@ import com.polysign.common.AppClock;
 import com.polysign.common.AppStats;
 import com.polysign.model.AlertOutcome;
 import com.polysign.model.Market;
-import com.polysign.model.WatchedWallet;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,9 +38,6 @@ import static org.mockito.Mockito.when;
 class StatsControllerTest {
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    DynamoDbTable<WatchedWallet> watchedWalletsTable;
-
-    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     DynamoDbTable<Market> marketsTable;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
@@ -64,7 +60,6 @@ class StatsControllerTest {
         clock = new AppClock();
         clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:00:00Z"), ZoneOffset.UTC));
 
-        when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
         // alertOutcomesTable uses ScanEnhancedRequest — disambiguate overload
         when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
                 .thenReturn(Stream.of());
@@ -78,10 +73,6 @@ class StatsControllerTest {
                 .thenReturn(Instant.parse("2026-04-09T11:55:00Z"));
         lenient().when(marketsTable.scan().items().stream()).thenReturn(Stream.of());
 
-        // Fix 1: walletsSeenInLast24h comes from appStats, not a DB scan.
-        // lenient — some tests override this stub with a specific return value.
-        lenient().when(appStats.walletsSeenInLast24h(any(Clock.class))).thenReturn(0L);
-
         // stub getPerformance for insider_signature to return empty result
         when(signalPerformanceService.getPerformance(any(), any(), any()))
                 .thenReturn(new SignalPerformanceService.PerformanceResponse("t1h", "", List.of(), 0, 0));
@@ -90,7 +81,7 @@ class StatsControllerTest {
                 .thenReturn(new SignalPerformanceService.AggregateSkill(null, 0, null, 0, 0, 0));
 
         controller = new StatsController(
-                watchedWalletsTable, marketsTable, alertOutcomesTable,
+                marketsTable, alertOutcomesTable,
                 meterRegistry, appStats, clock, "test-topic", signalPerformanceService);
     }
 
@@ -213,20 +204,7 @@ class StatsControllerTest {
         assertThat(resp.resolutionAccuracyPct()).isEqualTo(0.0);
     }
 
-    // ── Test 5: Fix 1 — walletsSeenToday comes from appStats, not a DB scan ───
-
-    @Test
-    void walletsSeenToday_delegatesToAppStats() {
-        when(signalPerformanceService.getAggregatePrecision(any(), any()))
-                .thenReturn(new AggregatePrecision(null, 0L));
-        when(appStats.walletsSeenInLast24h(any(Clock.class))).thenReturn(42L);
-
-        StatsController.StatsResponse resp = controller.getStats();
-
-        assertThat(resp.walletsSeenToday()).isEqualTo(42L);
-    }
-
-    // ── Test 6: Fix 3 — 10-second response cache ─────────────────────────────
+    // ── Test 5: 10-second response cache ─────────────────────────────────────
 
     @Test
     void getStats_returnsCachedResponse_withinTtl() {
@@ -250,7 +228,6 @@ class StatsControllerTest {
         // Advance clock by 61 seconds — past the 60s TTL
         clock.setClock(Clock.fixed(Instant.parse("2026-04-09T12:01:01Z"), ZoneOffset.UTC));
         // Re-stub all stream returns — Streams are single-use; the first getStats() consumed them
-        when(watchedWalletsTable.scan().items().stream()).thenReturn(Stream.of());
         when(alertOutcomesTable.scan(any(ScanEnhancedRequest.class)).items().stream())
                 .thenReturn(Stream.of());
 

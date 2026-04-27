@@ -80,12 +80,8 @@ public class BootstrapRunner implements ApplicationRunner {
                 gsi("category-updatedAt-index",
                     key("category",  KeyType.HASH),
                     key("updatedAt", KeyType.RANGE)),
-                // KEYS_ONLY projection: WalletPoller only needs marketId from
-                // the conditionId lookup, and marketId is automatically included
-                // as the base table PK. Full projection would double storage
-                // cost for zero benefit. Inlined rather than using gsi() helper
-                // because the helper uses ProjectionType.ALL, which is correct
-                // for the other three GSIs but wrong for this one.
+                // KEYS_ONLY projection — base-table PK (marketId) is always included.
+                // Full projection would double storage cost for no benefit on key-only lookups.
                 GlobalSecondaryIndex.builder()
                     .indexName("conditionId-index")
                     .keySchema(key("conditionId", KeyType.HASH))
@@ -108,38 +104,6 @@ public class BootstrapRunner implements ApplicationRunner {
             List.of()
         );
         enableTtl("price_snapshots", "expiresAt");
-
-        // ── watched_wallets ───────────────────────────────────────────────────
-        createTable(
-            "watched_wallets",
-            List.of(attr("address", ScalarAttributeType.S)),
-            List.of(key("address",  KeyType.HASH)),
-            List.of()
-        );
-
-        // ── wallet_trades ─────────────────────────────────────────────────────
-        // SK is txHash (not timestamp) — natural idempotency key; re-processing
-        // the same on-chain trade from the Data API is a no-op (PutItem overwrite
-        // on the same PK+SK writes identical data). timestamp is a non-key attribute
-        // that serves as the GSI SK for time-range queries.
-        createTable(
-            "wallet_trades",
-            List.of(
-                attr("address",   ScalarAttributeType.S),
-                attr("txHash",    ScalarAttributeType.S),
-                attr("marketId",  ScalarAttributeType.S),
-                attr("timestamp", ScalarAttributeType.S)
-            ),
-            List.of(
-                key("address", KeyType.HASH),
-                key("txHash",  KeyType.RANGE)
-            ),
-            List.of(
-                gsi("marketId-timestamp-index",
-                    key("marketId",  KeyType.HASH),
-                    key("timestamp", KeyType.RANGE))
-            )
-        );
 
         // ── alerts ────────────────────────────────────────────────────────────
         // nextEvaluationDue-index: PK=evaluationStatus ("PENDING"), SK=nextEvaluationDue.

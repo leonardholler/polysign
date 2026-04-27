@@ -65,24 +65,17 @@ polysign:
     orderbook-gate:
       max-spread-bps: 500        # Tier 2/3 alerts dropped if spread exceeds this
       min-depth-at-mid: 100.0    # Tier 2/3 alerts dropped if depth below this (USDC)
-    wallet:
-      min-trade-usdc: 1000
   dynamodb:
     tables:
       markets: markets
       price-snapshots: price_snapshots
-      watched-wallets: watched_wallets
-      wallet-trades: wallet_trades
       alerts: alerts
       alert-outcomes: alert_outcomes
       api-keys: api_keys
-      wallet-metadata: wallet_metadata
   sqs:
     queues:
-      wallet-trades-to-process: wallet-trades-to-process
       alerts-to-notify: alerts-to-notify
     dlq:
-      wallet-trades-to-process: wallet-trades-to-process-dlq
       alerts-to-notify: alerts-to-notify-dlq
     max-receive-count: 5
   s3:
@@ -105,10 +98,6 @@ polysign:
     price:
       interval-ms: 60000
       initial-delay-ms: 30000
-    wallet:
-      interval-ms: 60000
-      initial-delay-ms: 90000
-      lookback-hours: 48
   auth:
     demo-key-enabled: true
     rate-limits:
